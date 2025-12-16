@@ -569,37 +569,46 @@ class App(ctk.CTk):
     
     def _perform_stop(self):
         """Terminate process and clean up output folder."""
-        try:
-            # Terminate the subprocess
-            if self.current_process:
-                self.current_process.terminate()
-                try:
-                    self.current_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    self.current_process.kill()
-                self.current_process = None
-            
-            # Delete the output folder
-            if self.current_output_folder:
-                output_path = Path(self.current_output_folder)
-                if output_path.exists():
-                    self.console.log(f"🗑 Deleting output folder: {output_path}", "warning")
-                    shutil.rmtree(output_path)
-                    self.console.log("✓ Output folder deleted", "info")
-                self.current_output_folder = None
-            
-            self.console.log("=" * 60)
-            self.console.log("⏹ EXECUTION CANCELLED BY USER", "warning")
-            self.after(0, lambda: self.label_status.configure(
-                text="⏹ Cancelled by user", 
-                text_color="#FFC107"
-            ))
-            
-        except Exception as e:
-            self.console.log(f"❌ Error during cleanup: {e}", "error")
+        # Capture values for background cleanup
+        process_to_kill = self.current_process
+        folder_to_delete = self.current_output_folder
         
-        # Reset UI
+        # Immediately clear references and reset UI
+        self.current_process = None
+        self.current_output_folder = None
+        
+        self.console.log("=" * 60)
+        self.console.log("⏹ EXECUTION CANCELLED BY USER", "warning")
+        self.after(0, lambda: self.label_status.configure(
+            text="⏹ Cancelled by user", 
+            text_color="#FFC107"
+        ))
+        
+        # Reset UI immediately so user can start new process
         self.after(0, self._reset_ui)
+        
+        # Cleanup in background thread
+        def cleanup_background():
+            try:
+                # Terminate the subprocess
+                if process_to_kill:
+                    process_to_kill.terminate()
+                    try:
+                        process_to_kill.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process_to_kill.kill()
+                
+                # Delete the output folder
+                if folder_to_delete:
+                    output_path = Path(folder_to_delete)
+                    if output_path.exists():
+                        shutil.rmtree(output_path)
+                        
+            except Exception as e:
+                # Log errors but don't block - user already moved on
+                self.console.log(f"⚠️ Background cleanup note: {e}", "warning")
+        
+        threading.Thread(target=cleanup_background, daemon=True).start()
     
     def _update_status_success(self):
         self.label_status.configure(text="✓ Completed Successfully", text_color="#4CAF50")
