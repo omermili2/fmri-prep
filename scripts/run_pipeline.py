@@ -6,7 +6,14 @@ from pathlib import Path
 import re
 import json
 import os
+import io
 from datetime import datetime
+
+# Ensure UTF-8 output on all platforms (especially Windows)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 def run_command(cmd):
     """Runs a shell command and handles errors."""
@@ -149,7 +156,7 @@ Examples:
     
     bids_dir = output_folder / "bids_output"
     derivatives_dir = output_folder / "derivatives"
-    fmriprep_script = project_root / "scripts" / "run_fmriprep.sh"
+    fmriprep_script = project_root / "scripts" / "run_fmriprep.py"
     
     print(f"Output folder: {output_folder}", flush=True)
 
@@ -257,20 +264,20 @@ Examples:
             ]
             
             try:
-                result = subprocess.run(cmd_bids, capture_output=True, text=True)
+                result = subprocess.run(cmd_bids, capture_output=True, text=True, encoding='utf-8', errors='replace')
                 if result.returncode != 0:
                     print(f"    Warning: dcm2bids output:\n{result.stderr}", flush=True)
                     errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion failed, exit {result.returncode})")
                     completed_tasks += 1
                     print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
-                    print(f"  ✗ [LOG] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}", flush=True)
+                    print(f"  [FAIL] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}", flush=True)
                     continue
                 else:
                     elapsed = (datetime.now() - task_start_time).total_seconds()
                     print(f"    Done. (took {elapsed:.1f}s)", flush=True)
                     completed_tasks += 1
                     print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
-                    print(f"  ✓ [LOG] BIDS conversion completed for sub-{sub_id} ses-{ses_id} ({elapsed:.1f}s)", flush=True)
+                    print(f"  [OK] BIDS conversion completed for sub-{sub_id} ses-{ses_id} ({elapsed:.1f}s)", flush=True)
                 
                 # Create dataset_description.json if missing
                 desc_path = bids_dir / "dataset_description.json"
@@ -281,7 +288,7 @@ Examples:
                         "DatasetType": "raw",
                         "Authors": ["Pipeline"]
                     }
-                    with open(desc_path, 'w') as f:
+                    with open(desc_path, 'w', encoding='utf-8') as f:
                         json.dump(desc_content, f, indent=4)
                     print(f"    Created dataset_description.json", flush=True)
                     
@@ -290,14 +297,14 @@ Examples:
                 errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion)")
                 completed_tasks += 1
                 print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
-                print(f"  ✗ [LOG] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}", flush=True)
+                print(f"  [FAIL] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}", flush=True)
                 continue
             except Exception as e:
                 print(f"    ERROR: {e}", flush=True)
                 errors.append(f"sub-{sub_id}_ses-{ses_id} ({e})")
                 completed_tasks += 1
                 print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
-                print(f"  ✗ [LOG] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}: {e}", flush=True)
+                print(f"  [FAIL] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}: {e}", flush=True)
                 continue
 
         # 2. fMRIPrep (run per subject, not per session)
@@ -305,6 +312,7 @@ Examples:
             fmriprep_start_time = datetime.now()
             print("  -> Running fMRIPrep...", flush=True)
             cmd_fmriprep = [
+                sys.executable,
                 str(fmriprep_script),
                 str(bids_dir),
                 str(derivatives_dir),
@@ -312,18 +320,18 @@ Examples:
             ]
             
             try:
-                result = subprocess.run(cmd_fmriprep, capture_output=True, text=True)
+                result = subprocess.run(cmd_fmriprep, capture_output=True, text=True, encoding='utf-8', errors='replace')
                 fmriprep_elapsed = (datetime.now() - fmriprep_start_time).total_seconds()
                 if result.returncode != 0:
                     print(f"    Warning: fMRIPrep output:\n{result.stderr}", flush=True)
-                    print(f"  ✗ [LOG] fMRIPrep FAILED for sub-{sub_id}", flush=True)
+                    print(f"  [FAIL] fMRIPrep FAILED for sub-{sub_id}", flush=True)
                 else:
                     print(f"    Done. (took {fmriprep_elapsed:.1f}s)", flush=True)
-                    print(f"  ✓ [LOG] fMRIPrep completed for sub-{sub_id} ({fmriprep_elapsed:.1f}s)", flush=True)
+                    print(f"  [OK] fMRIPrep completed for sub-{sub_id} ({fmriprep_elapsed:.1f}s)", flush=True)
             except Exception as e:
                 print(f"    ERROR: {e}", flush=True)
                 errors.append(f"sub-{sub_id} (fMRIPrep)")
-                print(f"  ✗ [LOG] fMRIPrep FAILED for sub-{sub_id}: {e}", flush=True)
+                print(f"  [FAIL] fMRIPrep FAILED for sub-{sub_id}: {e}", flush=True)
 
     # Final progress marker - always reaches 100%
     print(f"[PROGRESS:COMPLETE]", flush=True)

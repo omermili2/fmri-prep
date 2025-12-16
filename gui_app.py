@@ -7,14 +7,22 @@ import sys
 import os
 import re
 import shutil
+import signal
+import platform
 from datetime import datetime
+
+# Detect platform
+IS_WINDOWS = platform.system() == 'Windows'
+
+# Cross-platform monospace font
+MONO_FONT = "Consolas" if IS_WINDOWS else "Monaco" if platform.system() == 'Darwin' else "DejaVu Sans Mono"
 
 
 # --- Custom Logger Widget with Colors ---
 class ConsoleLog(ctk.CTkTextbox):
     def __init__(self, master, **kwargs):
         super().__init__(master, **kwargs)
-        self.configure(state="disabled", font=("Consolas", 13))
+        self.configure(state="disabled", font=(MONO_FONT, 13))
         self.tag_config("info", foreground="#DCDCDC")     # Light Gray
         self.tag_config("success", foreground="#4CAF50")  # Green
         self.tag_config("warning", foreground="#FFC107")  # Amber
@@ -30,9 +38,9 @@ class ConsoleLog(ctk.CTkTextbox):
         
         # Simple keyword-based coloring
         tag = level
-        if "Failed!" in message or "Error" in message or "Traceback" in message:
+        if "Failed!" in message or "Error" in message or "Traceback" in message or "[FAIL]" in message:
             tag = "error"
-        elif "Done." in message or "COMPLETED" in message or "✓" in message:
+        elif "Done." in message or "COMPLETED" in message or "[OK]" in message:
             tag = "success"
         elif "Processing" in message or "===" in message:
             tag = "header"
@@ -420,13 +428,22 @@ class App(ctk.CTk):
             cmd.append("--skip-fmriprep")
 
         try:
-            self.current_process = subprocess.Popen(
-                cmd, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.STDOUT, 
-                text=True, 
-                bufsize=1
-            )
+            # Platform-specific subprocess options for proper termination
+            popen_kwargs = {
+                'stdout': subprocess.PIPE,
+                'stderr': subprocess.STDOUT,
+                'text': True,
+                'bufsize': 1,
+                'encoding': 'utf-8',
+                'errors': 'replace'
+            }
+            if IS_WINDOWS:
+                popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                # Unix: create new process group for clean termination
+                popen_kwargs['start_new_session'] = True
+            
+            self.current_process = subprocess.Popen(cmd, **popen_kwargs)
             
             for line in self.current_process.stdout:
                 # Check if stop was requested
@@ -590,23 +607,50 @@ class App(ctk.CTk):
         # Cleanup in background thread
         def cleanup_background():
             try:
-                # Terminate the subprocess
+                # Terminate the subprocess (platform-specific)
                 if process_to_kill:
-                    process_to_kill.terminate()
                     try:
-                        process_to_kill.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process_to_kill.kill()
+                        if IS_WINDOWS:
+                            # On Windows, use taskkill to terminate process tree
+                            subprocess.run(
+                                ['taskkill', '/F', '/T', '/PID', str(process_to_kill.pid)],
+                                capture_output=True,
+                                timeout=10
+                            )
+                        else:
+                            # On Unix, send SIGTERM to process group
+                            try:
+                                os.killpg(os.getpgid(process_to_kill.pid), signal.SIGTERM)
+                            except (ProcessLookupError, PermissionError):
+                                process_to_kill.terminate()
+                        
+                        try:
+                            process_to_kill.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process_to_kill.kill()
+                    except Exception:
+                        # Last resort
+                        try:
+                            process_to_kill.kill()
+                        except Exception:
+                            pass
                 
                 # Delete the output folder
                 if folder_to_delete:
                     output_path = Path(folder_to_delete)
                     if output_path.exists():
-                        shutil.rmtree(output_path)
+                        # On Windows, sometimes files are locked briefly
+                        for attempt in range(3):
+                            try:
+                                shutil.rmtree(output_path)
+                                break
+                            except PermissionError:
+                                import time
+                                time.sleep(1)
                         
             except Exception as e:
                 # Log errors but don't block - user already moved on
-                self.console.log(f"⚠️ Background cleanup note: {e}", "warning")
+                self.console.log(f"Warning: Background cleanup: {e}", "warning")
         
         threading.Thread(target=cleanup_background, daemon=True).start()
     
