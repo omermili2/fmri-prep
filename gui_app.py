@@ -1,10 +1,13 @@
 import customtkinter as ctk
-from tkinter import filedialog, END
+from tkinter import filedialog, END, messagebox
 import subprocess
 import threading
 from pathlib import Path
 import sys
 import os
+import re
+import shutil
+from datetime import datetime
 
 
 # --- Custom Logger Widget with Colors ---
@@ -44,7 +47,7 @@ class App(ctk.CTk):
         super().__init__()
 
         # Window Setup
-        self.title("fMRI Pipeline Manager")
+        self.title("fMRI Preprocessing Assistant")
         self.geometry("950x750")
         self.minsize(700, 550)
         
@@ -54,14 +57,14 @@ class App(ctk.CTk):
         
         # --- Header ---
         self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_header.grid(row=0, column=0, padx=20, pady=(20, 10), sticky="ew")
+        self.frame_header.grid(row=0, column=0, padx=20, pady=(20, 5), sticky="ew")
         
         self.label_title = ctk.CTkLabel(
             self.frame_header, 
-            text="fMRI Processing Assistant", 
+            text="fMRI Preprocessing Assistant", 
             font=ctk.CTkFont(size=26, weight="bold")
         )
-        self.label_title.pack(anchor="w")
+        self.label_title.pack(anchor="center")
         
         self.label_subtitle = ctk.CTkLabel(
             self.frame_header, 
@@ -69,7 +72,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=14), 
             text_color="gray"
         )
-        self.label_subtitle.pack(anchor="w")
+        self.label_subtitle.pack(anchor="center", pady=(0, 5))
 
         # --- Configuration Frame ---
         self.frame_config = ctk.CTkFrame(self)
@@ -86,7 +89,7 @@ class App(ctk.CTk):
         
         self.entry_input = ctk.CTkEntry(
             self.frame_config, 
-            placeholder_text="Select folder containing subject folders (e.g., 110/, 111/, ...)"
+            placeholder_text="Select folder containing subject folders"
         )
         self.entry_input.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
         
@@ -108,7 +111,7 @@ class App(ctk.CTk):
         
         self.entry_output = ctk.CTkEntry(
             self.frame_config, 
-            placeholder_text="Select a NEW folder for BIDS output (will create bids_output/ inside)"
+            placeholder_text="Select a NEW folder for BIDS output"
         )
         self.entry_output.grid(row=1, column=1, padx=10, pady=15, sticky="ew")
         
@@ -127,7 +130,8 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#888888"
         )
-        self.label_output_info.grid(row=2, column=1, padx=10, pady=(0, 10), sticky="w")
+        self.label_output_info.grid(row=2, column=1, padx=10, pady=0, sticky="w")
+        self.label_output_info.grid_remove()  # Hide initially since it's empty
 
         # --- Options Frame ---
         self.frame_options = ctk.CTkFrame(self)
@@ -157,14 +161,6 @@ class App(ctk.CTk):
         )
         # NOT selected by default - BIDS only is the common first step
         self.check_fmriprep.grid(row=0, column=2, padx=15, pady=15)
-        
-        self.check_dryrun = ctk.CTkCheckBox(
-            self.frame_options, 
-            text="🧪 Dry Run (Preview)", 
-            onvalue=True, 
-            offvalue=False
-        )
-        self.check_dryrun.grid(row=0, column=3, padx=15, pady=15)
 
         # --- Quick Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self, fg_color="transparent")
@@ -205,10 +201,39 @@ class App(ctk.CTk):
         self.btn_custom.grid(row=0, column=2, padx=5, pady=10, sticky="ew")
 
         # --- Progress Indicator ---
-        self.progress_bar = ctk.CTkProgressBar(self, mode="indeterminate")
-        self.progress_bar.grid(row=4, column=0, padx=20, pady=(10, 5), sticky="ew")
+        self.frame_progress = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_progress.grid(row=4, column=0, padx=20, pady=(10, 5), sticky="ew")
+        self.frame_progress.grid_columnconfigure(0, weight=1)
+        self.frame_progress.grid_remove()  # Hide initially
+        
+        self.progress_bar = ctk.CTkProgressBar(self.frame_progress, mode="determinate")
+        self.progress_bar.grid(row=0, column=0, sticky="ew", padx=(0, 10))
         self.progress_bar.set(0)
-        self.progress_bar.grid_remove()  # Hide initially
+        
+        self.btn_stop = ctk.CTkButton(
+            self.frame_progress,
+            text="⏹ Stop",
+            width=80,
+            height=28,
+            fg_color="#C62828",  # Red
+            hover_color="#B71C1C",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            command=self.request_stop
+        )
+        self.btn_stop.grid(row=0, column=1)
+        
+        # Progress tracking variables
+        self.total_tasks = 0
+        self.completed_tasks = 0
+        self.current_process = None
+        self.current_output_folder = None
+        self.stop_requested = False
+        
+        # Progress animation variables
+        self.progress_animation_id = None
+        self.current_progress = 0.0
+        self.target_progress = 0.0
+        self.task_in_progress = False
 
         # --- Status Label ---
         self.label_status = ctk.CTkLabel(
@@ -232,16 +257,6 @@ class App(ctk.CTk):
 
         self.is_running = False
         
-        # Initial welcome message
-        self.console.log("Welcome! Select your source DICOM folder and output folder to begin.", "info")
-        self.console.log("", "info")
-        self.console.log("📌 Your source data structure should be:", "info")
-        self.console.log("   /source_folder/110/MRI1/scans/.../*.dcm", "info")
-        self.console.log("   /source_folder/110/MRI2/scans/.../*.dcm", "info")
-        self.console.log("", "info")
-        self.console.log("📌 Output will be created as:", "info")
-        self.console.log("   /output_folder/bids_output/sub-110/ses-01/...", "info")
-        self.console.log("   /output_folder/bids_output/sub-110/ses-02/...", "info")
 
     def browse_input(self):
         folder = filedialog.askdirectory(title="Select Source DICOM Folder")
@@ -276,10 +291,13 @@ class App(ctk.CTk):
         """Update the output info label to show where files will be saved."""
         output_dir = self.entry_output.get()
         if output_dir:
-            bids_path = Path(output_dir) / "bids_output"
+            output_path = Path(output_dir) / "output_<timestamp>" / "bids_output"
             self.label_output_info.configure(
-                text=f"→ BIDS data will be saved to: {bids_path}"
+                text=f"→ BIDS data will be saved to: {output_path}"
             )
+            self.label_output_info.grid()  # Show the label
+        else:
+            self.label_output_info.grid_remove()  # Hide when empty
 
     def _validate_paths(self):
         """Validate input and output paths before running."""
@@ -313,9 +331,7 @@ class App(ctk.CTk):
             self.console.log("   Please select a different output location.", "warning")
             return False
 
-        if str(input_path).startswith(str(output_path) + os.sep):
-            self.console.log("⚠️  Input folder cannot be inside the output folder!", "warning")
-            return False
+        # Note: Output CAN be parent of input - timestamped subfolder will be created
 
         return True
 
@@ -344,11 +360,18 @@ class App(ctk.CTk):
         output_dir = self.entry_output.get().strip()
 
         self.is_running = True
+        self.stop_requested = False
+        self.current_output_folder = None
         self._set_buttons_state("disabled")
         
-        # Show and start progress bar
-        self.progress_bar.grid()
-        self.progress_bar.start()
+        # Reset and show progress bar
+        self.total_tasks = 0
+        self.completed_tasks = 0
+        self.current_progress = 0.0
+        self.target_progress = 0.0
+        self.task_in_progress = False
+        self.progress_bar.set(0)
+        self.frame_progress.grid()
 
         # Clear and prepare console
         self.console.configure(state="normal")
@@ -357,18 +380,14 @@ class App(ctk.CTk):
         
         self.console.log("🚀 Pipeline Started", "header")
         self.console.log(f"📁 Source: {input_dir}")
-        self.console.log(f"📂 Output: {output_dir}")
-        
-        bids_path = Path(output_dir) / "bids_output"
-        self.console.log(f"📂 BIDS Output: {bids_path}")
+        self.console.log(f"📂 Output Root: {output_dir}")
+        self.console.log(f"📂 A timestamped folder (output_<timestamp>) will be created inside")
         
         steps = []
         if self.check_bids.get():
             steps.append("BIDS Conversion")
         if self.check_fmriprep.get():
             steps.append("fMRIPrep")
-        if self.check_dryrun.get():
-            steps.append("(DRY RUN)")
             
         self.console.log(f"⚙️  Steps: {', '.join(steps)}")
         self.console.log("=" * 60)
@@ -399,11 +418,9 @@ class App(ctk.CTk):
             cmd.append("--skip-bids")
         if not self.check_fmriprep.get():
             cmd.append("--skip-fmriprep")
-        if self.check_dryrun.get():
-            cmd.append("--dry-run")
 
         try:
-            process = subprocess.Popen(
+            self.current_process = subprocess.Popen(
                 cmd, 
                 stdout=subprocess.PIPE, 
                 stderr=subprocess.STDOUT, 
@@ -411,18 +428,42 @@ class App(ctk.CTk):
                 bufsize=1
             )
             
-            for line in process.stdout:
-                self.console.log(line.strip())
+            for line in self.current_process.stdout:
+                # Check if stop was requested
+                if self.stop_requested:
+                    break
+                    
+                stripped_line = line.strip()
+                
+                # Capture output folder path
+                if stripped_line.startswith("Output folder:"):
+                    self.current_output_folder = stripped_line.replace("Output folder:", "").strip()
+                
+                # Parse progress markers
+                if stripped_line.startswith("[PROGRESS:"):
+                    self._handle_progress_marker(stripped_line)
+                    continue  # Don't display progress markers in console
+                
+                # Display all other lines
+                self.console.log(stripped_line)
             
-            process.wait()
+            # Handle stop request
+            if self.stop_requested:
+                self._perform_stop()
+                return
             
-            if process.returncode == 0:
+            self.current_process.wait()
+            
+            # Ensure progress bar reaches 100% at completion
+            self.after(0, lambda: self.progress_bar.set(1.0))
+            
+            if self.current_process.returncode == 0:
                 self.console.log("=" * 60)
                 self.console.log("✅ COMPLETED SUCCESSFULLY!", "success")
                 self.after(0, self._update_status_success)
             else:
                 self.console.log("=" * 60)
-                self.console.log(f"❌ PIPELINE FAILED (Exit Code {process.returncode})", "error")
+                self.console.log(f"❌ PIPELINE FAILED (Exit Code {self.current_process.returncode})", "error")
                 self.after(0, self._update_status_error)
 
         except Exception as e:
@@ -430,8 +471,136 @@ class App(ctk.CTk):
             self.after(0, self._update_status_error)
 
         # Reset UI state (thread-safe)
+        self.current_process = None
         self.after(0, self._reset_ui)
+    
+    def _handle_progress_marker(self, marker):
+        """Parse and handle progress markers from the pipeline."""
+        # [PROGRESS:TOTAL:N] - Total number of tasks
+        if match := re.match(r'\[PROGRESS:TOTAL:(\d+)\]', marker):
+            self.total_tasks = int(match.group(1))
+            self.completed_tasks = 0
+            self.current_progress = 0.0
+            self.target_progress = 0.0
+            self.after(0, lambda: self.label_status.configure(
+                text=f"Processing 0/{self.total_tasks} tasks...", 
+                text_color="#FFC107"
+            ))
+        
+        # [PROGRESS:TASK_START:N] - Task N starting
+        elif match := re.match(r'\[PROGRESS:TASK_START:(\d+)\]', marker):
+            if self.total_tasks > 0:
+                # Set target to almost complete this task (95% of the way to next milestone)
+                task_num = int(match.group(1))
+                self.target_progress = (task_num + 0.95) / self.total_tasks
+                self.task_in_progress = True
+                self._start_progress_animation()
+        
+        # [PROGRESS:TASK:N] - Task N completed
+        elif match := re.match(r'\[PROGRESS:TASK:(\d+)\]', marker):
+            self.completed_tasks = int(match.group(1))
+            self.task_in_progress = False
+            if self.total_tasks > 0:
+                # Snap to actual progress
+                self.current_progress = self.completed_tasks / self.total_tasks
+                self.target_progress = self.current_progress
+                self.after(0, lambda p=self.current_progress: self.progress_bar.set(p))
+                self.after(0, lambda: self.label_status.configure(
+                    text=f"Processing {self.completed_tasks}/{self.total_tasks} tasks...",
+                    text_color="#FFC107"
+                ))
+        
+        # [PROGRESS:COMPLETE] - All done
+        elif marker == "[PROGRESS:COMPLETE]":
+            self._stop_progress_animation()
+            self.current_progress = 1.0
+            self.after(0, lambda: self.progress_bar.set(1.0))
+            self.after(0, lambda: self.label_status.configure(
+                text="Finalizing...",
+                text_color="#FFC107"
+            ))
+    
+    def _start_progress_animation(self):
+        """Start animating the progress bar gradually."""
+        if self.progress_animation_id:
+            self.after_cancel(self.progress_animation_id)
+        self._animate_progress()
+    
+    def _stop_progress_animation(self):
+        """Stop the progress animation."""
+        if self.progress_animation_id:
+            self.after_cancel(self.progress_animation_id)
+            self.progress_animation_id = None
+    
+    def _animate_progress(self):
+        """Gradually animate progress towards target."""
+        if not self.task_in_progress or self.stop_requested:
+            self.progress_animation_id = None
+            return
+        
+        # Gradually move towards target (ease out effect)
+        if self.current_progress < self.target_progress:
+            # Move 2% of remaining distance each tick
+            remaining = self.target_progress - self.current_progress
+            increment = max(0.001, remaining * 0.02)  # At least 0.1% per tick
+            self.current_progress = min(self.target_progress, self.current_progress + increment)
+            self.progress_bar.set(self.current_progress)
+        
+        # Continue animation every 100ms
+        self.progress_animation_id = self.after(100, self._animate_progress)
 
+    def request_stop(self):
+        """Handle stop button click - show confirmation dialog."""
+        if not self.is_running:
+            return
+            
+        # Show confirmation dialog
+        result = messagebox.askyesno(
+            "Confirm Stop",
+            "Are you sure you want to cancel the execution?\n\nAll processed sessions will be deleted.",
+            icon="warning"
+        )
+        
+        if result:  # User clicked Yes
+            self.stop_requested = True
+            self.btn_stop.configure(state="disabled", text="Stopping...")
+            self.console.log("⏹ Stop requested by user...", "warning")
+        # If No, just continue (do nothing)
+    
+    def _perform_stop(self):
+        """Terminate process and clean up output folder."""
+        try:
+            # Terminate the subprocess
+            if self.current_process:
+                self.current_process.terminate()
+                try:
+                    self.current_process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.current_process.kill()
+                self.current_process = None
+            
+            # Delete the output folder
+            if self.current_output_folder:
+                output_path = Path(self.current_output_folder)
+                if output_path.exists():
+                    self.console.log(f"🗑 Deleting output folder: {output_path}", "warning")
+                    shutil.rmtree(output_path)
+                    self.console.log("✓ Output folder deleted", "info")
+                self.current_output_folder = None
+            
+            self.console.log("=" * 60)
+            self.console.log("⏹ EXECUTION CANCELLED BY USER", "warning")
+            self.after(0, lambda: self.label_status.configure(
+                text="⏹ Cancelled by user", 
+                text_color="#FFC107"
+            ))
+            
+        except Exception as e:
+            self.console.log(f"❌ Error during cleanup: {e}", "error")
+        
+        # Reset UI
+        self.after(0, self._reset_ui)
+    
     def _update_status_success(self):
         self.label_status.configure(text="✓ Completed Successfully", text_color="#4CAF50")
 
@@ -440,8 +609,14 @@ class App(ctk.CTk):
 
     def _reset_ui(self):
         self.is_running = False
-        self.progress_bar.stop()
-        self.progress_bar.grid_remove()
+        self.stop_requested = False
+        self.task_in_progress = False
+        self._stop_progress_animation()
+        self.current_progress = 0.0
+        self.target_progress = 0.0
+        self.progress_bar.set(0)
+        self.frame_progress.grid_remove()
+        self.btn_stop.configure(state="normal", text="⏹ Stop")
         self._set_buttons_state("normal")
 
 

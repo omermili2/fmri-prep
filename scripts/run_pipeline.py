@@ -6,12 +6,10 @@ from pathlib import Path
 import re
 import json
 import os
+from datetime import datetime
 
-def run_command(cmd, dry_run=False):
+def run_command(cmd):
     """Runs a shell command and handles errors."""
-    if dry_run:
-        print(f"[DRY-RUN] {' '.join(cmd)}")
-        return
     try:
         subprocess.check_output(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as e:
@@ -127,9 +125,6 @@ Examples:
 
   # Process single subject with specific session
   python run_pipeline.py --input /data/raw/110/MRI1 --output_dir /data/processed --subject 110 --session 01
-
-  # Dry run to preview commands
-  python run_pipeline.py --input /data/raw --output_dir /data/processed --dry-run
         """
     )
     
@@ -140,7 +135,6 @@ Examples:
     parser.add_argument("--session", help="Specific session ID (optional, use with --subject)")
     parser.add_argument("--skip-bids", action="store_true", help="Skip BIDS conversion step")
     parser.add_argument("--skip-fmriprep", action="store_true", help="Skip fMRIPrep preprocessing step")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without executing")
 
     args = parser.parse_args()
 
@@ -149,9 +143,15 @@ Examples:
     input_root = Path(args.input).resolve()
     base_output = Path(args.output_dir).resolve()
     
-    bids_dir = base_output / "bids_output"
-    derivatives_dir = base_output / "derivatives"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_folder = base_output / f"output_{timestamp}"
+    output_folder.mkdir(parents=True, exist_ok=True)
+    
+    bids_dir = output_folder / "bids_output"
+    derivatives_dir = output_folder / "derivatives"
     fmriprep_script = project_root / "scripts" / "run_fmriprep.sh"
+    
+    print(f"Output folder: {output_folder}", flush=True)
 
     local_dcm2niix_dir = project_root / "tools" / "dcm2niix"
     if local_dcm2niix_dir.exists():
@@ -223,8 +223,10 @@ Examples:
         sys.exit(0)
 
     print(f"\nTotal tasks: {len(tasks)} (subject-session pairs)", flush=True)
+    print(f"[PROGRESS:TOTAL:{len(tasks)}]", flush=True)
     
     errors = []
+    completed_tasks = 0
 
     # Processing Loop
     for task in tasks:
@@ -236,8 +238,12 @@ Examples:
         print(f"Processing: sub-{sub_id} / ses-{ses_id}", flush=True)
         print(f"DICOM source: {dicom_path}", flush=True)
         print(f"{'='*60}", flush=True)
+        
+        # Signal task start for progress tracking
+        print(f"[PROGRESS:TASK_START:{completed_tasks}]", flush=True)
 
         # 1. BIDS Conversion
+        task_start_time = datetime.now()
         if not args.skip_bids:
             print("  -> Converting DICOM to BIDS format...", flush=True)
             cmd_bids = [
@@ -250,42 +256,53 @@ Examples:
                 "--force"
             ]
             
-            if args.dry_run:
-                print(f"  [DRY-RUN] {' '.join(cmd_bids)}", flush=True)
-            else:
-                try:
-                    result = subprocess.run(cmd_bids, capture_output=True, text=True)
-                    if result.returncode != 0:
-                        print(f"    Warning: dcm2bids output:\n{result.stderr}", flush=True)
-                        errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion failed, exit {result.returncode})")
-                        continue
-                    else:
-                        print(f"    Done.", flush=True)
+            try:
+                result = subprocess.run(cmd_bids, capture_output=True, text=True)
+                if result.returncode != 0:
+                    print(f"    Warning: dcm2bids output:\n{result.stderr}", flush=True)
+                    errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion failed, exit {result.returncode})")
+                    completed_tasks += 1
+                    print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
+                    print(f"  ✗ [LOG] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}", flush=True)
+                    continue
+                else:
+                    elapsed = (datetime.now() - task_start_time).total_seconds()
+                    print(f"    Done. (took {elapsed:.1f}s)", flush=True)
+                    completed_tasks += 1
+                    print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
+                    print(f"  ✓ [LOG] BIDS conversion completed for sub-{sub_id} ses-{ses_id} ({elapsed:.1f}s)", flush=True)
+                
+                # Create dataset_description.json if missing
+                desc_path = bids_dir / "dataset_description.json"
+                if not desc_path.exists():
+                    desc_content = {
+                        "Name": "fMRI Pipeline Output",
+                        "BIDSVersion": "1.8.0",
+                        "DatasetType": "raw",
+                        "Authors": ["Pipeline"]
+                    }
+                    with open(desc_path, 'w') as f:
+                        json.dump(desc_content, f, indent=4)
+                    print(f"    Created dataset_description.json", flush=True)
                     
-                    # Create dataset_description.json if missing
-                    desc_path = bids_dir / "dataset_description.json"
-                    if not desc_path.exists():
-                        desc_content = {
-                            "Name": "fMRI Pipeline Output",
-                            "BIDSVersion": "1.8.0",
-                            "DatasetType": "raw",
-                            "Authors": ["Pipeline"]
-                        }
-                        with open(desc_path, 'w') as f:
-                            json.dump(desc_content, f, indent=4)
-                        print(f"    Created dataset_description.json", flush=True)
-                        
-                except subprocess.CalledProcessError as e:
-                    print(f"    FAILED: {e}", flush=True)
-                    errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion)")
-                    continue
-                except Exception as e:
-                    print(f"    ERROR: {e}", flush=True)
-                    errors.append(f"sub-{sub_id}_ses-{ses_id} ({e})")
-                    continue
+            except subprocess.CalledProcessError as e:
+                print(f"    FAILED: {e}", flush=True)
+                errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion)")
+                completed_tasks += 1
+                print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
+                print(f"  ✗ [LOG] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}", flush=True)
+                continue
+            except Exception as e:
+                print(f"    ERROR: {e}", flush=True)
+                errors.append(f"sub-{sub_id}_ses-{ses_id} ({e})")
+                completed_tasks += 1
+                print(f"[PROGRESS:TASK:{completed_tasks}]", flush=True)
+                print(f"  ✗ [LOG] BIDS conversion FAILED for sub-{sub_id} ses-{ses_id}: {e}", flush=True)
+                continue
 
         # 2. fMRIPrep (run per subject, not per session)
         if not args.skip_fmriprep:
+            fmriprep_start_time = datetime.now()
             print("  -> Running fMRIPrep...", flush=True)
             cmd_fmriprep = [
                 str(fmriprep_script),
@@ -294,21 +311,26 @@ Examples:
                 sub_id
             ]
             
-            if args.dry_run:
-                print(f"  [DRY-RUN] {' '.join(cmd_fmriprep)}", flush=True)
-            else:
-                try:
-                    result = subprocess.run(cmd_fmriprep, capture_output=True, text=True)
-                    if result.returncode != 0:
-                        print(f"    Warning: fMRIPrep output:\n{result.stderr}", flush=True)
-                    else:
-                        print(f"    Done.", flush=True)
-                except Exception as e:
-                    print(f"    ERROR: {e}", flush=True)
-                    errors.append(f"sub-{sub_id} (fMRIPrep)")
+            try:
+                result = subprocess.run(cmd_fmriprep, capture_output=True, text=True)
+                fmriprep_elapsed = (datetime.now() - fmriprep_start_time).total_seconds()
+                if result.returncode != 0:
+                    print(f"    Warning: fMRIPrep output:\n{result.stderr}", flush=True)
+                    print(f"  ✗ [LOG] fMRIPrep FAILED for sub-{sub_id}", flush=True)
+                else:
+                    print(f"    Done. (took {fmriprep_elapsed:.1f}s)", flush=True)
+                    print(f"  ✓ [LOG] fMRIPrep completed for sub-{sub_id} ({fmriprep_elapsed:.1f}s)", flush=True)
+            except Exception as e:
+                print(f"    ERROR: {e}", flush=True)
+                errors.append(f"sub-{sub_id} (fMRIPrep)")
+                print(f"  ✗ [LOG] fMRIPrep FAILED for sub-{sub_id}: {e}", flush=True)
 
+    # Final progress marker - always reaches 100%
+    print(f"[PROGRESS:COMPLETE]", flush=True)
+    
     # Summary
     print("\n" + "="*60, flush=True)
+    print(f"Output saved to: {output_folder}", flush=True)
     if errors:
         print("PIPELINE COMPLETED WITH ERRORS:", flush=True)
         for err in errors:
