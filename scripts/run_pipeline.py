@@ -234,7 +234,7 @@ Examples:
 
         # 1. BIDS Conversion
         if not args.skip_bids:
-            print(f"  → Converting DICOM to BIDS format...", flush=True)
+            print("  -> Converting DICOM to BIDS format...", flush=True)
             cmd_bids = [
                 "dcm2bids",
                 "-d", str(dicom_path),
@@ -279,7 +279,7 @@ Examples:
 
         # 2. fMRIPrep (run per subject, not per session)
         if not args.skip_fmriprep:
-            print(f"  → Running fMRIPrep...", flush=True)
+            print("  -> Running fMRIPrep...", flush=True)
             cmd_fmriprep = [
                 str(fmriprep_script),
                 str(bids_dir),
@@ -305,11 +305,11 @@ Examples:
     if errors:
         print("PIPELINE COMPLETED WITH ERRORS:", flush=True)
         for err in errors:
-            print(f"  ✗ {err}", flush=True)
+            print(f"  [X] {err}", flush=True)
         print("="*60, flush=True)
         sys.exit(1)
     else:
-        print("✓ All tasks completed successfully.", flush=True)
+        print("[OK] All tasks completed successfully.", flush=True)
         print("="*60, flush=True)
         sys.exit(0)
 
