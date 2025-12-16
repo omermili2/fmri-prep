@@ -1,0 +1,23 @@
+# Environment & Dependencies
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
+
+# Data Directories (Too large for Git)
+sourcedata/
+test_data/
+bids_output/
+derivatives/
+work/
+tmp_dcm2bids/
+
+# Local Configuration (Secrets/Local paths)
+.freesurfer_license.txt
+license.txt
+
+# Logs
+*.log
+

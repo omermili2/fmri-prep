@@ -1,0 +1,47 @@
+{
+  "descriptions": [
+    {
+      "datatype": "anat",
+      "suffix": "T1w",
+      "criteria": {
+        "SeriesDescription": "anat_ses-*_T1w*"
+      },
+      "sidecarChanges": {
+        "ProtocolName": "T1w"
+      }
+    },
+    {
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-sound",
+      "criteria": {
+        "SeriesDescription": "func_ses-*_task-sound*"
+      },
+      "sidecarChanges": {
+        "TaskName": "sound"
+      }
+    },
+    {
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-story",
+      "criteria": {
+        "SeriesDescription": "func_ses-*_task-story*"
+      },
+      "sidecarChanges": {
+        "TaskName": "story"
+      }
+    },
+    {
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-faces",
+      "criteria": {
+        "SeriesDescription": "func_ses-*_task-faces*"
+      },
+      "sidecarChanges": {
+        "TaskName": "faces"
+      }
+    }
+  ]
+}
