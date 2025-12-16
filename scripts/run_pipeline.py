@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 import re
 import json
+import os
 
 def run_command(cmd, dry_run=False):
     """Runs a shell command and handles errors."""
@@ -151,6 +152,10 @@ Examples:
     bids_dir = base_output / "bids_output"
     derivatives_dir = base_output / "derivatives"
     fmriprep_script = project_root / "scripts" / "run_fmriprep.sh"
+
+    local_dcm2niix_dir = project_root / "tools" / "dcm2niix"
+    if local_dcm2niix_dir.exists():
+        os.environ["PATH"] = str(local_dcm2niix_dir) + os.pathsep + os.environ.get("PATH", "")
     
     # Find config file (check multiple locations)
     config_path = None
@@ -252,6 +257,8 @@ Examples:
                     result = subprocess.run(cmd_bids, capture_output=True, text=True)
                     if result.returncode != 0:
                         print(f"    Warning: dcm2bids output:\n{result.stderr}", flush=True)
+                        errors.append(f"sub-{sub_id}_ses-{ses_id} (BIDS conversion failed, exit {result.returncode})")
+                        continue
                     else:
                         print(f"    Done.", flush=True)
                     
