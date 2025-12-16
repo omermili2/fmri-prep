@@ -41,54 +41,74 @@ This project provides an automated pipeline to convert raw DICOM MRI scans into 
 
 To move this project to another computer (e.g., a high-performance server):
 
-1.  **Clone the Project**:
-    ```bash
-    git clone https://github.com/omermili2/fmri-prep.git
-    cd fmri-prep
-    ```
-2.  **Run Setup Script**:
+1.  **Copy the Project**: Transfer this entire folder.
+2.  **Install Docker & dcm2niix**: Ensure these system tools are installed on the new machine.
+3.  **Run Setup Script**:
     ```bash
     ./scripts/setup_env.sh
     ```
-    This script will check for prerequisites (Python, Docker, dcm2niix), create the virtual environment, and install libraries.
-3.  **Add FreeSurfer License**:
+    This script will check for prerequisites, create the virtual environment, and install Python libraries.
+4.  **Add FreeSurfer License**:
     Place your `license.txt` file in the project root and rename it to `.freesurfer_license.txt`.
-
-## How to Run (GUI)
-
-The easiest way to use the tool is via the graphical interface:
-
-```bash
-source venv/bin/activate
-python gui_app.py
-```
-
-1.  **Raw Data Folder:** Select the *parent* folder containing your subject directories (e.g., `MyStudyData/` which contains `110/`, `111/`, etc.).
-2.  **Output Folder:** Select where you want the results.
-3.  **Select Steps:** Check "Convert to BIDS" and/or "Run fMRIPrep".
-4.  **Start:** Click the button.
 
 ## Master Pipeline (CLI)
 
-For advanced users or server automation:
+Instead of running steps individually, you can use the master script to orchestrate the entire flow:
 
 ```bash
 ./scripts/run_pipeline.py \
-  --input <path_to_raw_dicoms_root> \
-  --output_dir <path_to_output> \
+  --input <path_to_raw_dicoms> \
+  --subject <subject_id> \
   --session <session_id>
 ```
 
 **Options:**
 - `--dry-run`: Print commands without executing (safe test).
-- `--skip-bids`: Skip the conversion step.
+- `--skip-bids`: Skip the conversion step (if data is already in BIDS).
 - `--skip-fmriprep`: Skip the preprocessing step.
 
 ### Example:
 
 ```bash
 ./scripts/run_pipeline.py \
-  --input /data/MyRawScans \
-  --output_dir /data/Processed \
+  --input test_data/sourcedata/sub-01/scans \
+  --subject 01 \
   --session 01
 ```
+## Manual Steps
+
+If you prefer to run steps manually:
+
+### Phase 2: BIDS Conversion
+
+We use `dcm2bids` to convert DICOMs. The process involves:
+
+1.  **Inspection**: `dcm2bids_helper` scans the raw data to identify scan types (T1w, functional tasks, etc.).
+2.  **Configuration**: `dcm2bids_config.json` defines rules to rename scans (e.g., "If name contains 'T1w', save as 'sub-01_T1w'").
+3.  **Conversion**: The tool reads the config and organizes the files.
+
+### Running the Conversion
+
+To convert the test data for Subject 01, Session 01:
+
+```bash
+dcm2bids -d test_data/sourcedata/sub-01/scans \
+         -p 01 \
+         -s 01 \
+         -c dcm2bids_config.json \
+         -o bids_output
+```
+
+## Phase 3: fMRIPrep Preprocessing
+
+To run fMRIPrep on the BIDS data:
+
+```bash
+./scripts/run_fmriprep.sh <bids_dir> <output_dir> <participant_label>
+```
+
+Example:
+```bash
+./scripts/run_fmriprep.sh bids_output derivatives 01
+```
+

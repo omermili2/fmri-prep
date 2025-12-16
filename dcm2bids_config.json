@@ -1,47 +1,65 @@
 {
   "descriptions": [
     {
+      "id": "anat_t1w",
       "datatype": "anat",
       "suffix": "T1w",
       "criteria": {
-        "SeriesDescription": "anat_ses-*_T1w*"
+        "SeriesDescription": "*T1*",
+        "ImageType": ["ORIGINAL", "PRIMARY", "*"]
       },
       "sidecarChanges": {
         "ProtocolName": "T1w"
       }
     },
     {
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-sound",
+      "id": "anat_t2w",
+      "datatype": "anat",
+      "suffix": "T2w",
       "criteria": {
-        "SeriesDescription": "func_ses-*_task-sound*"
-      },
-      "sidecarChanges": {
-        "TaskName": "sound"
+        "SeriesDescription": "*T2*"
       }
     },
     {
+      "id": "func_rest",
       "datatype": "func",
       "suffix": "bold",
-      "custom_entities": "task-story",
+      "custom_entities": "task-rest",
       "criteria": {
-        "SeriesDescription": "func_ses-*_task-story*"
+        "SeriesDescription": "*rest*"
       },
       "sidecarChanges": {
-        "TaskName": "story"
+        "TaskName": "rest"
       }
     },
     {
+      "id": "func_task",
       "datatype": "func",
       "suffix": "bold",
-      "custom_entities": "task-faces",
+      "custom_entities": "task-task",
       "criteria": {
-        "SeriesDescription": "func_ses-*_task-faces*"
+        "SeriesDescription": "*fMRI*"
       },
       "sidecarChanges": {
-        "TaskName": "faces"
+        "TaskName": "task"
       }
+    },
+    {
+      "id": "dwi",
+      "datatype": "dwi",
+      "suffix": "dwi",
+      "criteria": {
+        "SeriesDescription": "*DWI*"
+      }
+    },
+    {
+      "id": "fmap_phasediff",
+      "datatype": "fmap",
+      "suffix": "phasediff",
+      "criteria": {
+        "SeriesDescription": "*FieldMap*"
+      },
+      "intendedFor": ["func_rest", "func_task"]
     }
   ]
 }
