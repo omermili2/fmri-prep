@@ -251,7 +251,22 @@ class App(ctk.CTk):
             self._update_output_info()
 
     def browse_output(self):
-        folder = filedialog.askdirectory(title="Select Output Root Folder")
+        initial_dir = None
+        input_dir = self.entry_input.get().strip()
+        if input_dir:
+            try:
+                initial_dir = str(Path(input_dir).resolve().parent)
+            except Exception:
+                initial_dir = None
+
+        if initial_dir:
+            folder = filedialog.askdirectory(
+                title="Select Output Root Folder",
+                initialdir=initial_dir
+            )
+        else:
+            folder = filedialog.askdirectory(title="Select Output Root Folder")
+
         if folder:
             self.entry_output.delete(0, "end")
             self.entry_output.insert(0, folder)
