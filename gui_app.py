@@ -61,7 +61,7 @@ class App(ctk.CTk):
         
         # Grid Layout
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(7, weight=1)  # Log area expands
+        self.grid_rowconfigure(6, weight=1)  # Log area expands
         
         # --- Header ---
         self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
@@ -141,76 +141,40 @@ class App(ctk.CTk):
         self.label_output_info.grid(row=2, column=1, padx=10, pady=0, sticky="w")
         self.label_output_info.grid_remove()  # Hide initially since it's empty
 
-        # --- Options Frame ---
-        self.frame_options = ctk.CTkFrame(self)
-        self.frame_options.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
-        
-        self.label_steps = ctk.CTkLabel(
-            self.frame_options, 
-            text="Pipeline Steps:", 
-            font=ctk.CTkFont(weight="bold")
-        )
-        self.label_steps.grid(row=0, column=0, padx=15, pady=15)
-
-        self.check_bids = ctk.CTkCheckBox(
-            self.frame_options, 
-            text="BIDS Conversion", 
-            onvalue=True, 
-            offvalue=False
-        )
-        self.check_bids.select()  # Default ON
-        self.check_bids.grid(row=0, column=1, padx=15, pady=15)
-
-        self.check_fmriprep = ctk.CTkCheckBox(
-            self.frame_options, 
-            text="fMRIPrep (Preprocessing)", 
-            onvalue=True, 
-            offvalue=False
-        )
-        # NOT selected by default - BIDS only is the common first step
-        self.check_fmriprep.grid(row=0, column=2, padx=15, pady=15)
-
-        # --- Quick Action Buttons ---
+        # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_actions.grid(row=3, column=0, padx=20, pady=5, sticky="ew")
-        self.frame_actions.grid_columnconfigure((0, 1, 2), weight=1)
+        self.frame_actions.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+        self.frame_actions.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_bids_only = ctk.CTkButton(
             self.frame_actions,
-            text="▶ Run BIDS Only",
-            height=45,
+            text="▶ Run BIDS Conversion",
+            height=50,
             fg_color="#2E7D32",  # Green
             hover_color="#1B5E20",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_bids_only
         )
-        self.btn_bids_only.grid(row=0, column=0, padx=5, pady=10, sticky="ew")
+        self.btn_bids_only.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
         self.btn_full_pipeline = ctk.CTkButton(
             self.frame_actions,
             text="▶▶ Run Full Pipeline",
-            height=45,
+            height=50,
             fg_color="#1565C0",  # Blue
             hover_color="#0D47A1",
-            font=ctk.CTkFont(size=14, weight="bold"),
+            font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_full_pipeline
         )
-        self.btn_full_pipeline.grid(row=0, column=1, padx=5, pady=10, sticky="ew")
-
-        self.btn_custom = ctk.CTkButton(
-            self.frame_actions,
-            text="⚙ Run Selected Steps",
-            height=45,
-            fg_color="#424242",  # Gray
-            hover_color="#212121",
-            font=ctk.CTkFont(size=14, weight="bold"),
-            command=self.start_pipeline
-        )
-        self.btn_custom.grid(row=0, column=2, padx=5, pady=10, sticky="ew")
+        self.btn_full_pipeline.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        
+        # Internal state for pipeline steps (not shown in UI)
+        self._run_bids = True
+        self._run_fmriprep = False
 
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_progress.grid(row=4, column=0, padx=20, pady=(10, 5), sticky="ew")
+        self.frame_progress.grid(row=3, column=0, padx=20, pady=(10, 5), sticky="ew")
         self.frame_progress.grid_columnconfigure(0, weight=1)
         self.frame_progress.grid_remove()  # Hide initially
         
@@ -250,7 +214,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.label_status.grid(row=5, column=0, padx=20, pady=(0, 5), sticky="w")
+        self.label_status.grid(row=4, column=0, padx=20, pady=(0, 5), sticky="w")
 
         # --- Log Area ---
         self.label_logs = ctk.CTkLabel(
@@ -258,10 +222,10 @@ class App(ctk.CTk):
             text="📋 Execution Logs", 
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_logs.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.label_logs.grid(row=5, column=0, padx=20, pady=(10, 0), sticky="w")
         
         self.console = ConsoleLog(self)
-        self.console.grid(row=7, column=0, padx=20, pady=(5, 20), sticky="nsew")
+        self.console.grid(row=6, column=0, padx=20, pady=(5, 20), sticky="nsew")
 
         self.is_running = False
         
@@ -344,24 +308,20 @@ class App(ctk.CTk):
         return True
 
     def run_bids_only(self):
-        """Quick action: Run BIDS conversion only."""
-        self.check_bids.select()
-        self.check_fmriprep.deselect()
-        self.start_pipeline()
+        """Run BIDS conversion only."""
+        self._run_bids = True
+        self._run_fmriprep = False
+        self._start_pipeline_internal("BIDS Conversion")
 
     def run_full_pipeline(self):
-        """Quick action: Run both BIDS and fMRIPrep."""
-        self.check_bids.select()
-        self.check_fmriprep.select()
-        self.start_pipeline()
+        """Run both BIDS conversion and fMRIPrep."""
+        self._run_bids = True
+        self._run_fmriprep = True
+        self._start_pipeline_internal("BIDS Conversion + fMRIPrep")
 
-    def start_pipeline(self):
-        """Start the pipeline with currently selected options."""
+    def _start_pipeline_internal(self, mode_label):
+        """Start the pipeline with the configured options."""
         if not self._validate_paths():
-            return
-            
-        if not self.check_bids.get() and not self.check_fmriprep.get():
-            self.console.log("⚠️  Please select at least one step to run.", "warning")
             return
 
         input_dir = self.entry_input.get().strip()
@@ -386,18 +346,9 @@ class App(ctk.CTk):
         self.console.delete("1.0", "end")
         self.console.configure(state="disabled")
         
-        self.console.log("🚀 Pipeline Started", "header")
+        self.console.log(f"🚀 {mode_label}", "header")
         self.console.log(f"📁 Source: {input_dir}")
         self.console.log(f"📂 Output Root: {output_dir}")
-        self.console.log(f"📂 A timestamped folder (output_<timestamp>) will be created inside")
-        
-        steps = []
-        if self.check_bids.get():
-            steps.append("BIDS Conversion")
-        if self.check_fmriprep.get():
-            steps.append("fMRIPrep")
-            
-        self.console.log(f"⚙️  Steps: {', '.join(steps)}")
         self.console.log("=" * 60)
 
         self.label_status.configure(text="Processing...", text_color="#FFC107")
@@ -409,7 +360,6 @@ class App(ctk.CTk):
         """Enable/disable all action buttons."""
         self.btn_bids_only.configure(state=state)
         self.btn_full_pipeline.configure(state=state)
-        self.btn_custom.configure(state=state)
         self.btn_browse_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
@@ -422,9 +372,9 @@ class App(ctk.CTk):
             "--output_dir", output_dir
         ]
 
-        if not self.check_bids.get():
+        if not self._run_bids:
             cmd.append("--skip-bids")
-        if not self.check_fmriprep.get():
+        if not self._run_fmriprep:
             cmd.append("--skip-fmriprep")
 
         try:
