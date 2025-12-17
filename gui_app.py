@@ -61,7 +61,7 @@ class App(ctk.CTk):
         
         # Grid Layout
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(6, weight=1)  # Log area expands
+        self.grid_rowconfigure(7, weight=1)  # Log area expands
         
         # --- Header ---
         self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
@@ -141,9 +141,23 @@ class App(ctk.CTk):
         self.label_output_info.grid(row=2, column=1, padx=10, pady=0, sticky="w")
         self.label_output_info.grid_remove()  # Hide initially since it's empty
 
+        # --- Options Frame ---
+        self.frame_options = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_options.grid(row=2, column=0, padx=20, pady=(5, 0), sticky="ew")
+        
+        self.check_anonymize = ctk.CTkCheckBox(
+            self.frame_options,
+            text="Enable anonymization (remove patient info from metadata)",
+            font=ctk.CTkFont(size=12),
+            onvalue=True,
+            offvalue=False
+        )
+        self.check_anonymize.grid(row=0, column=0, padx=10, pady=5, sticky="w")
+        self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
+
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_actions.grid(row=2, column=0, padx=20, pady=10, sticky="ew")
+        self.frame_actions.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
         self.frame_actions.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_bids_only = ctk.CTkButton(
@@ -174,7 +188,7 @@ class App(ctk.CTk):
 
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_progress.grid(row=3, column=0, padx=20, pady=(10, 5), sticky="ew")
+        self.frame_progress.grid(row=4, column=0, padx=20, pady=(10, 5), sticky="ew")
         self.frame_progress.grid_columnconfigure(0, weight=1)
         self.frame_progress.grid_remove()  # Hide initially
         
@@ -214,7 +228,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.label_status.grid(row=4, column=0, padx=20, pady=(0, 5), sticky="w")
+        self.label_status.grid(row=5, column=0, padx=20, pady=(0, 5), sticky="w")
 
         # --- Log Area ---
         self.label_logs = ctk.CTkLabel(
@@ -222,10 +236,10 @@ class App(ctk.CTk):
             text="📋 Execution Logs", 
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_logs.grid(row=5, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.label_logs.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
         
         self.console = ConsoleLog(self)
-        self.console.grid(row=6, column=0, padx=20, pady=(5, 20), sticky="nsew")
+        self.console.grid(row=7, column=0, padx=20, pady=(5, 20), sticky="nsew")
 
         self.is_running = False
         
@@ -263,7 +277,7 @@ class App(ctk.CTk):
         """Update the output info label to show where files will be saved."""
         output_dir = self.entry_output.get()
         if output_dir:
-            output_path = Path(output_dir) / "output_<timestamp>" / "bids_output"
+            output_path = Path(output_dir) / "output_<timestamp>"
             self.label_output_info.configure(
                 text=f"→ BIDS data will be saved to: {output_path}"
             )
@@ -376,6 +390,8 @@ class App(ctk.CTk):
             cmd.append("--skip-bids")
         if not self._run_fmriprep:
             cmd.append("--skip-fmriprep")
+        if self.check_anonymize.get():
+            cmd.append("--anonymize")
 
         try:
             # Platform-specific subprocess options for proper termination
