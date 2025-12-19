@@ -689,7 +689,7 @@ Examples:
     # BIDS output goes directly in output folder (no bids_output subfolder)
     bids_dir = output_folder
     derivatives_dir = output_folder / "derivatives"
-    fmriprep_script = project_root / "scripts" / "run_fmriprep.py"
+    fmriprep_script = project_root / "src" / "run_fmriprep.py"
     
     # Initialize report
     report = ConversionReport()

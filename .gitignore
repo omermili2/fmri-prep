@@ -2,24 +2,30 @@
 venv/
 __pycache__/
 *.pyc
+*.pyo
+
+# IDE
 .DS_Store
 .idea/
 .vscode/
+*.swp
+*.swo
 
 # Data Directories (Too large for Git)
 test_data/
+bids_output/
+derivatives/
+output_*/
 work/
 
-# Local Configuration (Secrets/Local paths)
-.freesurfer_license.txt
-license.txt
-
-# Logs
+# Temporary files
+tmp_dcm2bids/
 *.log
 
-thesis/BIBLIOGRAPHY.bib
-thesis/SUPPLEMENTARY_MATERIALS.md
-thesis/THESIS_PAPER.md
-thesis/figures/FIGURES_GUIDE.md
-thesis/THESIS_PAPER.docx
-thesis/README.md
+# Local Configuration (Secrets)
+.freesurfer_license.txt
+freesurfer_license.txt
+license.txt
+
+# Thesis documents (optional - remove if you want to track)
+# thesis/
