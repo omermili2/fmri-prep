@@ -6,11 +6,7 @@
       "datatype": "anat",
       "suffix": "T1w",
       "criteria": {
-        "SeriesDescription": "*T1*",
-        "ImageType": ["ORIGINAL", "PRIMARY", "*"]
-      },
-      "sidecarChanges": {
-        "ProtocolName": "T1w"
+        "SeriesDescription": "*T1w*"
       }
     },
     {
@@ -18,7 +14,79 @@
       "datatype": "anat",
       "suffix": "T2w",
       "criteria": {
-        "SeriesDescription": "*T2*"
+        "SeriesDescription": "*T2w*"
+      }
+    },
+    {
+      "id": "func_sound",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-sound_run-01",
+      "criteria": {
+        "SeriesDescription": "func*task-sound*"
+      },
+      "sidecarChanges": {
+        "TaskName": "sound"
+      }
+    },
+    {
+      "id": "func_story_run01",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-story_run-01",
+      "criteria": {
+        "SeriesDescription": "*task-story_run-01*"
+      },
+      "sidecarChanges": {
+        "TaskName": "story"
+      }
+    },
+    {
+      "id": "func_story_run02",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-story_run-02",
+      "criteria": {
+        "SeriesDescription": "*task-story_run-02*"
+      },
+      "sidecarChanges": {
+        "TaskName": "story"
+      }
+    },
+    {
+      "id": "func_story_run03",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-story_run-03",
+      "criteria": {
+        "SeriesDescription": "*task-story_run-03*"
+      },
+      "sidecarChanges": {
+        "TaskName": "story"
+      }
+    },
+    {
+      "id": "func_story_run04",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-story_run-04",
+      "criteria": {
+        "SeriesDescription": "*task-story_run-04*"
+      },
+      "sidecarChanges": {
+        "TaskName": "story"
+      }
+    },
+    {
+      "id": "func_faces",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-faces_run-01",
+      "criteria": {
+        "SeriesDescription": "*task-faces*"
+      },
+      "sidecarChanges": {
+        "TaskName": "faces"
       }
     },
     {
@@ -31,18 +99,6 @@
       },
       "sidecarChanges": {
         "TaskName": "rest"
-      }
-    },
-    {
-      "id": "func_task",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-task",
-      "criteria": {
-        "SeriesDescription": "*fMRI*"
-      },
-      "sidecarChanges": {
-        "TaskName": "task"
       }
     },
     {
@@ -59,8 +115,7 @@
       "suffix": "phasediff",
       "criteria": {
         "SeriesDescription": "*FieldMap*"
-      },
-      "intendedFor": ["func_rest", "func_task"]
+      }
     }
   ]
 }
