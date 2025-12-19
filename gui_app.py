@@ -442,11 +442,11 @@ class App(ctk.CTk):
             
             if self.current_process.returncode == 0:
                 self.console.log("=" * 60)
-                self.console.log("✅ COMPLETED SUCCESSFULLY!", "success")
+                self.console.log("Conversion complete! Check your output folder for results.", "success")
                 self.after(0, self._update_status_success)
             else:
                 self.console.log("=" * 60)
-                self.console.log(f"❌ PIPELINE FAILED (Exit Code {self.current_process.returncode})", "error")
+                self.console.log("Conversion finished with some problems. Check the report for details.", "error")
                 self.after(0, self._update_status_error)
 
         except Exception as e:
@@ -465,8 +465,9 @@ class App(ctk.CTk):
             self.completed_tasks = 0
             self.current_progress = 0.0
             self.target_progress = 0.0
+            sessions_word = "session" if self.total_tasks == 1 else "sessions"
             self.after(0, lambda: self.label_status.configure(
-                text=f"Processing 0/{self.total_tasks} tasks...", 
+                text=f"Preparing to convert {self.total_tasks} {sessions_word}...", 
                 text_color="#FFC107"
             ))
         
@@ -479,6 +480,34 @@ class App(ctk.CTk):
                 self.task_in_progress = True
                 self._start_progress_animation()
         
+        # [PROGRESS:STAGE:stage_num:total_stages:sub_id:ses_id:stage_name] - Conversion stage update
+        elif match := re.match(r'\[PROGRESS:STAGE:(\d+):(\d+):([^:]+):([^:]+):(.+)\]', marker):
+            stage_num = int(match.group(1))
+            total_stages = int(match.group(2))
+            sub_id = match.group(3)
+            ses_id = match.group(4)
+            stage_name = match.group(5)
+            
+            # Calculate sub-progress within this task
+            if self.total_tasks > 0:
+                task_base = self.completed_tasks / self.total_tasks
+                stage_progress = (stage_num / total_stages) / self.total_tasks
+                self.target_progress = task_base + stage_progress * 0.95
+            
+            # User-friendly status message
+            self.after(0, lambda s=stage_name, sub=sub_id, ses=ses_id: self.label_status.configure(
+                text=f"Subject {sub}, Session {ses}: {s}",
+                text_color="#FFC107"
+            ))
+        
+        # [PROGRESS:STATUS:message] - General status update
+        elif match := re.match(r'\[PROGRESS:STATUS:(.+)\]', marker):
+            message = match.group(1)
+            self.after(0, lambda m=message: self.label_status.configure(
+                text=m,
+                text_color="#FFC107"
+            ))
+        
         # [PROGRESS:TASK:N] - Task N completed
         elif match := re.match(r'\[PROGRESS:TASK:(\d+)\]', marker):
             self.completed_tasks = int(match.group(1))
@@ -488,10 +517,14 @@ class App(ctk.CTk):
                 self.current_progress = self.completed_tasks / self.total_tasks
                 self.target_progress = self.current_progress
                 self.after(0, lambda p=self.current_progress: self.progress_bar.set(p))
-                self.after(0, lambda: self.label_status.configure(
-                    text=f"Processing {self.completed_tasks}/{self.total_tasks} tasks...",
-                    text_color="#FFC107"
-                ))
+                
+                remaining = self.total_tasks - self.completed_tasks
+                if remaining > 0:
+                    sessions_word = "session" if remaining == 1 else "sessions"
+                    self.after(0, lambda r=remaining, w=sessions_word: self.label_status.configure(
+                        text=f"{r} {w} remaining...",
+                        text_color="#FFC107"
+                    ))
         
         # [PROGRESS:COMPLETE] - All done
         elif marker == "[PROGRESS:COMPLETE]":
@@ -499,7 +532,7 @@ class App(ctk.CTk):
             self.current_progress = 1.0
             self.after(0, lambda: self.progress_bar.set(1.0))
             self.after(0, lambda: self.label_status.configure(
-                text="Finalizing...",
+                text="Cleaning up and generating report...",
                 text_color="#FFC107"
             ))
     
@@ -621,10 +654,16 @@ class App(ctk.CTk):
         threading.Thread(target=cleanup_background, daemon=True).start()
     
     def _update_status_success(self):
-        self.label_status.configure(text="✓ Completed Successfully", text_color="#4CAF50")
+        self.label_status.configure(
+            text="All done! Your converted files are ready.", 
+            text_color="#4CAF50"
+        )
 
     def _update_status_error(self):
-        self.label_status.configure(text="✗ Failed - Check logs", text_color="#F44336")
+        self.label_status.configure(
+            text="Something went wrong. See the logs below for details.", 
+            text_color="#F44336"
+        )
 
     def _reset_ui(self):
         self.is_running = False
