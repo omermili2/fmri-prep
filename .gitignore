@@ -7,12 +7,8 @@ __pycache__/
 .vscode/
 
 # Data Directories (Too large for Git)
-sourcedata/
 test_data/
-bids_output/
-derivatives/
 work/
-tmp_dcm2bids/
 
 # Local Configuration (Secrets/Local paths)
 .freesurfer_license.txt
@@ -21,3 +17,9 @@ license.txt
 # Logs
 *.log
 
+thesis/BIBLIOGRAPHY.bib
+thesis/SUPPLEMENTARY_MATERIALS.md
+thesis/THESIS_PAPER.md
+thesis/figures/FIGURES_GUIDE.md
+thesis/THESIS_PAPER.docx
+thesis/README.md
