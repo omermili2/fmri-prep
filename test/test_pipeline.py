@@ -6,7 +6,7 @@ Tests for the pipeline module (discovery functions)
 import pytest
 from pathlib import Path
 
-# Import from new modular structure
+
 from core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
 
 

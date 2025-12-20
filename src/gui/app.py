@@ -566,7 +566,6 @@ class App(ctk.CTk):
         self.btn_browse_output.configure(state=state)
 
     def run_subprocess(self, input_dir, output_dir):
-        # Use the new modular pipeline
         script_path = Path(__file__).parent.parent / "pipeline.py"
         
         cmd = [
@@ -605,6 +604,9 @@ class App(ctk.CTk):
                 popen_kwargs['start_new_session'] = True
             
             self.current_process = subprocess.Popen(cmd, **popen_kwargs)
+            
+            if self.current_process.stdout is None:
+                raise RuntimeError("Failed to capture subprocess output")
             
             for line in self.current_process.stdout:
                 # Check if stop was requested

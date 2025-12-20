@@ -15,7 +15,6 @@ src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
 
 if __name__ == "__main__":
-    # Import from the new modular structure
     from gui.app import App
     
     app = App()
