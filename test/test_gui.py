@@ -122,10 +122,10 @@ class TestGuiImports:
             if 'display' not in str(e).lower() and 'tk' not in str(e).lower():
                 raise
     
-    def test_pipeline_imports(self):
-        """Test that pipeline module can be imported."""
-        import pipeline
-        assert hasattr(pipeline, 'main')
+    def test_orchestrator_imports(self):
+        """Test that orchestrator module can be imported."""
+        import orchestrator
+        assert hasattr(orchestrator, 'main')
     
     def test_core_imports(self):
         """Test that core modules can be imported."""

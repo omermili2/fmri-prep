@@ -42,18 +42,19 @@ python run.py
 fMRI_Masters/
 ├── run.py                  # Entry point - run this!
 ├── src/                    # Source code
-│   ├── gui_app.py          # GUI application
-│   ├── run_pipeline.py     # BIDS conversion pipeline
-│   └── run_fmriprep.py     # fMRIPrep runner
+│   ├── orchestrator.py     # Main pipeline orchestrator
+│   ├── gui/                # GUI application
+│   ├── core/               # Discovery, progress, utilities
+│   ├── bids/               # BIDS conversion
+│   ├── fmriprep/           # fMRIPrep runner
+│   └── reporting/          # Report generation
 ├── config/                 # Configuration
 │   └── dcm2bids_config.json
 ├── docs/                   # Documentation
 │   ├── BIDS_CONVERSION_GUIDE.md
-│   ├── FMRIPREP_GUIDE.md
-│   └── FREESURFER_LICENSE.md
-├── tools/                  # External tools (dcm2niix)
-├── scripts/                # Setup scripts
-└── thesis/                 # Thesis documents
+│   └── FMRIPREP_GUIDE.md
+├── test/                   # Test suite
+└── scripts/                # Setup scripts
 ```
 
 ---
@@ -81,10 +82,10 @@ fMRI_Masters/
 
 ```bash
 # BIDS conversion only
-python src/run_pipeline.py --input /path/to/dicom --output_dir /path/to/output --skip-fmriprep
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --skip-fmriprep
 
 # Full pipeline (BIDS + fMRIPrep)
-python src/run_pipeline.py --input /path/to/dicom --output_dir /path/to/output
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output
 ```
 
 ---

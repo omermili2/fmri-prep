@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Main pipeline orchestrator for fMRI preprocessing.
+Main orchestrator for fMRI preprocessing.
 
-This module coordinates:
+This module coordinates all pipeline components:
 1. Subject/session discovery
 2. BIDS conversion
 3. fMRIPrep preprocessing  
@@ -10,7 +10,7 @@ This module coordinates:
 5. Cleanup
 
 Usage:
-    python -m src.pipeline --input /path/to/dicoms --output_dir /path/to/output
+    python -m src.orchestrator --input /path/to/dicoms --output_dir /path/to/output
 
     Or via GUI: python run.py
 """
