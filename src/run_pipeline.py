@@ -524,7 +524,7 @@ class ConversionReport:
 
 
 def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_script, 
-                        skip_bids, skip_fmriprep, progress_tracker, desc_created_event, report):
+                        skip_bids, skip_fmriprep, fmriprep_args, progress_tracker, desc_created_event, report):
     """Process a single subject-session task. Returns error string or None."""
     sub_id = task['sub_id']
     ses_id = task['ses_id']
@@ -624,6 +624,10 @@ def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_s
             sub_id
         ]
         
+        # Add fMRIPrep arguments if provided
+        if fmriprep_args:
+            cmd_fmriprep.extend(["--extra-args", fmriprep_args])
+        
         try:
             result = subprocess.run(cmd_fmriprep, capture_output=True, text=True, encoding='utf-8', errors='replace')
             fmriprep_elapsed = (datetime.now() - fmriprep_start_time).total_seconds()
@@ -674,6 +678,8 @@ Examples:
                         help=f"Number of parallel workers (default: {default_workers} based on CPU cores)")
     parser.add_argument("--anonymize", action="store_true", 
                         help="Enable DICOM metadata anonymization (removes patient info from JSON sidecars)")
+    parser.add_argument("--fmriprep-args", type=str, default="",
+                        help="Comma-separated fMRIPrep arguments to pass through")
 
     args = parser.parse_args()
 
@@ -837,12 +843,15 @@ Examples:
 
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
+    # Parse fMRIPrep args
+    fmriprep_args = args.fmriprep_args if hasattr(args, 'fmriprep_args') else ""
+    
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {
             executor.submit(
                 process_single_task,
                 task, config_path, bids_dir, derivatives_dir, fmriprep_script,
-                args.skip_bids, args.skip_fmriprep, progress_tracker, desc_created_event, report
+                args.skip_bids, args.skip_fmriprep, fmriprep_args, progress_tracker, desc_created_event, report
             ): task for task in all_tasks
         }
         

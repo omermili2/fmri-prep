@@ -7,7 +7,7 @@ def setup_data():
     # Define paths
     project_root = Path(__file__).parent.parent
     source_dir = project_root / "sourcedata" / "0219191_mystudy-0219-1114" / "dcm"
-    target_dir = project_root / "test_data" / "sourcedata" / "sub-01" / "scans"
+    target_dir = project_root / "dummy_data" / "subjects" / "sub-01" / "scans"
 
     print(f"Source: {source_dir}")
     print(f"Target: {target_dir}")

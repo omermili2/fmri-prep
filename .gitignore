@@ -1,31 +1,16 @@
-# Environment & Dependencies
 venv/
 __pycache__/
 *.pyc
 *.pyo
-
-# IDE
 .DS_Store
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# Data Directories (Too large for Git)
-test_data/
-bids_output/
-derivatives/
-output_*/
-work/
-
-# Temporary files
+dummy_data/
 tmp_dcm2bids/
 *.log
-
-# Local Configuration (Secrets)
 .freesurfer_license.txt
 freesurfer_license.txt
 license.txt
-
-# Thesis documents (optional - remove if you want to track)
-# thesis/
+thesis/

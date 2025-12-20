@@ -56,15 +56,19 @@ class App(ctk.CTk):
 
         # Window Setup
         self.title("fMRI Preprocessing Assistant")
-        self.geometry("950x750")
-        self.minsize(700, 550)
+        self.geometry("950x800")
+        self.minsize(700, 600)
         
-        # Grid Layout
+        # Main scrollable container
         self.grid_columnconfigure(0, weight=1)
-        self.grid_rowconfigure(7, weight=1)  # Log area expands
+        self.grid_rowconfigure(0, weight=1)
+        
+        self.main_scroll = ctk.CTkScrollableFrame(self, fg_color="transparent")
+        self.main_scroll.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+        self.main_scroll.grid_columnconfigure(0, weight=1)
         
         # --- Header ---
-        self.frame_header = ctk.CTkFrame(self, fg_color="transparent")
+        self.frame_header = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_header.grid(row=0, column=0, padx=20, pady=(20, 5), sticky="ew")
         
         self.label_title = ctk.CTkLabel(
@@ -83,7 +87,7 @@ class App(ctk.CTk):
         self.label_subtitle.pack(anchor="center", pady=(0, 5))
 
         # --- Configuration Frame ---
-        self.frame_config = ctk.CTkFrame(self)
+        self.frame_config = ctk.CTkFrame(self.main_scroll)
         self.frame_config.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
         self.frame_config.grid_columnconfigure(1, weight=1)
 
@@ -141,12 +145,12 @@ class App(ctk.CTk):
         self.label_output_info.grid(row=2, column=1, padx=10, pady=0, sticky="w")
         self.label_output_info.grid_remove()  # Hide initially since it's empty
 
-        # --- Options Frame ---
-        self.frame_options = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_options.grid(row=2, column=0, padx=20, pady=(5, 0), sticky="ew")
+        # --- BIDS Options Frame ---
+        self.frame_bids_options = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
+        self.frame_bids_options.grid(row=2, column=0, padx=20, pady=(5, 0), sticky="ew")
         
         self.check_anonymize = ctk.CTkCheckBox(
-            self.frame_options,
+            self.frame_bids_options,
             text="Enable anonymization (remove patient info from metadata)",
             font=ctk.CTkFont(size=12),
             onvalue=True,
@@ -155,9 +159,120 @@ class App(ctk.CTk):
         self.check_anonymize.grid(row=0, column=0, padx=10, pady=5, sticky="w")
         self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
 
+        # --- fMRIPrep Options Frame (Collapsible) ---
+        self.frame_fmriprep_container = ctk.CTkFrame(self.main_scroll)
+        self.frame_fmriprep_container.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="ew")
+        self.frame_fmriprep_container.grid_columnconfigure(0, weight=1)
+        
+        # Header with toggle button
+        self.frame_fmriprep_header = ctk.CTkFrame(self.frame_fmriprep_container, fg_color="transparent")
+        self.frame_fmriprep_header.grid(row=0, column=0, sticky="ew")
+        self.frame_fmriprep_header.grid_columnconfigure(1, weight=1)
+        
+        self.btn_toggle_fmriprep = ctk.CTkButton(
+            self.frame_fmriprep_header,
+            text="▶",
+            width=25,
+            height=25,
+            fg_color="transparent",
+            hover_color="#333333",
+            command=self._toggle_fmriprep_options
+        )
+        self.btn_toggle_fmriprep.grid(row=0, column=0, padx=(10, 5), pady=10)
+        
+        self.label_fmriprep_header = ctk.CTkLabel(
+            self.frame_fmriprep_header,
+            text="fMRIPrep Options (click to expand)",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.label_fmriprep_header.grid(row=0, column=1, pady=10, sticky="w")
+        
+        # Make header clickable
+        self.label_fmriprep_header.bind("<Button-1>", lambda e: self._toggle_fmriprep_options())
+        
+        # Collapsible content frame
+        self.frame_fmriprep_options = ctk.CTkFrame(self.frame_fmriprep_container, fg_color="#1a1a1a")
+        self.fmriprep_options_visible = False  # Start collapsed
+        
+        # --- Output Spaces Section ---
+        self.label_output_spaces = ctk.CTkLabel(
+            self.frame_fmriprep_options,
+            text="Output Spaces (at least one required):",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.label_output_spaces.grid(row=0, column=0, columnspan=2, padx=15, pady=(15, 5), sticky="w")
+        
+        self.check_space_mni = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="MNI152NLin2009cAsym (standard brain template)",
+            font=ctk.CTkFont(size=11),
+            command=self._validate_fmriprep_options
+        )
+        self.check_space_mni.grid(row=1, column=0, padx=30, pady=3, sticky="w")
+        self.check_space_mni.select()  # Default: ON
+        
+        self.check_space_t1w = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="Native T1w space (subject's own brain)",
+            font=ctk.CTkFont(size=11),
+            command=self._validate_fmriprep_options
+        )
+        self.check_space_t1w.grid(row=2, column=0, padx=30, pady=3, sticky="w")
+        self.check_space_t1w.deselect()  # Default: OFF
+        
+        # --- Processing Options Section ---
+        self.label_processing = ctk.CTkLabel(
+            self.frame_fmriprep_options,
+            text="Processing Options:",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.label_processing.grid(row=3, column=0, columnspan=2, padx=15, pady=(15, 5), sticky="w")
+        
+        self.check_freesurfer = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="FreeSurfer surface reconstruction (adds ~6 hours per subject)",
+            font=ctk.CTkFont(size=11)
+        )
+        self.check_freesurfer.grid(row=4, column=0, padx=30, pady=3, sticky="w")
+        self.check_freesurfer.deselect()  # Default: OFF (skip FreeSurfer)
+        
+        self.check_slice_timing = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="Slice timing correction",
+            font=ctk.CTkFont(size=11)
+        )
+        self.check_slice_timing.grid(row=5, column=0, padx=30, pady=3, sticky="w")
+        self.check_slice_timing.select()  # Default: ON
+        
+        self.check_syn_sdc = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="Fieldmap-less distortion correction (SyN SDC)",
+            font=ctk.CTkFont(size=11)
+        )
+        self.check_syn_sdc.grid(row=6, column=0, padx=30, pady=3, sticky="w")
+        self.check_syn_sdc.deselect()  # Default: OFF
+        
+        self.check_aroma = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="ICA-AROMA denoising (requires MNI output)",
+            font=ctk.CTkFont(size=11),
+            command=self._validate_fmriprep_options
+        )
+        self.check_aroma.grid(row=7, column=0, padx=30, pady=(3, 10), sticky="w")
+        self.check_aroma.deselect()  # Default: OFF
+        
+        # Validation warning label
+        self.label_fmriprep_warning = ctk.CTkLabel(
+            self.frame_fmriprep_options,
+            text="",
+            font=ctk.CTkFont(size=11),
+            text_color="#FFC107"
+        )
+        self.label_fmriprep_warning.grid(row=8, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
+
         # --- Action Buttons ---
-        self.frame_actions = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_actions.grid(row=3, column=0, padx=20, pady=10, sticky="ew")
+        self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
+        self.frame_actions.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
         self.frame_actions.grid_columnconfigure((0, 1), weight=1)
 
         self.btn_bids_only = ctk.CTkButton(
@@ -187,8 +302,8 @@ class App(ctk.CTk):
         self._run_fmriprep = False
 
         # --- Progress Indicator ---
-        self.frame_progress = ctk.CTkFrame(self, fg_color="transparent")
-        self.frame_progress.grid(row=4, column=0, padx=20, pady=(10, 5), sticky="ew")
+        self.frame_progress = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
+        self.frame_progress.grid(row=5, column=0, padx=20, pady=(10, 5), sticky="ew")
         self.frame_progress.grid_columnconfigure(0, weight=1)
         self.frame_progress.grid_remove()  # Hide initially
         
@@ -223,23 +338,23 @@ class App(ctk.CTk):
 
         # --- Status Label ---
         self.label_status = ctk.CTkLabel(
-            self, 
+            self.main_scroll, 
             text="Ready", 
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
-        self.label_status.grid(row=5, column=0, padx=20, pady=(0, 5), sticky="w")
+        self.label_status.grid(row=6, column=0, padx=20, pady=(0, 5), sticky="w")
 
         # --- Log Area ---
         self.label_logs = ctk.CTkLabel(
-            self, 
+            self.main_scroll, 
             text="📋 Execution Logs", 
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_logs.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.label_logs.grid(row=7, column=0, padx=20, pady=(10, 0), sticky="w")
         
-        self.console = ConsoleLog(self)
-        self.console.grid(row=7, column=0, padx=20, pady=(5, 20), sticky="nsew")
+        self.console = ConsoleLog(self.main_scroll, height=250)
+        self.console.grid(row=8, column=0, padx=20, pady=(5, 20), sticky="ew")
 
         self.is_running = False
         
@@ -285,6 +400,71 @@ class App(ctk.CTk):
         else:
             self.label_output_info.grid_remove()  # Hide when empty
 
+    def _toggle_fmriprep_options(self):
+        """Toggle the visibility of fMRIPrep options panel."""
+        if self.fmriprep_options_visible:
+            self.frame_fmriprep_options.grid_remove()
+            self.btn_toggle_fmriprep.configure(text="▶")
+            self.label_fmriprep_header.configure(text="fMRIPrep Options (click to expand)")
+            self.fmriprep_options_visible = False
+        else:
+            self.frame_fmriprep_options.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
+            self.btn_toggle_fmriprep.configure(text="▼")
+            self.label_fmriprep_header.configure(text="fMRIPrep Options")
+            self.fmriprep_options_visible = True
+
+    def _validate_fmriprep_options(self):
+        """Validate fMRIPrep options and show warnings for invalid combinations."""
+        warnings = []
+        
+        # Check that at least one output space is selected
+        if not self.check_space_mni.get() and not self.check_space_t1w.get():
+            warnings.append("⚠ Select at least one output space")
+        
+        # ICA-AROMA requires MNI output
+        if self.check_aroma.get() and not self.check_space_mni.get():
+            warnings.append("⚠ ICA-AROMA requires MNI output space")
+            # Auto-enable MNI when AROMA is selected
+            self.check_space_mni.select()
+        
+        if warnings:
+            self.label_fmriprep_warning.configure(text=" | ".join(warnings))
+        else:
+            self.label_fmriprep_warning.configure(text="")
+        
+        return len(warnings) == 0
+
+    def _get_fmriprep_options(self):
+        """Get fMRIPrep options as command line arguments."""
+        options = []
+        
+        # Output spaces
+        spaces = []
+        if self.check_space_mni.get():
+            spaces.append("MNI152NLin2009cAsym")
+        if self.check_space_t1w.get():
+            spaces.append("T1w")
+        if spaces:
+            options.extend(["--output-spaces", " ".join(spaces)])
+        
+        # FreeSurfer
+        if not self.check_freesurfer.get():
+            options.append("--fs-no-reconall")
+        
+        # Slice timing
+        if not self.check_slice_timing.get():
+            options.extend(["--ignore", "slicetiming"])
+        
+        # SyN SDC
+        if self.check_syn_sdc.get():
+            options.append("--use-syn-sdc")
+        
+        # ICA-AROMA
+        if self.check_aroma.get():
+            options.append("--use-aroma")
+        
+        return options
+
     def _validate_paths(self):
         """Validate input and output paths before running."""
         input_dir = self.entry_input.get().strip()
@@ -329,6 +509,14 @@ class App(ctk.CTk):
 
     def run_full_pipeline(self):
         """Run both BIDS conversion and fMRIPrep."""
+        # Validate fMRIPrep options
+        if not self._validate_fmriprep_options():
+            self.console.log("⚠️  Please fix fMRIPrep options before running.", "warning")
+            # Expand options panel if collapsed
+            if not self.fmriprep_options_visible:
+                self._toggle_fmriprep_options()
+            return
+        
         self._run_bids = True
         self._run_fmriprep = True
         self._start_pipeline_internal("BIDS Conversion + fMRIPrep")
@@ -392,6 +580,12 @@ class App(ctk.CTk):
             cmd.append("--skip-fmriprep")
         if self.check_anonymize.get():
             cmd.append("--anonymize")
+        
+        # Add fMRIPrep options if running fMRIPrep
+        if self._run_fmriprep:
+            fmriprep_opts = self._get_fmriprep_options()
+            if fmriprep_opts:
+                cmd.extend(["--fmriprep-args", ",".join(fmriprep_opts)])
 
         try:
             # Platform-specific subprocess options for proper termination
