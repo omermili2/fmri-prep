@@ -4,10 +4,8 @@ Pytest configuration and shared fixtures.
 """
 
 import pytest
-import tempfile
-import shutil
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Add src to path for all tests
 sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
@@ -52,19 +50,6 @@ def sample_dicom_structure(tmp_path):
 def sample_bids_structure(tmp_path):
     """
     Create a sample BIDS directory structure for testing.
-    
-    Structure:
-        tmp_path/
-        ├── dataset_description.json
-        ├── sub-001/
-        │   └── ses-01/
-        │       ├── anat/
-        │       │   └── sub-001_ses-01_T1w.nii.gz
-        │       └── func/
-        │           └── sub-001_ses-01_task-rest_bold.nii.gz
-        └── sub-002/
-            └── ses-01/
-                └── anat/
     """
     import json
     
@@ -110,18 +95,6 @@ def mock_config(tmp_path):
                 "criteria": {
                     "SeriesDescription": "*T1*"
                 }
-            },
-            {
-                "id": "func_rest",
-                "datatype": "func",
-                "suffix": "bold",
-                "custom_entities": "task-rest",
-                "criteria": {
-                    "SeriesDescription": "*rest*"
-                },
-                "sidecarChanges": {
-                    "TaskName": "rest"
-                }
             }
         ]
     }
@@ -130,16 +103,3 @@ def mock_config(tmp_path):
     config_path.write_text(json.dumps(config, indent=2))
     
     return config_path
-
-
-@pytest.fixture
-def mock_freesurfer_license(tmp_path):
-    """Create a mock FreeSurfer license file."""
-    license_content = """test@example.com
-12345
-*ABCDEFGH
-"""
-    license_path = tmp_path / ".freesurfer_license.txt"
-    license_path.write_text(license_content)
-    return license_path
-

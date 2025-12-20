@@ -4,15 +4,11 @@ Tests for fMRIPrep options parsing and validation.
 """
 
 import pytest
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-# Add src to path for runtime imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-# Import at module level (resolved at runtime via sys.path)
-import run_fmriprep  # type: ignore[import-not-found]
+# Import from new modular structure
+from fmriprep.runner import to_docker_path, find_freesurfer_license, check_docker
 
 
 class TestFmriprepPathConversion:
@@ -21,14 +17,14 @@ class TestFmriprepPathConversion:
     def test_unix_path_unchanged(self):
         """Test that Unix paths are returned unchanged."""
         with patch('sys.platform', 'darwin'):
-            result = run_fmriprep.to_docker_path("/Users/test/data")
+            result = to_docker_path("/Users/test/data")
             assert result == "/Users/test/data"
     
     def test_windows_path_conversion(self):
         """Test that Windows paths are converted correctly."""
         with patch('sys.platform', 'win32'):
             # Simulate Windows path
-            result = run_fmriprep.to_docker_path("C:\\Users\\test\\data")
+            result = to_docker_path("C:\\Users\\test\\data")
             # Note: This test assumes the function handles Windows paths
             assert "/" in result or "\\" not in result
 
@@ -36,40 +32,36 @@ class TestFmriprepPathConversion:
 class TestFmriprepLicenseDetection:
     """Tests for FreeSurfer license file detection."""
     
-    def test_finds_license_in_project_root(self, tmp_path):
-        """Test finding license in project root."""
-        # Create a mock project structure
-        license_file = tmp_path / ".freesurfer_license.txt"
-        license_file.write_text("license content")
-        
-        with patch('run_fmriprep.Path') as mock_path:
-            mock_path.return_value.parent.parent.resolve.return_value = tmp_path
-            mock_path.cwd.return_value = tmp_path
-            # This test would need more mocking to work properly
-            # For now, just verify the function exists
-            assert callable(run_fmriprep.find_license)
+    def test_function_exists(self):
+        """Test that license detection function exists."""
+        assert callable(find_freesurfer_license)
     
-    def test_returns_none_when_not_found(self):
-        """Test that None is returned when license not found."""
-        # When no license exists in expected locations
-        # The function should handle this gracefully
-        assert callable(run_fmriprep.find_license)
+    def test_returns_path_or_none(self):
+        """Test that function returns Path or None."""
+        result = find_freesurfer_license()
+        assert result is None or isinstance(result, Path)
+
+
+class TestDockerCheck:
+    """Tests for Docker availability checking."""
+    
+    def test_check_docker_returns_tuple(self):
+        """Test that check_docker returns a tuple."""
+        result = check_docker()
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], bool)
+        assert result[1] is None or isinstance(result[1], str)
 
 
 class TestFmriprepOptionsBuilding:
-    """Tests for building fMRIPrep Docker command options."""
+    """Tests for building fMRIPrep options."""
     
-    def test_default_options_include_fs_no_reconall(self):
-        """Test that --fs-no-reconall is included by default."""
-        # This would test the actual command building
-        # For now, verify the module imports correctly
-        assert hasattr(run_fmriprep, 'main')
-    
-    def test_default_memory_setting(self):
-        """Test that default memory is set to 16GB."""
-        # The default in run_fmriprep.py should be 16000
-        # Verify module loads without error
-        assert run_fmriprep is not None
+    def test_module_has_main(self):
+        """Test that module has main function."""
+        from fmriprep import runner
+        assert hasattr(runner, 'main')
+        assert hasattr(runner, 'run_fmriprep')
 
 
 class TestExtraArgsProcessing:
@@ -103,4 +95,3 @@ class TestExtraArgsProcessing:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

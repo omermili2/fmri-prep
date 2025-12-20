@@ -1,2 +1,1 @@
-# Test package for fMRI Preprocessing Assistant
-
+# Tests for fMRI Preprocessing Assistant

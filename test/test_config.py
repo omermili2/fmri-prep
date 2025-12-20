@@ -44,7 +44,7 @@ class TestDcm2bidsConfig:
         
         for desc in config["descriptions"]:
             for field in required_fields:
-                assert field in desc, f"Missing field '{field}' in description: {desc.get('id', 'unknown')}"
+                assert field in desc, f"Missing '{field}' in: {desc.get('id', 'unknown')}"
     
     def test_datatypes_are_valid(self, config_path):
         """Test that datatypes are valid BIDS datatypes."""
@@ -83,7 +83,6 @@ class TestDcm2bidsConfig:
         
         for desc in config["descriptions"]:
             criteria = desc.get("criteria", {})
-            # At least one matching criterion should be present
             assert len(criteria) > 0, f"Empty criteria in {desc['id']}"
 
 
@@ -94,7 +93,6 @@ class TestConfigPatternMatching:
         """Test that wildcard patterns work correctly."""
         import fnmatch
         
-        # Test T1 pattern
         pattern = "*T1*"
         assert fnmatch.fnmatch("T1_MPRAGE_SAG", pattern)
         assert fnmatch.fnmatch("anat_ses-01_T1w", pattern)
@@ -111,4 +109,3 @@ class TestConfigPatternMatching:
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

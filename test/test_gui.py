@@ -4,12 +4,7 @@ Tests for GUI components and fMRIPrep option validation.
 """
 
 import pytest
-import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 
 
 class TestFmriprepOptionsValidation:
@@ -17,7 +12,6 @@ class TestFmriprepOptionsValidation:
     
     def test_at_least_one_output_space_required(self):
         """Test that at least one output space must be selected."""
-        # When both MNI and T1w are unchecked, validation should fail
         options = {
             'mni_output': False,
             't1w_output': False,
@@ -111,8 +105,6 @@ class TestGetFmriprepOptions:
         options_with_fs = {'fs_reconall': True}
         options_without_fs = {'fs_reconall': False}
         
-        # With FS: should NOT include --fs-no-reconall
-        # Without FS: should include --fs-no-reconall
         assert options_with_fs['fs_reconall'] == True
         assert options_without_fs['fs_reconall'] == False
 
@@ -121,63 +113,68 @@ class TestGuiImports:
     """Test that GUI module imports correctly."""
     
     def test_gui_app_imports(self):
-        """Test that gui_app module can be imported."""
+        """Test that gui.app module can be imported."""
         try:
-            import gui_app
-            assert hasattr(gui_app, 'App')
+            from gui import app
+            assert hasattr(app, 'App')
         except ImportError as e:
             # GUI import might fail without display, that's ok
             if 'display' not in str(e).lower() and 'tk' not in str(e).lower():
                 raise
     
-    def test_run_pipeline_imports(self):
-        """Test that run_pipeline module can be imported."""
-        import run_pipeline
-        assert hasattr(run_pipeline, 'main')
-        assert hasattr(run_pipeline, 'find_sessions')
-        assert hasattr(run_pipeline, 'find_subject_folders')
+    def test_pipeline_imports(self):
+        """Test that pipeline module can be imported."""
+        import pipeline
+        assert hasattr(pipeline, 'main')
     
-    def test_run_fmriprep_imports(self):
-        """Test that run_fmriprep module can be imported."""
-        import run_fmriprep
-        assert hasattr(run_fmriprep, 'main')
+    def test_core_imports(self):
+        """Test that core modules can be imported."""
+        from core import discovery, progress, utils
+        assert hasattr(discovery, 'find_sessions')
+        assert hasattr(progress, 'ProgressTracker')
+        assert hasattr(utils, 'safe_print')
+    
+    def test_bids_imports(self):
+        """Test that BIDS modules can be imported."""
+        from bids import converter, analyzer
+        assert hasattr(converter, 'run_bids_conversion')
+        assert hasattr(analyzer, 'count_output_files')
+    
+    def test_reporting_imports(self):
+        """Test that reporting modules can be imported."""
+        from reporting import report
+        assert hasattr(report, 'ConversionReport')
 
 
 class TestOptionDependencies:
     """Test fMRIPrep option dependencies."""
     
     def test_stc_is_independent(self):
-        """Test that slice timing correction is independent of other options."""
-        # STC can be enabled/disabled regardless of other options
+        """Test that slice timing correction is independent."""
         options = {
             'stc': True,
             'mni_output': True,
             'fs_reconall': False
         }
-        # No validation error expected
         assert options['stc'] == True
     
     def test_fieldmapless_sdc_is_independent(self):
-        """Test that fieldmap-less SDC is independent of other options."""
-        # SyN SDC can be enabled regardless of other options
+        """Test that fieldmap-less SDC is independent."""
         options = {
             'fieldmapless_sdc': True,
             'mni_output': True
         }
-        # No validation error expected
         assert options['fieldmapless_sdc'] == True
     
     def test_freesurfer_is_independent(self):
-        """Test that FreeSurfer reconall is independent of other options."""
+        """Test that FreeSurfer reconall is independent."""
         options = {
             'fs_reconall': True,
             'mni_output': False,
             't1w_output': True
         }
-        # No validation error expected - FS can work with T1w output
         assert options['fs_reconall'] == True
 
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-

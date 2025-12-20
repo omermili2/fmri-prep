@@ -566,7 +566,8 @@ class App(ctk.CTk):
         self.btn_browse_output.configure(state=state)
 
     def run_subprocess(self, input_dir, output_dir):
-        script_path = Path(__file__).parent / "run_pipeline.py"
+        # Use the new modular pipeline
+        script_path = Path(__file__).parent.parent / "pipeline.py"
         
         cmd = [
             sys.executable, str(script_path), 

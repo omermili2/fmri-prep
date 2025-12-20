@@ -1,18 +1,13 @@
 #!/usr/bin/env python3
 """
-Tests for the pipeline module (run_pipeline.py)
+Tests for the pipeline module (discovery functions)
 """
 
 import pytest
-import tempfile
-import os
 from pathlib import Path
-import sys
 
-# Add src to path
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
-
-from run_pipeline import find_subject_folders, find_sessions
+# Import from new modular structure
+from core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
 
 
 class TestFindSubjectFolders:
@@ -160,6 +155,28 @@ class TestSessionIdNormalization:
         assert sessions[0][0] == "12"
 
 
+class TestSanitizeId:
+    """Tests for ID sanitization."""
+    
+    def test_removes_sub_prefix(self):
+        """Test that sub- prefix is removed."""
+        assert sanitize_id("sub-001") == "001"
+        assert sanitize_id("sub001") == "001"
+    
+    def test_removes_subject_prefix(self):
+        """Test that subject- prefix is removed."""
+        assert sanitize_id("subject-001") == "001"
+        assert sanitize_id("subject001") == "001"
+    
+    def test_keeps_alphanumeric(self):
+        """Test that non-alphanumeric characters are removed."""
+        assert sanitize_id("sub_001") == "001"
+        assert sanitize_id("sub-001-extra") == "001extra"
+    
+    def test_returns_none_for_empty(self):
+        """Test that empty result returns None."""
+        assert sanitize_id("---") is None
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-
