@@ -7,6 +7,7 @@ during BIDS conversion, what succeeded, what failed, and next steps.
 
 import threading
 from datetime import datetime
+from typing import Optional
 
 
 class ConversionReport:
@@ -30,8 +31,8 @@ class ConversionReport:
     
     def __init__(self):
         self._lock = threading.Lock()
-        self.start_time = datetime.now()
-        self.end_time = None
+        self.start_time: datetime = datetime.now()
+        self.end_time: Optional[datetime] = None
         
         # Results tracking
         self.successful = []   # List of {sub_id, ses_id, duration, details, output_files}
@@ -40,12 +41,12 @@ class ConversionReport:
         self.skipped = []      # List of skipped items with reasons
         
         # Configuration
-        self.total_tasks = 0
-        self.config_file = None
-        self.input_folder = None
-        self.output_folder = None
-        self.skip_bids = False
-        self.skip_fmriprep = False
+        self.total_tasks: int = 0
+        self.config_file: Optional[str] = None
+        self.input_folder: Optional[str] = None
+        self.output_folder: Optional[str] = None
+        self.skip_bids: bool = False
+        self.skip_fmriprep: bool = False
         
         # Statistics
         self.output_stats = {}   # Scan type counts
@@ -168,6 +169,7 @@ class ConversionReport:
             Multi-line string with the complete report
         """
         self.finalize()
+        assert self.end_time is not None  # Set by finalize()
         total_duration = (self.end_time - self.start_time).total_seconds()
         
         lines = []
