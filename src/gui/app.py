@@ -52,6 +52,10 @@ class ConsoleLog(ctk.CTkTextbox):
 
 class App(ctk.CTk):
     def __init__(self):
+        # Force dark mode before initializing
+        ctk.set_appearance_mode("Dark")
+        ctk.set_default_color_theme("blue")
+        
         super().__init__()
 
         # Window Setup
