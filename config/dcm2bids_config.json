@@ -104,6 +104,30 @@
       "criteria": {
         "SeriesDescription": "*FieldMap*"
       }
+    },
+    {
+      "id": "cmrr_mbepi2_bold(mb4ipat2)_memory",
+      "datatype": "anat",
+      "suffix": "T2w",
+      "criteria": {
+        "SeriesDescription": "cmrr_mbepi2_bold(MB4iPAT2)-Memory"
+      }
+    },
+    {
+      "id": "cmrr_mbepi2_bold(mb4ipat2)_rest",
+      "datatype": "anat",
+      "suffix": "T2w",
+      "criteria": {
+        "SeriesDescription": "cmrr_mbepi2_bold(MB4iPAT2)-rest"
+      }
+    },
+    {
+      "id": "t1_sag_3d_mprage",
+      "datatype": "anat",
+      "suffix": "T1w",
+      "criteria": {
+        "SeriesDescription": "t1_Sag_3D_MPRAGE"
+      }
     }
   ]
 }
