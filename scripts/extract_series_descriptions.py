@@ -6,9 +6,8 @@ This script scans a folder containing DICOM files, extracts all unique
 SeriesDescription values, and automatically updates the dcm2bids_config.json.
 
 Usage:
-    python extract_series_descriptions.py /path/to/dicom/folder
-    python extract_series_descriptions.py /path/to/dicom/folder --config /path/to/config.json
-    python extract_series_descriptions.py /path/to/dicom/folder --dry-run
+    python scripts/extract_series_descriptions.py
+    (A folder picker dialog will open)
 
 Requirements:
     pip install pydicom
@@ -17,42 +16,36 @@ Requirements:
 import os
 import sys
 import json
-import argparse
 import shutil
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime
 from typing import Optional
+from tkinter import Tk, filedialog
 
 try:
     import pydicom
-    from pydicom.errors import InvalidDicomError
 except ImportError:
     print("Error: pydicom is required. Install it with:")
     print("  pip install pydicom")
     sys.exit(1)
 
 
-def extract_series_info(filepath: Path) -> Optional[dict]:
-    """Extract relevant series information from a DICOM file."""
-    try:
-        ds = pydicom.dcmread(str(filepath), stop_before_pixels=True, force=True)
-        
-        info = {
-            "SeriesDescription": getattr(ds, "SeriesDescription", None),
-            "ProtocolName": getattr(ds, "ProtocolName", ""),
-            "SeriesNumber": getattr(ds, "SeriesNumber", ""),
-            "Modality": getattr(ds, "Modality", ""),
-            "ImageType": list(getattr(ds, "ImageType", [])) if hasattr(ds, "ImageType") else [],
-        }
-        
-        # Skip if no SeriesDescription
-        if info["SeriesDescription"] is None:
-            return None
-            
-        return info
-    except Exception:
-        return None
+def select_folder() -> Optional[Path]:
+    """Open a folder picker dialog and return the selected path."""
+    root = Tk()
+    root.withdraw()  # Hide the main tkinter window
+    root.attributes('-topmost', True)  # Bring dialog to front
+    
+    folder_path = filedialog.askdirectory(
+        title="Select folder containing DICOM files"
+    )
+    
+    root.destroy()
+    
+    if folder_path:
+        return Path(folder_path)
+    return None
 
 
 class SeriesInfo:
@@ -65,13 +58,29 @@ class SeriesInfo:
         self.example_path: str = ""
 
 
+def extract_series_info(filepath: Path) -> Optional[dict]:
+    """Extract relevant series information from a DICOM file."""
+    try:
+        ds = pydicom.dcmread(str(filepath), stop_before_pixels=True, force=True)
+        
+        info = {
+            "SeriesDescription": getattr(ds, "SeriesDescription", None),
+            "ProtocolName": getattr(ds, "ProtocolName", ""),
+            "SeriesNumber": getattr(ds, "SeriesNumber", ""),
+            "Modality": getattr(ds, "Modality", ""),
+        }
+        
+        if info["SeriesDescription"] is None:
+            return None
+            
+        return info
+    except Exception:
+        return None
+
+
 def scan_folder(folder_path: Path) -> dict:
-    """
-    Scan a folder for DICOM files and extract unique SeriesDescriptions.
-    """
+    """Scan a folder for DICOM files and extract unique SeriesDescriptions."""
     series_info: dict[str, SeriesInfo] = defaultdict(SeriesInfo)
-    
-    total_files = 0
     dicom_files = 0
     
     print(f"\nScanning: {folder_path}")
@@ -80,7 +89,6 @@ def scan_folder(folder_path: Path) -> dict:
     for root, dirs, files in os.walk(folder_path):
         for filename in files:
             filepath = Path(root) / filename
-            total_files += 1
             
             # Skip non-DICOM files
             if filepath.suffix.lower() in ['.json', '.txt', '.nii', '.gz', '.md', '.py', '.log', '.bak']:
@@ -108,18 +116,17 @@ def scan_folder(folder_path: Path) -> dict:
 
 
 def categorize_series(series_desc: str) -> tuple:
-    """
-    Categorize a series and return (datatype, suffix, task_name, should_skip).
-    """
+    """Categorize a series and return (datatype, suffix, task_name, should_skip)."""
     desc_lower = series_desc.lower()
     
     # Skip these
-    if any(x in desc_lower for x in ['localizer', 'scout', 'survey', 'loc', 'cal', 'prescan', 'asset', 'coil', 'phoenix', 'smartbrain']):
+    if any(x in desc_lower for x in ['localizer', 'scout', 'survey', 'loc', 'cal', 'prescan', 
+                                       'asset', 'coil', 'phoenix', 'smartbrain']):
         return (None, None, None, True)
     
     # Anatomical T1w
     if any(x in desc_lower for x in ['t1', 'mprage', 'spgr', 'bravo', 'fspgr', 'ir_fspgr']):
-        if 't2' not in desc_lower:  # Make sure it's not T2
+        if 't2' not in desc_lower:
             return ("anat", "T1w", None, False)
     
     # Anatomical T2w/FLAIR
@@ -130,12 +137,9 @@ def categorize_series(series_desc: str) -> tuple:
     
     # Functional BOLD
     if any(x in desc_lower for x in ['fmri', 'bold', 'func']) or ('epi' in desc_lower and 'se-epi' not in desc_lower):
-        # Extract task name
         task_name = series_desc
-        # Remove common prefixes
         for prefix in ['fMRI_', 'fmri_', 'FMRI_', 'bold_', 'BOLD_', 'func_', 'FUNC_']:
             task_name = task_name.replace(prefix, '')
-        # Clean up
         task_name = task_name.lower().replace(' ', '').replace('-', '').replace('_', '')
         if not task_name or task_name in ['bold', 'epi', 'fmri']:
             task_name = 'task'
@@ -145,19 +149,14 @@ def categorize_series(series_desc: str) -> tuple:
     if any(x in desc_lower for x in ['dwi', 'dti', 'diffusion', 'hardi']):
         return ("dwi", "dwi", None, False)
     
-    # Field maps - SE-EPI (spin echo EPI for distortion correction)
+    # Field maps
     if 'se-epi' in desc_lower or 'seepi' in desc_lower or 'spin_echo' in desc_lower:
         return ("fmap", "epi", None, False)
-    
-    # Field maps - phase/magnitude
     if any(x in desc_lower for x in ['fieldmap', 'field_map', 'b0map', 'phasediff', 'phase_diff']):
         return ("fmap", "phasediff", None, False)
-    
-    # EPI with PA/AP might be field maps
     if ('_pa' in desc_lower or '_ap' in desc_lower) and 'epi' in desc_lower:
         return ("fmap", "epi", None, False)
     
-    # Unknown - skip by default
     return (None, None, None, True)
 
 
@@ -168,7 +167,6 @@ def create_config_entry(series_desc: str) -> Optional[dict]:
     if should_skip or datatype is None:
         return None
     
-    # Create base entry
     entry = {
         "id": series_desc.lower().replace(" ", "_").replace("-", "_"),
         "datatype": datatype,
@@ -178,12 +176,9 @@ def create_config_entry(series_desc: str) -> Optional[dict]:
         }
     }
     
-    # Add task info for functional scans
     if datatype == "func" and task_name:
         entry["custom_entities"] = f"task-{task_name}"
-        entry["sidecarChanges"] = {
-            "TaskName": task_name
-        }
+        entry["sidecarChanges"] = {"TaskName": task_name}
     
     return entry
 
@@ -206,42 +201,22 @@ def get_existing_series_descriptions(config: dict) -> set:
     for desc in config.get("descriptions", []):
         criteria = desc.get("criteria", {})
         series_desc = criteria.get("SeriesDescription", "")
-        # Handle wildcard patterns - extract the core pattern
         clean_desc = series_desc.strip("*")
         existing.add(clean_desc)
-        existing.add(series_desc)  # Also add the original pattern
+        existing.add(series_desc)
     return existing
 
 
-def backup_config(config_path: Path) -> Optional[Path]:
-    """Create a backup of the config file."""
-    if not config_path.exists():
-        return None
-    
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    backup_path = config_path.with_suffix(f".backup_{timestamp}.json")
-    shutil.copy(config_path, backup_path)
-    return backup_path
-
-
 def update_config(config: dict, series_info: dict) -> tuple:
-    """
-    Update config with new SeriesDescriptions.
-    Returns (updated_config, new_entries, skipped_entries).
-    """
+    """Update config with new SeriesDescriptions."""
     existing = get_existing_series_descriptions(config)
     new_entries = []
     skipped_entries = []
     
     for series_desc in sorted(series_info.keys()):
-        # Check if already exists (exact or as part of wildcard)
         already_exists = False
         for existing_pattern in existing:
-            if series_desc == existing_pattern:
-                already_exists = True
-                break
-            # Check if existing wildcard matches this series
-            if existing_pattern and existing_pattern in series_desc:
+            if series_desc == existing_pattern or (existing_pattern and existing_pattern in series_desc):
                 already_exists = True
                 break
         
@@ -249,7 +224,6 @@ def update_config(config: dict, series_info: dict) -> tuple:
             skipped_entries.append((series_desc, "already in config"))
             continue
         
-        # Create new entry
         entry = create_config_entry(series_desc)
         
         if entry is None:
@@ -266,62 +240,24 @@ def update_config(config: dict, series_info: dict) -> tuple:
     return config, new_entries, skipped_entries
 
 
-def save_config(config: dict, config_path: Path):
-    """Save config to file with nice formatting."""
-    with open(config_path, 'w') as f:
-        json.dump(config, f, indent=2)
-
-
 def main():
-    parser = argparse.ArgumentParser(
-        description="Extract SeriesDescriptions from DICOM files and update dcm2bids config."
-    )
-    parser.add_argument("dicom_folder", help="Path to folder containing DICOM files")
-    parser.add_argument(
-        "--config", "-c",
-        default=None,
-        help="Path to dcm2bids_config.json (default: auto-detect in project)"
-    )
-    parser.add_argument(
-        "--dry-run", "-n",
-        action="store_true",
-        help="Show what would be done without making changes"
-    )
-    parser.add_argument(
-        "--no-backup",
-        action="store_true",
-        help="Don't create backup of config file"
-    )
+    # Get folder from command line or open picker
+    if len(sys.argv) == 2:
+        dicom_folder = Path(sys.argv[1])
+    else:
+        print("Select the folder containing DICOM files...")
+        dicom_folder = select_folder()
+        if dicom_folder is None:
+            print("No folder selected. Exiting.")
+            sys.exit(0)
     
-    args = parser.parse_args()
-    
-    # Validate DICOM folder
-    dicom_folder = Path(args.dicom_folder)
-    if not dicom_folder.exists():
+    if not dicom_folder.exists() or not dicom_folder.is_dir():
         print(f"Error: Folder not found: {dicom_folder}")
         sys.exit(1)
     
     # Find config file
-    if args.config:
-        config_path = Path(args.config)
-    else:
-        # Try to find config in common locations
-        script_dir = Path(__file__).parent
-        possible_paths = [
-            script_dir.parent / "config" / "dcm2bids_config.json",
-            script_dir / "dcm2bids_config.json",
-            Path.cwd() / "config" / "dcm2bids_config.json",
-            Path.cwd() / "dcm2bids_config.json",
-        ]
-        config_path = None
-        for path in possible_paths:
-            if path.exists():
-                config_path = path
-                break
-        
-        if config_path is None:
-            config_path = script_dir.parent / "config" / "dcm2bids_config.json"
-            print(f"Config file not found, will create: {config_path}")
+    script_dir = Path(__file__).parent
+    config_path = script_dir.parent / "config" / "dcm2bids_config.json"
     
     print(f"Config file: {config_path}")
     
@@ -334,7 +270,7 @@ def main():
     
     # Print found series
     print("\n" + "=" * 80)
-    print("SERIES DESCRIPTIONS FOUND IN DICOM FILES")
+    print("SERIES DESCRIPTIONS FOUND")
     print("=" * 80)
     print(f"\n{'SeriesDescription':<45} {'Category':<20} {'Files':>10}")
     print("-" * 80)
@@ -343,67 +279,53 @@ def main():
         info = series_info[series_desc]
         datatype, suffix, task, skip = categorize_series(series_desc)
         if skip:
-            category = "SKIP (localizer/cal)"
+            category = "SKIP"
         elif datatype:
             category = f"{datatype}/{suffix}"
             if task:
-                category += f" (task-{task})"
+                category += f" ({task})"
         else:
             category = "unknown"
         print(f"{series_desc:<45} {category:<20} {info.count:>10}")
     
-    # Load existing config
+    # Load and update config
     config = load_config(config_path)
-    
-    # Update config
     updated_config, new_entries, skipped_entries = update_config(config, series_info)
     
-    # Print results
+    # Print summary
     print("\n" + "=" * 80)
-    print("CONFIG UPDATE SUMMARY")
+    print("CONFIG UPDATE")
     print("=" * 80)
     
     if new_entries:
-        print(f"\n✅ NEW ENTRIES TO ADD ({len(new_entries)}):")
+        print(f"\n+ ADDING {len(new_entries)} new entries:")
         for entry in new_entries:
-            series_desc = entry["criteria"]["SeriesDescription"]
-            print(f"   + {entry['datatype']}/{entry['suffix']}: {series_desc}")
-    else:
-        print("\n✅ No new entries needed - config is already complete!")
+            print(f"   {entry['datatype']}/{entry['suffix']}: {entry['criteria']['SeriesDescription']}")
     
     if skipped_entries:
-        print(f"\n⏭️  SKIPPED ({len(skipped_entries)}):")
+        print(f"\n- SKIPPED {len(skipped_entries)} entries:")
         for series_desc, reason in skipped_entries:
-            print(f"   - {series_desc}: {reason}")
+            print(f"   {series_desc}: {reason}")
     
-    # Apply changes
-    if args.dry_run:
-        print("\n" + "=" * 80)
-        print("DRY RUN - No changes made")
-        print("=" * 80)
-        if new_entries:
-            print("\nNew entries that WOULD be added:\n")
-            print(json.dumps(new_entries, indent=2))
+    # Save config
+    if new_entries:
+        # Backup
+        if config_path.exists():
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            backup_path = config_path.with_suffix(f".backup_{timestamp}.json")
+            shutil.copy(config_path, backup_path)
+            print(f"\nBackup: {backup_path}")
+        
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(config_path, 'w') as f:
+            json.dump(updated_config, f, indent=2)
+        
+        print(f"Updated: {config_path}")
+        print(f"Added {len(new_entries)} new entries")
     else:
-        if new_entries:
-            # Create backup
-            if not args.no_backup and config_path.exists():
-                backup_path = backup_config(config_path)
-                print(f"\n📁 Backup created: {backup_path}")
-            
-            # Ensure parent directory exists
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            
-            # Save updated config
-            save_config(updated_config, config_path)
-            print(f"\n✅ Config updated: {config_path}")
-            print(f"   Added {len(new_entries)} new entries")
-        else:
-            print("\n✅ Config file unchanged - no updates needed")
+        print("\nNo changes needed - config is complete!")
     
-    print("\n" + "=" * 80)
-    print("DONE")
-    print("=" * 80)
+    print("\nDone!")
 
 
 if __name__ == "__main__":
