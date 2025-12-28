@@ -2,9 +2,6 @@
   "dcm2niixOptions": "-z y -b y -ba n -f %p_%s",
   "descriptions": [
     {
-      "_comment": "=== ANATOMICAL T1-WEIGHTED ==="
-    },
-    {
       "id": "anat_t1w_mprage",
       "datatype": "anat",
       "suffix": "T1w",
@@ -35,9 +32,6 @@
       "criteria": {
         "SeriesDescription": "*bravo*"
       }
-    },
-    {
-      "_comment": "=== ANATOMICAL T2-WEIGHTED ==="
     },
     {
       "id": "anat_t2w_tse",
@@ -72,9 +66,6 @@
       }
     },
     {
-      "_comment": "=== ANATOMICAL FLAIR ==="
-    },
-    {
       "id": "anat_flair",
       "datatype": "anat",
       "suffix": "FLAIR",
@@ -89,9 +80,6 @@
       "criteria": {
         "SeriesDescription": "*dark*fluid*"
       }
-    },
-    {
-      "_comment": "=== ANATOMICAL T2-STAR (for iron/blood detection) ==="
     },
     {
       "id": "anat_t2star",
@@ -110,18 +98,12 @@
       }
     },
     {
-      "_comment": "=== PROTON DENSITY ==="
-    },
-    {
       "id": "anat_pd",
       "datatype": "anat",
       "suffix": "PD",
       "criteria": {
         "SeriesDescription": "*pd*"
       }
-    },
-    {
-      "_comment": "=== YOUR LAB'S FUNCTIONAL TASKS ==="
     },
     {
       "id": "func_movie",
@@ -196,9 +178,6 @@
       }
     },
     {
-      "_comment": "=== SIEMENS CMRR MULTIBAND SEQUENCES ==="
-    },
-    {
       "id": "func_memory_cmrr",
       "datatype": "func",
       "suffix": "bold",
@@ -221,9 +200,6 @@
       "sidecarChanges": {
         "TaskName": "rest"
       }
-    },
-    {
-      "_comment": "=== GENERIC FUNCTIONAL PATTERNS ==="
     },
     {
       "id": "func_bold_generic",
@@ -250,9 +226,6 @@
       }
     },
     {
-      "_comment": "=== FIELDMAPS - SPIN ECHO EPI (for distortion correction) ==="
-    },
-    {
       "id": "fmap_epi_ap",
       "datatype": "fmap",
       "suffix": "epi",
@@ -261,9 +234,7 @@
         "SeriesDescription": "*AP*",
         "PhaseEncodingDirection": "j-"
       },
-      "intendedFor": [
-        "func"
-      ]
+      "intendedFor": ["func"]
     },
     {
       "id": "fmap_epi_pa",
@@ -274,9 +245,7 @@
         "SeriesDescription": "*PA*",
         "PhaseEncodingDirection": "j"
       },
-      "intendedFor": [
-        "func"
-      ]
+      "intendedFor": ["func"]
     },
     {
       "id": "fmap_seepi",
@@ -285,9 +254,7 @@
       "criteria": {
         "SeriesDescription": "*se_epi*"
       },
-      "intendedFor": [
-        "func"
-      ]
+      "intendedFor": ["func"]
     },
     {
       "id": "fmap_seepi_alt",
@@ -296,12 +263,7 @@
       "criteria": {
         "SeriesDescription": "*SpinEcho*"
       },
-      "intendedFor": [
-        "func"
-      ]
-    },
-    {
-      "_comment": "=== FIELDMAPS - GRE PHASE DIFFERENCE ==="
+      "intendedFor": ["func"]
     },
     {
       "id": "fmap_phasediff",
@@ -310,9 +272,7 @@
       "criteria": {
         "SeriesDescription": "*fieldmap*"
       },
-      "intendedFor": [
-        "func"
-      ]
+      "intendedFor": ["func"]
     },
     {
       "id": "fmap_gre_field",
@@ -321,12 +281,7 @@
       "criteria": {
         "SeriesDescription": "*gre_field*"
       },
-      "intendedFor": [
-        "func"
-      ]
-    },
-    {
-      "_comment": "=== DIFFUSION WEIGHTED IMAGING ==="
+      "intendedFor": ["func"]
     },
     {
       "id": "dwi_main",
@@ -369,9 +324,6 @@
       }
     },
     {
-      "_comment": "=== ARTERIAL SPIN LABELING (perfusion) ==="
-    },
-    {
       "id": "perf_asl",
       "datatype": "perf",
       "suffix": "asl",
@@ -396,18 +348,12 @@
       }
     },
     {
-      "_comment": "=== SUSCEPTIBILITY WEIGHTED IMAGING ==="
-    },
-    {
       "id": "anat_swi",
       "datatype": "anat",
       "suffix": "SWI",
       "criteria": {
         "SeriesDescription": "*swi*"
       }
-    },
-    {
-      "_comment": "=== MR ANGIOGRAPHY ==="
     },
     {
       "id": "anat_angio",
