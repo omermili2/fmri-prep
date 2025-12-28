@@ -119,29 +119,52 @@ def categorize_series(series_desc: str) -> tuple:
     """Categorize a series and return (datatype, suffix, task_name, should_skip)."""
     desc_lower = series_desc.lower()
     
-    # Skip these
-    if any(x in desc_lower for x in ['localizer', 'scout', 'survey', 'loc', 'cal', 'prescan', 
-                                       'asset', 'coil', 'phoenix', 'smartbrain']):
+    # Add spaces around the description for word boundary matching
+    # This helps match "_t1_" or "t1w" but not "mbepi2"
+    desc_padded = f" {desc_lower} "
+    
+    # Skip these (localizers, scouts, calibration)
+    skip_patterns = ['localizer', 'scout', 'survey', 'prescan', 'asset', 'coil', 
+                     'phoenix', 'smartbrain', 'aahead', '_cal_', '_cal ', ' cal_']
+    if any(x in desc_lower for x in skip_patterns):
         return (None, None, None, True)
     
-    # Anatomical T1w
-    if any(x in desc_lower for x in ['t1', 'mprage', 'spgr', 'bravo', 'fspgr', 'ir_fspgr']):
-        if 't2' not in desc_lower:
-            return ("anat", "T1w", None, False)
+    # CHECK FUNCTIONAL FIRST (before anatomical) - "bold" or "fmri" are strong indicators
+    if 'bold' in desc_lower or 'fmri' in desc_lower:
+        # Extract task name from series description
+        task_name = series_desc
+        # Remove common prefixes and technical terms (including numbered variants)
+        remove_patterns = ['cmrr_', 'mbepi', 'bold', 'fmri_', 'fmri', 'func_', 'func',
+                           '(mb4ipat2)', '(mb2ipat2)', 'mb4ipat2', 'mb2ipat2', '-', '_']
+        task_name_lower = task_name.lower()
+        for pattern in remove_patterns:
+            task_name_lower = task_name_lower.replace(pattern, '')
+        # Also remove any remaining numbers at the start (like "2_" from "mbepi2_")
+        import re
+        task_name_lower = re.sub(r'^\d+', '', task_name_lower).strip()
+        task_name_lower = task_name_lower.replace(' ', '')
+        if not task_name_lower or task_name_lower in ['bold', 'epi', 'fmri', 'task']:
+            task_name_lower = 'task'
+        return ("func", "bold", task_name_lower, False)
     
-    # Anatomical T2w/FLAIR
-    if any(x in desc_lower for x in ['t2', 'flair', 'tse', 'fse']):
+    # Anatomical T1w - use word boundaries to avoid matching "mbepi2" as "t2"
+    # Match patterns like: t1w, t1_, _t1_, mprage, spgr, bravo, fspgr
+    t1_patterns = [' t1w', 't1w ', '_t1w', 't1_', '_t1_', ' t1 ', 'mprage', 'spgr', 'bravo', 'fspgr']
+    if any(x in desc_padded for x in t1_patterns):
+        return ("anat", "T1w", None, False)
+    
+    # Anatomical T2w/FLAIR - use word boundaries
+    # Match patterns like: t2w, t2_, _t2_, flair, tse, fse
+    t2_patterns = [' t2w', 't2w ', '_t2w', 't2_', '_t2_', ' t2 ', 'flair', ' tse', '_tse', ' fse', '_fse']
+    if any(x in desc_padded for x in t2_patterns):
         if 'flair' in desc_lower:
             return ("anat", "FLAIR", None, False)
         return ("anat", "T2w", None, False)
     
-    # Functional BOLD
-    if any(x in desc_lower for x in ['fmri', 'bold', 'func']) or ('epi' in desc_lower and 'se-epi' not in desc_lower):
-        task_name = series_desc
-        for prefix in ['fMRI_', 'fmri_', 'FMRI_', 'bold_', 'BOLD_', 'func_', 'FUNC_']:
-            task_name = task_name.replace(prefix, '')
-        task_name = task_name.lower().replace(' ', '').replace('-', '').replace('_', '')
-        if not task_name or task_name in ['bold', 'epi', 'fmri']:
+    # Functional (EPI without "bold" - less certain)
+    if 'epi' in desc_lower and 'se-epi' not in desc_lower and 'seepi' not in desc_lower:
+        task_name = desc_lower.replace('epi', '').replace('_', '').replace('-', '').strip()
+        if not task_name:
             task_name = 'task'
         return ("func", "bold", task_name, False)
     
@@ -154,7 +177,7 @@ def categorize_series(series_desc: str) -> tuple:
         return ("fmap", "epi", None, False)
     if any(x in desc_lower for x in ['fieldmap', 'field_map', 'b0map', 'phasediff', 'phase_diff']):
         return ("fmap", "phasediff", None, False)
-    if ('_pa' in desc_lower or '_ap' in desc_lower) and 'epi' in desc_lower:
+    if ('_pa' in desc_lower or '_ap' in desc_lower):
         return ("fmap", "epi", None, False)
     
     return (None, None, None, True)

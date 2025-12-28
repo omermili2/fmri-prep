@@ -6,7 +6,7 @@
       "datatype": "anat",
       "suffix": "T1w",
       "criteria": {
-        "SeriesDescription": "*t1_mprage*"
+        "SeriesDescription": "*MPRAGE*"
       }
     },
     {
@@ -103,6 +103,30 @@
       "suffix": "phasediff",
       "criteria": {
         "SeriesDescription": "*FieldMap*"
+      }
+    },
+    {
+      "id": "func_memory",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-memory",
+      "criteria": {
+        "SeriesDescription": "*bold*Memory*"
+      },
+      "sidecarChanges": {
+        "TaskName": "memory"
+      }
+    },
+    {
+      "id": "func_rest",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-rest",
+      "criteria": {
+        "SeriesDescription": "*bold*rest*"
+      },
+      "sidecarChanges": {
+        "TaskName": "rest"
       }
     }
   ]
