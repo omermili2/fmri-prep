@@ -178,6 +178,32 @@
       }
     },
     {
+      "id": "func_memory_cmrr_mbepi",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-memory",
+      "criteria": {
+        "SeriesDescription": "*cmrr_mbepi*Memory*",
+        "ScanningSequence": "EP"
+      },
+      "sidecarChanges": {
+        "TaskName": "memory"
+      }
+    },
+    {
+      "id": "func_rest_cmrr_mbepi",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-rest",
+      "criteria": {
+        "SeriesDescription": "*cmrr_mbepi*rest*",
+        "ScanningSequence": "EP"
+      },
+      "sidecarChanges": {
+        "TaskName": "rest"
+      }
+    },
+    {
       "id": "func_memory_cmrr",
       "datatype": "func",
       "suffix": "bold",
