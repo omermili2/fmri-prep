@@ -6,7 +6,79 @@
       "datatype": "anat",
       "suffix": "T1w",
       "criteria": {
-        "SeriesDescription": "*T1w*"
+        "SeriesDescription": "*t1_mprage*"
+      }
+    },
+    {
+      "id": "func_movie",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-movie",
+      "criteria": {
+        "SeriesDescription": "fMRI_MOVIE"
+      },
+      "sidecarChanges": {
+        "TaskName": "movie"
+      }
+    },
+    {
+      "id": "func_music",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-music",
+      "criteria": {
+        "SeriesDescription": "fMRI_MUSIC"
+      },
+      "sidecarChanges": {
+        "TaskName": "music"
+      }
+    },
+    {
+      "id": "func_nf1",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-nf1",
+      "criteria": {
+        "SeriesDescription": "fMRI_NF_RUN1"
+      },
+      "sidecarChanges": {
+        "TaskName": "nf1"
+      }
+    },
+    {
+      "id": "func_nf2",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-nf2",
+      "criteria": {
+        "SeriesDescription": "fMRI_NF_RUN2"
+      },
+      "sidecarChanges": {
+        "TaskName": "nf2"
+      }
+    },
+    {
+      "id": "func_nf3",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-nf3",
+      "criteria": {
+        "SeriesDescription": "fMRI_NF_RUN3"
+      },
+      "sidecarChanges": {
+        "TaskName": "nf3"
+      }
+    },
+    {
+      "id": "func_wordpairs",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-wordpairs",
+      "criteria": {
+        "SeriesDescription": "fMRI_WORD_PAIRS"
+      },
+      "sidecarChanges": {
+        "TaskName": "wordpairs"
       }
     },
     {
@@ -15,90 +87,6 @@
       "suffix": "T2w",
       "criteria": {
         "SeriesDescription": "*T2w*"
-      }
-    },
-    {
-      "id": "func_sound",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-sound_run-01",
-      "criteria": {
-        "SeriesDescription": "func*task-sound*"
-      },
-      "sidecarChanges": {
-        "TaskName": "sound"
-      }
-    },
-    {
-      "id": "func_story_run01",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-story_run-01",
-      "criteria": {
-        "SeriesDescription": "*task-story_run-01*"
-      },
-      "sidecarChanges": {
-        "TaskName": "story"
-      }
-    },
-    {
-      "id": "func_story_run02",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-story_run-02",
-      "criteria": {
-        "SeriesDescription": "*task-story_run-02*"
-      },
-      "sidecarChanges": {
-        "TaskName": "story"
-      }
-    },
-    {
-      "id": "func_story_run03",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-story_run-03",
-      "criteria": {
-        "SeriesDescription": "*task-story_run-03*"
-      },
-      "sidecarChanges": {
-        "TaskName": "story"
-      }
-    },
-    {
-      "id": "func_story_run04",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-story_run-04",
-      "criteria": {
-        "SeriesDescription": "*task-story_run-04*"
-      },
-      "sidecarChanges": {
-        "TaskName": "story"
-      }
-    },
-    {
-      "id": "func_faces",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-faces_run-01",
-      "criteria": {
-        "SeriesDescription": "*task-faces*"
-      },
-      "sidecarChanges": {
-        "TaskName": "faces"
-      }
-    },
-    {
-      "id": "func_rest",
-      "datatype": "func",
-      "suffix": "bold",
-      "custom_entities": "task-rest",
-      "criteria": {
-        "SeriesDescription": "*rest*"
-      },
-      "sidecarChanges": {
-        "TaskName": "rest"
       }
     },
     {
