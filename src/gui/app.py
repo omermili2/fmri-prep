@@ -9,6 +9,8 @@ import re
 import shutil
 import signal
 import platform
+import json
+import base64
 from datetime import datetime
 
 # Detect platform
@@ -439,8 +441,7 @@ class App(ctk.CTk):
         return len(warnings) == 0
 
     def _get_fmriprep_options(self):
-        """Get fMRIPrep options as command line arguments."""
-        options = []
+        options = {}
         
         # Output spaces
         spaces = []
@@ -449,25 +450,26 @@ class App(ctk.CTk):
         if self.check_space_t1w.get():
             spaces.append("T1w")
         if spaces:
-            options.extend(["--output-spaces", " ".join(spaces)])
+            options["output_spaces"] = spaces
         
         # FreeSurfer
-        if not self.check_freesurfer.get():
-            options.append("--fs-no-reconall")
+        options["fs_reconall"] = self.check_freesurfer.get()
         
         # Slice timing
-        if not self.check_slice_timing.get():
-            options.extend(["--ignore", "slicetiming"])
+        options["skip_slice_timing"] = not self.check_slice_timing.get()
         
         # SyN SDC
-        if self.check_syn_sdc.get():
-            options.append("--use-syn-sdc")
+        options["use_syn_sdc"] = self.check_syn_sdc.get()
         
         # ICA-AROMA
-        if self.check_aroma.get():
-            options.append("--use-aroma")
+        options["use_aroma"] = self.check_aroma.get()
         
         return options
+    
+    def _encode_fmriprep_options(self, options):
+        """Encode fMRIPrep options as base64 JSON for safe cross-platform passing."""
+        json_str = json.dumps(options)
+        return base64.b64encode(json_str.encode('utf-8')).decode('ascii')
 
     def _validate_paths(self):
         """Validate input and output paths before running."""
@@ -585,14 +587,14 @@ class App(ctk.CTk):
         if self.check_anonymize.get():
             cmd.append("--anonymize")
         
-        # Add fMRIPrep options if running fMRIPrep
+        # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
         if self._run_fmriprep:
             fmriprep_opts = self._get_fmriprep_options()
             if fmriprep_opts:
-                cmd.extend(["--fmriprep-args", ",".join(fmriprep_opts)])
+                encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
+                cmd.extend(["--fmriprep-opts", encoded_opts])
 
         try:
-            # Platform-specific subprocess options for proper termination
             popen_kwargs = {
                 'stdout': subprocess.PIPE,
                 'stderr': subprocess.STDOUT,
@@ -604,7 +606,6 @@ class App(ctk.CTk):
             if IS_WINDOWS:
                 popen_kwargs['creationflags'] = subprocess.CREATE_NEW_PROCESS_GROUP
             else:
-                # Unix: create new process group for clean termination
                 popen_kwargs['start_new_session'] = True
             
             self.current_process = subprocess.Popen(cmd, **popen_kwargs)

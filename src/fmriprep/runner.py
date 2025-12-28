@@ -7,6 +7,8 @@ with support for cross-platform path conversion and configurable options.
 
 import subprocess
 import sys
+import json
+import base64
 from pathlib import Path
 
 
@@ -208,27 +210,26 @@ def main():
     parser.add_argument("output_dir", help="Path to output directory")
     parser.add_argument("participant_label", help="Participant label (without sub- prefix)")
     parser.add_argument("--license", help="Path to FreeSurfer license file")
-    parser.add_argument("--extra-args", type=str, default="",
-                        help="Comma-separated extra arguments for fMRIPrep")
+    parser.add_argument("--opts", type=str, default="",
+                        help="Base64-encoded JSON options (platform-agnostic)")
     
     args = parser.parse_args()
     
-    # Parse extra arguments to determine options
-    extra_args = args.extra_args.split(",") if args.extra_args else []
-    extra_args_str = " ".join(extra_args)
+    # Decode options from base64 JSON (platform-agnostic)
+    opts = {}
+    if args.opts:
+        try:
+            json_str = base64.b64decode(args.opts).decode('utf-8')
+            opts = json.loads(json_str)
+        except Exception as e:
+            print(f"Warning: Could not decode options: {e}")
     
-    # Determine options from extra args
-    output_spaces = None
-    for arg in extra_args:
-        if arg.startswith("--output-spaces"):
-            parts = arg.split(" ", 1)
-            if len(parts) > 1:
-                output_spaces = parts[1].split()
-    
-    fs_reconall = "--fs-no-reconall" not in extra_args_str
-    skip_slice_timing = "slicetiming" in extra_args_str
-    use_syn_sdc = "--use-syn-sdc" in extra_args_str
-    use_aroma = "--use-aroma" in extra_args_str
+    # Extract options from decoded dict
+    output_spaces = opts.get("output_spaces", None)
+    fs_reconall = opts.get("fs_reconall", True)
+    skip_slice_timing = opts.get("skip_slice_timing", False)
+    use_syn_sdc = opts.get("use_syn_sdc", False)
+    use_aroma = opts.get("use_aroma", False)
     
     success, error = run_fmriprep(
         args.bids_dir,

@@ -20,6 +20,7 @@ import subprocess
 import sys
 import os
 import json
+import base64
 import shutil
 import threading
 import multiprocessing
@@ -50,7 +51,7 @@ setup_encoding()
 
 
 def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_script, 
-                        skip_bids, skip_fmriprep, fmriprep_args, progress_tracker, 
+                        skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker, 
                         desc_created_event, report):
     """
     Process a single subject-session task.
@@ -65,7 +66,7 @@ def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_s
         fmriprep_script: Path to fMRIPrep runner script
         skip_bids: Skip BIDS conversion
         skip_fmriprep: Skip fMRIPrep
-        fmriprep_args: Extra arguments for fMRIPrep
+        fmriprep_opts: Dictionary of fMRIPrep options
         progress_tracker: ProgressTracker instance
         desc_created_event: Threading event for dataset_description.json
         report: ConversionReport instance
@@ -120,9 +121,11 @@ def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_s
             sub_id
         ]
         
-        # Add fMRIPrep arguments if provided
-        if fmriprep_args:
-            cmd_fmriprep.extend(["--extra-args", fmriprep_args])
+        # Add fMRIPrep options if provided (as base64 JSON for platform-agnostic passing)
+        if fmriprep_opts:
+            opts_json = json.dumps(fmriprep_opts)
+            opts_encoded = base64.b64encode(opts_json.encode('utf-8')).decode('ascii')
+            cmd_fmriprep.extend(["--opts", opts_encoded])
         
         try:
             result = subprocess.run(
@@ -248,8 +251,8 @@ Examples:
                         help=f"Number of parallel workers (default: {default_workers})")
     parser.add_argument("--anonymize", action="store_true", 
                         help="Enable DICOM metadata anonymization")
-    parser.add_argument("--fmriprep-args", type=str, default="",
-                        help="Comma-separated fMRIPrep arguments")
+    parser.add_argument("--fmriprep-opts", type=str, default="",
+                        help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
 
     args = parser.parse_args()
 
@@ -398,7 +401,15 @@ Examples:
     errors = []
     progress_tracker = ProgressTracker(total_tasks)
     desc_created_event = threading.Event()
-    fmriprep_args = args.fmriprep_args if hasattr(args, 'fmriprep_args') else ""
+    
+    # Decode fMRIPrep options from base64 JSON (platform-agnostic)
+    fmriprep_opts = {}
+    if hasattr(args, 'fmriprep_opts') and args.fmriprep_opts:
+        try:
+            json_str = base64.b64decode(args.fmriprep_opts).decode('utf-8')
+            fmriprep_opts = json.loads(json_str)
+        except Exception as e:
+            safe_print(f"Warning: Could not decode fMRIPrep options: {e}", flush=True)
 
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
@@ -407,7 +418,7 @@ Examples:
             executor.submit(
                 process_single_task,
                 task, config_path, bids_dir, derivatives_dir, fmriprep_script,
-                args.skip_bids, args.skip_fmriprep, fmriprep_args, 
+                args.skip_bids, args.skip_fmriprep, fmriprep_opts, 
                 progress_tracker, desc_created_event, report
             ): task for task in all_tasks
         }
