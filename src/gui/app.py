@@ -164,6 +164,16 @@ class App(ctk.CTk):
         )
         self.check_anonymize.grid(row=0, column=0, padx=10, pady=5, sticky="w")
         self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
+        
+        self.check_keep_temp = ctk.CTkCheckBox(
+            self.frame_bids_options,
+            text="Keep temporary files (for debugging)",
+            font=ctk.CTkFont(size=12),
+            onvalue=True,
+            offvalue=False
+        )
+        self.check_keep_temp.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.check_keep_temp.deselect()  # Default: OFF (clean up temp files)
 
         # --- fMRIPrep Options Frame (Collapsible) ---
         self.frame_fmriprep_container = ctk.CTkFrame(self.main_scroll)
@@ -586,6 +596,9 @@ class App(ctk.CTk):
             cmd.append("--skip-fmriprep")
         if self.check_anonymize.get():
             cmd.append("--anonymize")
+        
+        if self.check_keep_temp.get():
+            cmd.append("--keep-temp")
         
         # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
         if self._run_fmriprep:

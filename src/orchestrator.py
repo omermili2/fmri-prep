@@ -251,6 +251,8 @@ Examples:
                         help=f"Number of parallel workers (default: {default_workers})")
     parser.add_argument("--anonymize", action="store_true", 
                         help="Enable DICOM metadata anonymization")
+    parser.add_argument("--keep-temp", action="store_true",
+                        help="Keep temporary files for debugging (don't cleanup)")
     parser.add_argument("--fmriprep-opts", type=str, default="",
                         help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
 
@@ -437,8 +439,12 @@ Examples:
 
     safe_print(f"[PROGRESS:COMPLETE]", flush=True)
     
-    # Cleanup
-    cleanup_temp_files(bids_dir, report)
+    # Cleanup (skip if --keep-temp was specified)
+    if args.keep_temp:
+        safe_print("\nKeeping temporary files for debugging (--keep-temp)", flush=True)
+        report.set_cleanup_info(0, 0)
+    else:
+        cleanup_temp_files(bids_dir, report)
     
     # Analyze output
     safe_print("Analyzing output files...", flush=True)
