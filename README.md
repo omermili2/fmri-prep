@@ -45,16 +45,14 @@ fMRI_Masters/
 │   ├── orchestrator.py     # Main pipeline orchestrator
 │   ├── gui/                # GUI application
 │   ├── core/               # Discovery, progress, utilities
-│   ├── bids/               # BIDS conversion
+│   ├── bids/               # BIDS conversion (using dcm2niix)
 │   ├── fmriprep/           # fMRIPrep runner
 │   └── reporting/          # Report generation
-├── config/                 # Configuration
-│   └── dcm2bids_config.json
 ├── docs/                   # Documentation
 │   ├── BIDS_CONVERSION_GUIDE.md
 │   └── FMRIPREP_GUIDE.md
 ├── test/                   # Test suite
-└── scripts/                # Setup scripts
+└── tools/                  # Local dcm2niix binary
 ```
 
 ---
@@ -64,6 +62,7 @@ fMRI_Masters/
 | Requirement | For |
 |-------------|-----|
 | Python 3.10+ | Core application |
+| dcm2niix | BIDS conversion (included in tools/ or install separately) |
 | Docker Desktop | fMRIPrep only |
 | [FreeSurfer License](https://surfer.nmr.mgh.harvard.edu/registration.html) | fMRIPrep only (free) |
 
@@ -73,7 +72,7 @@ fMRI_Masters/
 
 | Guide | Description |
 |-------|-------------|
-| [BIDS Conversion Guide](docs/BIDS_CONVERSION_GUIDE.md) | Input format, conversion process, output structure, configuration |
+| [BIDS Conversion Guide](docs/BIDS_CONVERSION_GUIDE.md) | Input format, conversion process, output structure |
 | [fMRIPrep Guide](docs/FMRIPREP_GUIDE.md) | Preprocessing steps, output files, quality control, confounds |
 
 ---
@@ -86,6 +85,9 @@ python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output -
 
 # Full pipeline (BIDS + fMRIPrep)
 python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output
+
+# With anonymization (removes patient info from metadata)
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --anonymize
 ```
 
 ---
@@ -97,5 +99,5 @@ MIT License
 ## References
 
 - [BIDS Specification](https://bids-specification.readthedocs.io/)
-- [dcm2bids](https://unfmontreal.github.io/Dcm2Bids/)
+- [dcm2niix](https://github.com/rordenlab/dcm2niix)
 - [fMRIPrep](https://fmriprep.org/)

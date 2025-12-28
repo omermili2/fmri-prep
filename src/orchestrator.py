@@ -50,9 +50,9 @@ except ImportError:
 setup_encoding()
 
 
-def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_script, 
+def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script, 
                         skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker, 
-                        desc_created_event, report):
+                        desc_created_event, report, anonymize=False):
     """
     Process a single subject-session task.
     
@@ -60,7 +60,6 @@ def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_s
     
     Args:
         task: Dictionary with sub_id, ses_id, dicom_path, task_num
-        config_path: Path to dcm2bids config
         bids_dir: BIDS output directory
         derivatives_dir: fMRIPrep derivatives directory
         fmriprep_script: Path to fMRIPrep runner script
@@ -70,6 +69,7 @@ def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_s
         progress_tracker: ProgressTracker instance
         desc_created_event: Threading event for dataset_description.json
         report: ConversionReport instance
+        anonymize: If True, anonymize DICOM metadata
         
     Returns:
         Error string if failed, None if successful
@@ -87,10 +87,10 @@ def process_single_task(task, config_path, bids_dir, derivatives_dir, fmriprep_s
     
     error = None
     
-    # 1. BIDS Conversion
+    # 1. BIDS Conversion (using dcm2niix)
     if not skip_bids:
         success, duration, error_msg = run_bids_conversion(
-            dicom_path, sub_id, ses_id, config_path, bids_dir, task_label
+            dicom_path, sub_id, ses_id, bids_dir, task_label, anonymize=anonymize
         )
         
         if success:
@@ -156,7 +156,7 @@ def cleanup_temp_files(bids_dir, report):
     Clean up temporary files after conversion.
     
     Removes:
-    - tmp_dcm2bids/ folder
+    - tmp_dcm2niix/ folder
     - .bidsignore file
     - Empty scans.tsv files
     
@@ -170,8 +170,8 @@ def cleanup_temp_files(bids_dir, report):
     
     bids_path = Path(bids_dir)
     
-    # 1. Remove tmp_dcm2bids folder
-    tmp_folder = bids_path / "tmp_dcm2bids"
+    # 1. Remove tmp_dcm2niix folder
+    tmp_folder = bids_path / "tmp_dcm2niix"
     if tmp_folder.exists():
         try:
             # Calculate size before deletion
@@ -180,9 +180,9 @@ def cleanup_temp_files(bids_dir, report):
                     cleanup_size += f.stat().st_size
             shutil.rmtree(tmp_folder)
             cleanup_count += 1
-            safe_print(f"  Removed: tmp_dcm2bids/", flush=True)
+            safe_print(f"  Removed: tmp_dcm2niix/", flush=True)
         except Exception as e:
-            warning = f"Could not remove tmp_dcm2bids folder: {e}"
+            warning = f"Could not remove tmp_dcm2niix folder: {e}"
             report.add_warning(warning)
             safe_print(f"  Warning: {warning}", flush=True)
     
@@ -237,8 +237,6 @@ Examples:
                         help="Path to root directory containing subject folders")
     parser.add_argument("--output_dir", required=True, 
                         help="Base directory for outputs")
-    parser.add_argument("--config", default="dcm2bids_config.json", 
-                        help="Path to dcm2bids config file")
     parser.add_argument("--subject", 
                         help="Specific subject ID (optional)")
     parser.add_argument("--session", 
@@ -286,50 +284,10 @@ Examples:
     if local_dcm2niix_dir.exists():
         os.environ["PATH"] = str(local_dcm2niix_dir) + os.pathsep + os.environ.get("PATH", "")
     
-    # Find config file
-    config_path = None
-    for candidate in [
-        Path(args.config),
-        project_root / args.config,
-        project_root / "config" / args.config,
-    ]:
-        if candidate.exists():
-            config_path = candidate.resolve()
-            break
-    
-    if not config_path:
-        safe_print(f"Error: Config file not found: {args.config}", flush=True)
-        sys.exit(1)
-    
-    report.config_file = str(config_path)
-    
     # Handle anonymization
-    if args.anonymize:
+    anonymize = args.anonymize
+    if anonymize:
         safe_print("Anonymization enabled - patient info will be removed from metadata", flush=True)
-        try:
-            with open(config_path, 'r', encoding='utf-8') as f:
-                config_data = json.load(f)
-            
-            current_options = config_data.get('dcm2niixOptions', '-z 1 -b y -f %p_%s')
-            if '-ba n' in current_options:
-                new_options = current_options.replace('-ba n', '-ba y')
-            elif '-ba y' not in current_options:
-                new_options = current_options + ' -ba y'
-            else:
-                new_options = current_options
-            
-            config_data['dcm2niixOptions'] = new_options
-            
-            modified_config_path = output_folder / "dcm2bids_config_anonymized.json"
-            with open(modified_config_path, 'w', encoding='utf-8') as f:
-                json.dump(config_data, f, indent=2)
-            
-            config_path = modified_config_path
-            safe_print(f"Using modified config with anonymization: {config_path}", flush=True)
-        except Exception as e:
-            safe_print(f"Warning: Could not modify config for anonymization: {e}", flush=True)
-    else:
-        safe_print(f"Using config: {config_path}", flush=True)
 
     # Build task list
     tasks = []
@@ -419,9 +377,9 @@ Examples:
         futures = {
             executor.submit(
                 process_single_task,
-                task, config_path, bids_dir, derivatives_dir, fmriprep_script,
+                task, bids_dir, derivatives_dir, fmriprep_script,
                 args.skip_bids, args.skip_fmriprep, fmriprep_opts, 
-                progress_tracker, desc_created_event, report
+                progress_tracker, desc_created_event, report, anonymize
             ): task for task in all_tasks
         }
         

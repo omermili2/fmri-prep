@@ -78,28 +78,3 @@ def sample_bids_structure(tmp_path):
     (anat_dir_2 / "sub-002_ses-01_T1w.nii.gz").write_bytes(b"fake nifti")
     
     return tmp_path
-
-
-@pytest.fixture
-def mock_config(tmp_path):
-    """Create a minimal dcm2bids config file."""
-    import json
-    
-    config = {
-        "dcm2niixOptions": "-z y -b y",
-        "descriptions": [
-            {
-                "id": "anat_t1w",
-                "datatype": "anat",
-                "suffix": "T1w",
-                "criteria": {
-                    "SeriesDescription": "*T1*"
-                }
-            }
-        ]
-    }
-    
-    config_path = tmp_path / "dcm2bids_config.json"
-    config_path.write_text(json.dumps(config, indent=2))
-    
-    return config_path

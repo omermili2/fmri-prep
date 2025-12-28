@@ -6,9 +6,8 @@
 3. [Input: Raw DICOM Data](#input-raw-dicom-data)
 4. [The Conversion Process](#the-conversion-process)
 5. [Output: BIDS Format](#output-bids-format)
-6. [Configuration File](#configuration-file)
-7. [File Naming Conventions](#file-naming-conventions)
-8. [Troubleshooting](#troubleshooting)
+6. [File Naming Conventions](#file-naming-conventions)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -147,8 +146,8 @@ The pipeline automatically recognizes these session folder names:
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                    BIDS CONVERSION PIPELINE                             │
 │                                                                         │
-│   DICOM Files    ──►    dcm2niix    ──►    dcm2bids    ──►    BIDS     │
-│   (Scanner)           (Converter)       (Organizer)       (Standard)   │
+│   DICOM Files    ──►    dcm2niix    ──►    Organize    ──►    BIDS     │
+│   (Scanner)           (Converter)        (Auto-classify)    (Standard) │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -188,21 +187,27 @@ DICOM pixel → Rescale (slope/intercept) → Reorient to RAS → Write to NIfTI
   - **A**nterior → Posterior (Y axis)
   - **S**uperior → Inferior (Z axis)
 
-### Step 3: Matching to Config Rules (dcm2bids)
+### Step 3: Automatic Classification
 
-dcm2bids reads your config and matches scans:
+The pipeline reads JSON sidecar files (created by dcm2niix) to automatically classify scans:
 
 ```
-Config says:                     DICOM has:
-SeriesDescription: "*T1*"   ──►  SeriesDescription: "T1_MPRAGE"
-                                        ↓
-                                    MATCH! → It's a T1w scan
+JSON sidecar has:                    Classification:
+SeriesDescription: "T1_MPRAGE"   ──► anat/T1w
+SeriesDescription: "bold_rest"   ──► func/bold (task-rest)
+SeriesDescription: "dwi_64dir"   ──► dwi/dwi
 ```
+
+**Recognized scan types:**
+- **Anatomical**: T1w (MPRAGE, SPGR, BRAVO), T2w, FLAIR
+- **Functional**: BOLD, fMRI, EPI sequences
+- **Diffusion**: DWI, DTI, HARDI
+- **Fieldmaps**: SE-EPI, phasediff, AP/PA pairs
 
 ### Step 4: Organizing into BIDS
 
 ```
-tmp_dcm2bids/004_T1_MPRAGE.nii.gz
+tmp_dcm2niix/T1_MPRAGE_4.nii.gz
                     │
                     ▼
 sub-001/ses-01/anat/sub-001_ses-01_T1w.nii.gz
@@ -248,10 +253,10 @@ output_20241217_143022/
 │       │   └── sub-001_ses-01_T2w.json
 │       │
 │       ├── func/               # Functional scans
-│       │   ├── sub-001_ses-01_task-rest_bold.nii.gz   # Resting-state fMRI
-│       │   ├── sub-001_ses-01_task-rest_bold.json
-│       │   ├── sub-001_ses-01_task-motor_bold.nii.gz  # Task fMRI
-│       │   └── sub-001_ses-01_task-motor_bold.json
+│       │   ├── sub-001_ses-01_task-rest_run-01_bold.nii.gz   # Resting-state fMRI
+│       │   ├── sub-001_ses-01_task-rest_run-01_bold.json
+│       │   ├── sub-001_ses-01_task-memory_run-01_bold.nii.gz  # Task fMRI
+│       │   └── sub-001_ses-01_task-memory_run-01_bold.json
 │       │
 │       ├── dwi/                # Diffusion imaging
 │       │   ├── sub-001_ses-01_dwi.nii.gz
@@ -260,8 +265,8 @@ output_20241217_143022/
 │       │   └── sub-001_ses-01_dwi.bvec       # b-vectors
 │       │
 │       └── fmap/               # Fieldmaps
-│           ├── sub-001_ses-01_phasediff.nii.gz
-│           └── sub-001_ses-01_phasediff.json
+│           ├── sub-001_ses-01_dir-AP_epi.nii.gz
+│           └── sub-001_ses-01_dir-AP_epi.json
 │
 ├── sub-002/
 │   └── ...
@@ -276,10 +281,10 @@ output_20241217_143022/
 #### dataset_description.json
 ```json
 {
-    "Name": "My fMRI Study",
+    "Name": "fMRI Pipeline Output",
     "BIDSVersion": "1.8.0",
     "DatasetType": "raw",
-    "Authors": ["Researcher Name"]
+    "Authors": ["Pipeline"]
 }
 ```
 
@@ -300,63 +305,6 @@ output_20241217_143022/
 
 ---
 
-## Configuration File
-
-### dcm2bids_config.json Explained
-
-```json
-{
-  "dcm2niixOptions": "-z 1 -b y -ba n -f %p_%s",
-  "descriptions": [
-    {
-      "id": "anat_t1w",
-      "datatype": "anat",
-      "suffix": "T1w",
-      "criteria": {
-        "SeriesDescription": "*T1*",
-        "ImageType": ["ORIGINAL", "PRIMARY", "*"]
-      },
-      "sidecarChanges": {
-        "ProtocolName": "T1w"
-      }
-    }
-  ]
-}
-```
-
-### dcm2niix Options
-
-```
-"-z 1 -b y -ba n -f %p_%s"
-  │    │    │     │
-  │    │    │     └── Filename: protocol_series
-  │    │    └── -ba n: Don't anonymize (faster)
-  │    └── -b y: Create BIDS sidecar JSON
-  └── -z 1: Fastest gzip compression
-```
-
-### Description Fields
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `id` | Unique identifier | `"anat_t1w"` |
-| `datatype` | BIDS folder | `"anat"`, `"func"`, `"dwi"`, `"fmap"` |
-| `suffix` | File ending | `"T1w"`, `"bold"`, `"dwi"` |
-| `custom_entities` | Additional labels | `"task-rest"`, `"run-01"` |
-| `criteria` | Matching rules | `{"SeriesDescription": "*T1*"}` |
-
-### Criteria Matching
-
-```
-Criteria:                        DICOM Header:
-─────────────────────────────────────────────────────
-"SeriesDescription": "*T1*"  ──► "T1_MPRAGE_SAG"     ✓ MATCH
-"SeriesDescription": "*T1*"  ──► "T2_FLAIR"          ✗ NO MATCH
-"SeriesDescription": "*rest*" ─► "resting_state_fMRI" ✓ MATCH
-```
-
----
-
 ## File Naming Conventions
 
 ### BIDS Naming Pattern
@@ -366,7 +314,7 @@ sub-<label>_ses-<label>_<key>-<value>_<suffix>.<extension>
     │           │           │              │         │
     │           │           │              │         └── .nii.gz, .json
     │           │           │              └── T1w, bold, dwi
-    │           │           └── task-rest, run-01, acq-highres
+    │           │           └── task-rest, run-01, dir-AP
     │           └── Session label (optional)
     └── Subject label
 ```
@@ -377,17 +325,17 @@ sub-<label>_ses-<label>_<key>-<value>_<suffix>.<extension>
 |------|---------|
 | `sub-001_T1w.nii.gz` | Subject 1, T1-weighted scan |
 | `sub-001_ses-01_T1w.nii.gz` | Subject 1, Session 1, T1-weighted |
-| `sub-001_ses-01_task-rest_bold.nii.gz` | Subject 1, Session 1, Resting-state fMRI |
-| `sub-001_ses-01_task-motor_run-02_bold.nii.gz` | Subject 1, Motor task, Run 2 |
+| `sub-001_ses-01_task-rest_run-01_bold.nii.gz` | Subject 1, Resting-state fMRI, Run 1 |
+| `sub-001_ses-01_task-memory_run-02_bold.nii.gz` | Subject 1, Memory task, Run 2 |
 
 ### Modality Folders
 
 | Folder | Contents | Suffixes |
 |--------|----------|----------|
-| `anat/` | Structural images | T1w, T2w, FLAIR, T1rho |
-| `func/` | Functional images | bold, cbv, phase |
+| `anat/` | Structural images | T1w, T2w, FLAIR |
+| `func/` | Functional images | bold |
 | `dwi/` | Diffusion imaging | dwi |
-| `fmap/` | Fieldmaps | phasediff, magnitude, epi |
+| `fmap/` | Fieldmaps | phasediff, epi |
 | `perf/` | Perfusion | asl |
 
 ---
@@ -405,13 +353,13 @@ Solution:
   3. Check for hidden folders (starting with .)
 ```
 
-#### "Scan not matched"
+#### "No files were organized into BIDS structure"
 ```
-Problem: Scan goes to tmp_dcm2bids/ instead of BIDS folders
+Problem: dcm2niix converted files but they weren't recognized
 Solution:
-  1. Check SeriesDescription in DICOM header
-  2. Update dcm2bids_config.json criteria
-  3. Use wildcard matching: "*T1*" instead of "T1"
+  1. Check SeriesDescription in your DICOM files
+  2. Look at the JSON files in tmp_dcm2niix folder (if kept)
+  3. Ensure scans have standard naming (bold, t1, mprage, etc.)
 ```
 
 #### "Invalid BIDS"
@@ -428,9 +376,8 @@ Solution:
 To check what's in your DICOM files:
 
 ```bash
-# Using dcm2niix
+# Using dcm2niix (creates JSON with all headers)
 dcm2niix -b o -f test /path/to/dicom/folder
-# Creates test.json with all headers
 
 # Using pydicom (Python)
 python -c "
@@ -447,14 +394,13 @@ print(ds.SeriesDescription)
 ### Conversion Command (Manual)
 
 ```bash
-dcm2bids \
-  -d /path/to/dicom/folder \
-  -p 001 \
-  -s 01 \
-  -c dcm2bids_config.json \
+dcm2niix \
+  -z y \
+  -b y \
+  -ba n \
+  -f %p_%s \
   -o /path/to/output \
-  --force_dcm2bids \
-  --clobber
+  /path/to/dicom/folder
 ```
 
 ### Validate BIDS Output
@@ -470,11 +416,9 @@ bids-validator /path/to/bids/dataset
 ### Useful Links
 
 - [BIDS Specification](https://bids-specification.readthedocs.io/)
-- [dcm2bids Documentation](https://unfmontreal.github.io/Dcm2Bids/)
 - [dcm2niix Documentation](https://github.com/rordenlab/dcm2niix)
 - [BIDS Validator](https://bids-standard.github.io/bids-validator/)
 
 ---
 
 *This guide is part of the fMRI Preprocessing Assistant project.*
-

@@ -1,5 +1,4 @@
 customtkinter
-dcm2bids
 pydicom
 pandas
 numpy
