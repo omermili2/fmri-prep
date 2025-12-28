@@ -1,14 +1,122 @@
 {
   "dcm2niixOptions": "-z y -b y -ba n -f %p_%s",
   "descriptions": [
+
+    {"_comment": "=== ANATOMICAL T1-WEIGHTED ==="},
     {
-      "id": "anat_t1w",
+      "id": "anat_t1w_mprage",
       "datatype": "anat",
       "suffix": "T1w",
       "criteria": {
         "SeriesDescription": "*mprage*"
       }
     },
+    {
+      "id": "anat_t1w_tfl",
+      "datatype": "anat",
+      "suffix": "T1w",
+      "criteria": {
+        "SeriesDescription": "*tfl*"
+      }
+    },
+    {
+      "id": "anat_t1w_spgr",
+      "datatype": "anat",
+      "suffix": "T1w",
+      "criteria": {
+        "SeriesDescription": "*spgr*"
+      }
+    },
+    {
+      "id": "anat_t1w_bravo",
+      "datatype": "anat",
+      "suffix": "T1w",
+      "criteria": {
+        "SeriesDescription": "*bravo*"
+      }
+    },
+
+    {"_comment": "=== ANATOMICAL T2-WEIGHTED ==="},
+    {
+      "id": "anat_t2w_tse",
+      "datatype": "anat",
+      "suffix": "T2w",
+      "criteria": {
+        "SeriesDescription": "*t2*tse*"
+      }
+    },
+    {
+      "id": "anat_t2w_space",
+      "datatype": "anat",
+      "suffix": "T2w",
+      "criteria": {
+        "SeriesDescription": "*t2*space*"
+      }
+    },
+    {
+      "id": "anat_t2w_fse",
+      "datatype": "anat",
+      "suffix": "T2w",
+      "criteria": {
+        "SeriesDescription": "*t2*fse*"
+      }
+    },
+    {
+      "id": "anat_t2w_generic",
+      "datatype": "anat",
+      "suffix": "T2w",
+      "criteria": {
+        "SeriesDescription": "*t2w*"
+      }
+    },
+
+    {"_comment": "=== ANATOMICAL FLAIR ==="},
+    {
+      "id": "anat_flair",
+      "datatype": "anat",
+      "suffix": "FLAIR",
+      "criteria": {
+        "SeriesDescription": "*flair*"
+      }
+    },
+    {
+      "id": "anat_flair_dark_fluid",
+      "datatype": "anat",
+      "suffix": "FLAIR",
+      "criteria": {
+        "SeriesDescription": "*dark*fluid*"
+      }
+    },
+
+    {"_comment": "=== ANATOMICAL T2-STAR (for iron/blood detection) ==="},
+    {
+      "id": "anat_t2star",
+      "datatype": "anat",
+      "suffix": "T2star",
+      "criteria": {
+        "SeriesDescription": "*t2star*"
+      }
+    },
+    {
+      "id": "anat_t2star_gre",
+      "datatype": "anat",
+      "suffix": "T2star",
+      "criteria": {
+        "SeriesDescription": "*t2*gre*"
+      }
+    },
+
+    {"_comment": "=== PROTON DENSITY ==="},
+    {
+      "id": "anat_pd",
+      "datatype": "anat",
+      "suffix": "PD",
+      "criteria": {
+        "SeriesDescription": "*pd*"
+      }
+    },
+
+    {"_comment": "=== YOUR LAB'S FUNCTIONAL TASKS ==="},
     {
       "id": "func_movie",
       "datatype": "func",
@@ -82,6 +190,7 @@
       }
     },
 
+    {"_comment": "=== SIEMENS CMRR MULTIBAND SEQUENCES ==="},
     {
       "id": "func_memory_cmrr",
       "datatype": "func",
@@ -107,6 +216,33 @@
       }
     },
 
+    {"_comment": "=== GENERIC FUNCTIONAL PATTERNS ==="},
+    {
+      "id": "func_bold_generic",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-unknown",
+      "criteria": {
+        "SeriesDescription": "*bold*"
+      },
+      "sidecarChanges": {
+        "TaskName": "unknown"
+      }
+    },
+    {
+      "id": "func_fmri_generic",
+      "datatype": "func",
+      "suffix": "bold",
+      "custom_entities": "task-unknown",
+      "criteria": {
+        "SeriesDescription": "*fmri*"
+      },
+      "sidecarChanges": {
+        "TaskName": "unknown"
+      }
+    },
+
+    {"_comment": "=== FIELDMAPS - SPIN ECHO EPI (for distortion correction) ==="},
     {
       "id": "fmap_epi_ap",
       "datatype": "fmap",
@@ -116,9 +252,7 @@
         "SeriesDescription": "*AP*",
         "PhaseEncodingDirection": "j-"
       },
-      "intendedFor": [
-        "func"
-      ]
+      "intendedFor": ["func"]
     },
     {
       "id": "fmap_epi_pa",
@@ -129,28 +263,48 @@
         "SeriesDescription": "*PA*",
         "PhaseEncodingDirection": "j"
       },
-      "intendedFor": [
-        "func"
-      ]
-    },
-
-    {
-      "id": "anat_t2w",
-      "datatype": "anat",
-      "suffix": "T2w",
-      "criteria": {
-        "SeriesDescription": "*t2*"
-      }
+      "intendedFor": ["func"]
     },
     {
-      "id": "anat_flair",
-      "datatype": "anat",
-      "suffix": "FLAIR",
+      "id": "fmap_seepi",
+      "datatype": "fmap",
+      "suffix": "epi",
       "criteria": {
-        "SeriesDescription": "*flair*"
-      }
+        "SeriesDescription": "*se_epi*"
+      },
+      "intendedFor": ["func"]
+    },
+    {
+      "id": "fmap_seepi_alt",
+      "datatype": "fmap",
+      "suffix": "epi",
+      "criteria": {
+        "SeriesDescription": "*SpinEcho*"
+      },
+      "intendedFor": ["func"]
     },
 
+    {"_comment": "=== FIELDMAPS - GRE PHASE DIFFERENCE ==="},
+    {
+      "id": "fmap_phasediff",
+      "datatype": "fmap",
+      "suffix": "phasediff",
+      "criteria": {
+        "SeriesDescription": "*fieldmap*"
+      },
+      "intendedFor": ["func"]
+    },
+    {
+      "id": "fmap_gre_field",
+      "datatype": "fmap",
+      "suffix": "phasediff",
+      "criteria": {
+        "SeriesDescription": "*gre_field*"
+      },
+      "intendedFor": ["func"]
+    },
+
+    {"_comment": "=== DIFFUSION WEIGHTED IMAGING ==="},
     {
       "id": "dwi_main",
       "datatype": "dwi",
@@ -165,6 +319,92 @@
       "suffix": "dwi",
       "criteria": {
         "SeriesDescription": "*dti*"
+      }
+    },
+    {
+      "id": "dwi_diffusion",
+      "datatype": "dwi",
+      "suffix": "dwi",
+      "criteria": {
+        "SeriesDescription": "*diffusion*"
+      }
+    },
+    {
+      "id": "dwi_hardi",
+      "datatype": "dwi",
+      "suffix": "dwi",
+      "criteria": {
+        "SeriesDescription": "*hardi*"
+      }
+    },
+    {
+      "id": "dwi_dki",
+      "datatype": "dwi",
+      "suffix": "dwi",
+      "criteria": {
+        "SeriesDescription": "*dki*"
+      }
+    },
+
+    {"_comment": "=== ARTERIAL SPIN LABELING (perfusion) ==="},
+    {
+      "id": "perf_asl",
+      "datatype": "perf",
+      "suffix": "asl",
+      "criteria": {
+        "SeriesDescription": "*asl*"
+      }
+    },
+    {
+      "id": "perf_pcasl",
+      "datatype": "perf",
+      "suffix": "asl",
+      "criteria": {
+        "SeriesDescription": "*pcasl*"
+      }
+    },
+    {
+      "id": "perf_pasl",
+      "datatype": "perf",
+      "suffix": "asl",
+      "criteria": {
+        "SeriesDescription": "*pasl*"
+      }
+    },
+
+    {"_comment": "=== SUSCEPTIBILITY WEIGHTED IMAGING ==="},
+    {
+      "id": "anat_swi",
+      "datatype": "anat",
+      "suffix": "SWI",
+      "criteria": {
+        "SeriesDescription": "*swi*"
+      }
+    },
+
+    {"_comment": "=== MR ANGIOGRAPHY ==="},
+    {
+      "id": "anat_angio",
+      "datatype": "anat",
+      "suffix": "angio",
+      "criteria": {
+        "SeriesDescription": "*angio*"
+      }
+    },
+    {
+      "id": "anat_tof",
+      "datatype": "anat",
+      "suffix": "angio",
+      "criteria": {
+        "SeriesDescription": "*tof*"
+      }
+    },
+    {
+      "id": "anat_mra",
+      "datatype": "anat",
+      "suffix": "angio",
+      "criteria": {
+        "SeriesDescription": "*mra*"
       }
     }
   ]
