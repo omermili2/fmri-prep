@@ -76,11 +76,14 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
     """
     sub_id = task['sub_id']
     ses_id = task['ses_id']
-    dicom_path = task['dicom_path']
+    dicom_path = task.get('dicom_path')
     task_num = task['task_num']
     task_label = f"sub-{sub_id}/ses-{ses_id}"
     
-    safe_print(f"[{task_label}] Starting conversion...", flush=True)
+    if skip_bids:
+        safe_print(f"[{task_label}] Starting fMRIPrep processing...", flush=True)
+    else:
+        safe_print(f"[{task_label}] Starting conversion...", flush=True)
     
     # Signal task start for progress tracking
     progress_tracker.task_start(task_num)
@@ -226,6 +229,9 @@ Examples:
 
   # Process single subject
   python -m src.pipeline --input /data/raw/001/MRI1 --output_dir /data/processed --subject 001 --session 01
+
+  # Run fMRIPrep only on existing BIDS folder
+  python -m src.pipeline --bids-folder /data/processed/output_20250101_120000
         """
     )
     
@@ -233,10 +239,12 @@ Examples:
     cpu_count = multiprocessing.cpu_count()
     default_workers = min(max(cpu_count, 4), 12)
     
-    parser.add_argument("--input", required=True, 
-                        help="Path to root directory containing subject folders")
-    parser.add_argument("--output_dir", required=True, 
-                        help="Base directory for outputs")
+    parser.add_argument("--input", 
+                        help="Path to root directory containing subject folders (required unless --bids-folder is used)")
+    parser.add_argument("--output_dir", 
+                        help="Base directory for outputs (required unless --bids-folder is used)")
+    parser.add_argument("--bids-folder",
+                        help="Path to existing BIDS folder (for running fMRIPrep only, skips BIDS conversion)")
     parser.add_argument("--subject", 
                         help="Specific subject ID (optional)")
     parser.add_argument("--session", 
@@ -256,18 +264,47 @@ Examples:
 
     args = parser.parse_args()
 
+    # Validate arguments
+    fmriprep_only_mode = bool(args.bids_folder)
+    
+    if fmriprep_only_mode:
+        # Using existing BIDS folder - skip BIDS conversion, run fMRIPrep only
+        bids_folder_path = Path(args.bids_folder).resolve()
+        if not bids_folder_path.exists():
+            safe_print(f"Error: BIDS folder does not exist: {bids_folder_path}", flush=True)
+            sys.exit(1)
+        if not (bids_folder_path / "dataset_description.json").exists():
+            safe_print(f"Error: Not a valid BIDS folder (missing dataset_description.json): {bids_folder_path}", flush=True)
+            sys.exit(1)
+        # Force skip-bids in this mode
+        args.skip_bids = True
+    else:
+        # Standard mode - require input and output_dir
+        if not args.input or not args.output_dir:
+            safe_print("Error: --input and --output_dir are required (unless using --bids-folder)", flush=True)
+            sys.exit(1)
+
     # Setup Paths
     project_root = Path(__file__).parent.parent.resolve()
-    input_root = Path(args.input).resolve()
-    base_output = Path(args.output_dir).resolve()
     
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_folder = base_output / f"output_{timestamp}"
-    output_folder.mkdir(parents=True, exist_ok=True)
+    if fmriprep_only_mode:
+        # Use existing BIDS folder directly
+        bids_dir = bids_folder_path
+        derivatives_dir = bids_dir / "derivatives"
+        output_folder = bids_dir
+        input_root = bids_dir  # For report
+    else:
+        input_root = Path(args.input).resolve()
+        base_output = Path(args.output_dir).resolve()
+        
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_folder = base_output / f"output_{timestamp}"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        
+        # BIDS output goes directly in output folder
+        bids_dir = output_folder
+        derivatives_dir = output_folder / "derivatives"
     
-    # BIDS output goes directly in output folder
-    bids_dir = output_folder
-    derivatives_dir = output_folder / "derivatives"
     fmriprep_script = project_root / "src" / "fmriprep" / "runner.py"
     
     # Initialize report
@@ -278,6 +315,9 @@ Examples:
     report.skip_fmriprep = args.skip_fmriprep
     
     safe_print(f"Output folder: {output_folder}", flush=True)
+    
+    if fmriprep_only_mode:
+        safe_print("Mode: fMRIPrep only (using existing BIDS data)", flush=True)
 
     # Add local dcm2niix to PATH if available
     local_dcm2niix_dir = project_root / "tools" / "dcm2niix"
@@ -292,7 +332,36 @@ Examples:
     # Build task list
     tasks = []
     
-    if args.subject and args.session:
+    if fmriprep_only_mode:
+        # Discover subjects/sessions from existing BIDS folder structure
+        safe_print(f"Scanning BIDS folder {bids_dir} for subjects...", flush=True)
+        
+        for sub_dir in sorted(bids_dir.iterdir()):
+            if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
+                continue
+            
+            sub_id = sub_dir.name.replace("sub-", "")
+            sessions = []
+            
+            # Check for session folders
+            for ses_dir in sorted(sub_dir.iterdir()):
+                if ses_dir.is_dir() and ses_dir.name.startswith("ses-"):
+                    ses_id = ses_dir.name.replace("ses-", "")
+                    sessions.append(ses_id)
+            
+            # If no session folders, treat as single session
+            if not sessions:
+                sessions = ["01"]  # Default session
+            
+            safe_print(f"  Found subject {sub_id} with {len(sessions)} session(s)", flush=True)
+            
+            for ses_id in sessions:
+                tasks.append({
+                    "sub_id": sub_id,
+                    "ses_id": ses_id,
+                    "dicom_path": None  # Not needed for fMRIPrep-only mode
+                })
+    elif args.subject and args.session:
         tasks.append({
             "sub_id": sanitize_id(args.subject),
             "ses_id": args.session,

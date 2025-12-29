@@ -289,11 +289,11 @@ class App(ctk.CTk):
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_actions.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
-        self.frame_actions.grid_columnconfigure((0, 1), weight=1)
+        self.frame_actions.grid_columnconfigure((0, 1, 2), weight=1)
 
         self.btn_bids_only = ctk.CTkButton(
             self.frame_actions,
-            text="▶ Run BIDS Conversion",
+            text="📊 Run BIDS Conversion",
             height=50,
             fg_color="#2E7D32",  # Green
             hover_color="#1B5E20",
@@ -302,20 +302,32 @@ class App(ctk.CTk):
         )
         self.btn_bids_only.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
 
+        self.btn_fmriprep_only = ctk.CTkButton(
+            self.frame_actions,
+            text="🧠 Run fMRIPrep Only",
+            height=50,
+            fg_color="#7B1FA2",  # Purple
+            hover_color="#4A148C",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            command=self.run_fmriprep_only
+        )
+        self.btn_fmriprep_only.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        
         self.btn_full_pipeline = ctk.CTkButton(
             self.frame_actions,
-            text="▶▶ Run Full Pipeline",
+            text="🚀 Run Full Pipeline",
             height=50,
             fg_color="#1565C0",  # Blue
             hover_color="#0D47A1",
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_full_pipeline
         )
-        self.btn_full_pipeline.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
+        self.btn_full_pipeline.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
         
         # Internal state for pipeline steps (not shown in UI)
         self._run_bids = True
         self._run_fmriprep = False
+        self._fmriprep_only_mode = False
 
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
@@ -324,27 +336,14 @@ class App(ctk.CTk):
         self.frame_progress.grid_remove()  # Hide initially
         
         self.progress_bar = ctk.CTkProgressBar(self.frame_progress, mode="determinate")
-        self.progress_bar.grid(row=0, column=0, sticky="ew", padx=(0, 10))
+        self.progress_bar.grid(row=0, column=0, sticky="ew")
         self.progress_bar.set(0)
-        
-        self.btn_stop = ctk.CTkButton(
-            self.frame_progress,
-            text="⏹ Stop",
-            width=80,
-            height=28,
-            fg_color="#C62828",  # Red
-            hover_color="#B71C1C",
-            font=ctk.CTkFont(size=12, weight="bold"),
-            command=self.request_stop
-        )
-        self.btn_stop.grid(row=0, column=1)
         
         # Progress tracking variables
         self.total_tasks = 0
         self.completed_tasks = 0
         self.current_process = None
         self.current_output_folder = None
-        self.stop_requested = False
         
         # Progress animation variables
         self.progress_animation_id = None
@@ -355,7 +354,7 @@ class App(ctk.CTk):
         # --- Status Label ---
         self.label_status = ctk.CTkLabel(
             self.main_scroll, 
-            text="Ready", 
+            text="", 
             font=ctk.CTkFont(size=12),
             text_color="#888888"
         )
@@ -533,20 +532,120 @@ class App(ctk.CTk):
                 self._toggle_fmriprep_options()
             return
         
+        # Run Docker preflight check before starting
         self._run_bids = True
         self._run_fmriprep = True
-        self._start_pipeline_internal("BIDS Conversion + fMRIPrep")
+        self._fmriprep_only_mode = False
+        self._run_with_docker_preflight("BIDS Conversion + fMRIPrep")
+
+    def run_fmriprep_only(self):
+        """Run fMRIPrep on an existing BIDS folder (uses input folder as BIDS folder)."""
+        # Validate fMRIPrep options
+        if not self._validate_fmriprep_options():
+            self.console.log("⚠️  Please fix fMRIPrep options before running.", "warning")
+            # Expand options panel if collapsed
+            if not self.fmriprep_options_visible:
+                self._toggle_fmriprep_options()
+            return
+        
+        # Use input folder as BIDS folder
+        bids_folder = self.entry_input.get().strip()
+        
+        if not bids_folder:
+            self.console.log("⚠️  Please enter the BIDS folder path in the Source Folder field.", "warning")
+            return
+        
+        # Validate it looks like a BIDS folder
+        bids_path = Path(bids_folder)
+        if not bids_path.exists():
+            self.console.log(f"⚠️  Folder does not exist: {bids_folder}", "warning")
+            return
+            
+        dataset_desc = bids_path / "dataset_description.json"
+        if not dataset_desc.exists():
+            self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
+            self.console.log("   (Missing dataset_description.json)", "warning")
+            self.console.log("   Tip: For fMRIPrep Only, set Source Folder to your BIDS output folder.", "info")
+            return
+        
+        self._run_bids = False
+        self._run_fmriprep = True
+        self._fmriprep_only_mode = True
+        self._bids_folder_for_fmriprep = bids_folder
+        self._run_with_docker_preflight("fMRIPrep Only")
+
+    def _run_with_docker_preflight(self, mode_label):
+        """Run Docker preflight checks before starting fMRIPrep pipeline."""
+        # Clear console and show preflight status
+        self.console.configure(state="normal")
+        self.console.delete("1.0", "end")
+        self.console.configure(state="disabled")
+        
+        self.console.log("🔍 Running pre-flight checks for fMRIPrep...", "header")
+        self.console.log("=" * 60)
+        
+        # Disable buttons during preflight
+        self._set_buttons_state("disabled")
+        
+        # Run preflight in background thread
+        def preflight_thread():
+            try:
+                # Import the preflight function (dynamic import for flexibility)
+                import importlib.util
+                runner_path = Path(__file__).parent.parent / "fmriprep" / "runner.py"
+                spec = importlib.util.spec_from_file_location("runner", runner_path)
+                if spec is None or spec.loader is None:
+                    raise ImportError(f"Could not load module from {runner_path}")
+                runner_module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(runner_module)
+                preflight_check = runner_module.preflight_check
+                
+                def log_callback(message):
+                    self.console.log(message)
+                
+                success, error_msg = preflight_check(
+                    callback=log_callback,
+                    auto_start_docker=True,
+                    auto_pull_image=True
+                )
+                
+                if success:
+                    self.console.log("")
+                    self.console.log("✅ All pre-flight checks passed!", "success")
+                    self.console.log("=" * 60)
+                    self.console.log("")
+                    # Now start the actual pipeline
+                    self.after(100, lambda: self._start_pipeline_internal(mode_label))
+                else:
+                    self.console.log("")
+                    self.console.log("❌ Pre-flight check failed:", "error")
+                    if error_msg:
+                        for line in error_msg.split('\n'):
+                            self.console.log(f"   {line}", "error")
+                    self._set_buttons_state("normal")
+                    self.label_status.configure(text="Pre-flight check failed", text_color="#F44336")
+                    
+            except Exception as e:
+                self.console.log(f"❌ Error during pre-flight check: {e}", "error")
+                self._set_buttons_state("normal")
+                self.label_status.configure(text="Error", text_color="#F44336")
+        
+        threading.Thread(target=preflight_thread, daemon=True).start()
 
     def _start_pipeline_internal(self, mode_label):
         """Start the pipeline with the configured options."""
-        if not self._validate_paths():
-            return
+        # For fMRIPrep-only mode, we use the BIDS folder directly
+        if self._fmriprep_only_mode:
+            bids_folder = self._bids_folder_for_fmriprep
+        else:
+            if not self._validate_paths():
+                return
+            bids_folder = None
 
         input_dir = self.entry_input.get().strip()
         output_dir = self.entry_output.get().strip()
 
         self.is_running = True
-        self.stop_requested = False
         self.current_output_folder = None
         self._set_buttons_state("disabled")
         
@@ -565,30 +664,43 @@ class App(ctk.CTk):
         self.console.configure(state="disabled")
         
         self.console.log(f"🚀 {mode_label}", "header")
-        self.console.log(f"📁 Source: {input_dir}")
-        self.console.log(f"📂 Output Root: {output_dir}")
+        if self._fmriprep_only_mode:
+            self.console.log(f"📁 BIDS Folder: {bids_folder}")
+        else:
+            self.console.log(f"📁 Source: {input_dir}")
+            self.console.log(f"📂 Output Root: {output_dir}")
         self.console.log("=" * 60)
 
-        self.label_status.configure(text="Processing...", text_color="#FFC107")
-
         # Run in background thread
-        threading.Thread(target=self.run_subprocess, args=(input_dir, output_dir), daemon=True).start()
+        threading.Thread(
+            target=self.run_subprocess, 
+            args=(input_dir, output_dir, bids_folder), 
+            daemon=True
+        ).start()
 
     def _set_buttons_state(self, state):
         """Enable/disable all action buttons."""
         self.btn_bids_only.configure(state=state)
         self.btn_full_pipeline.configure(state=state)
+        self.btn_fmriprep_only.configure(state=state)
         self.btn_browse_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
-    def run_subprocess(self, input_dir, output_dir):
+    def run_subprocess(self, input_dir, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
         
-        cmd = [
-            sys.executable, str(script_path), 
-            "--input", input_dir, 
-            "--output_dir", output_dir
-        ]
+        # For fMRIPrep-only mode, use the BIDS folder as input
+        if self._fmriprep_only_mode and bids_folder:
+            cmd = [
+                sys.executable, str(script_path),
+                "--bids-folder", bids_folder
+            ]
+        else:
+            cmd = [
+                sys.executable, str(script_path), 
+                "--input", input_dir, 
+                "--output_dir", output_dir
+            ]
 
         if not self._run_bids:
             cmd.append("--skip-bids")
@@ -627,10 +739,6 @@ class App(ctk.CTk):
                 raise RuntimeError("Failed to capture subprocess output")
             
             for line in self.current_process.stdout:
-                # Check if stop was requested
-                if self.stop_requested:
-                    break
-                    
                 stripped_line = line.strip()
                 
                 # Capture output folder path
@@ -645,11 +753,6 @@ class App(ctk.CTk):
                 # Display all other lines
                 self.console.log(stripped_line)
             
-            # Handle stop request
-            if self.stop_requested:
-                self._perform_stop()
-                return
-            
             self.current_process.wait()
             
             # Ensure progress bar reaches 100% at completion
@@ -658,7 +761,7 @@ class App(ctk.CTk):
             if self.current_process.returncode == 0:
                 self.console.log("=" * 60)
                 self.console.log("Conversion complete! Check your output folder for results.", "success")
-                self.after(0, self._update_status_success)
+                # No status message - only show errors/warnings
             else:
                 self.console.log("=" * 60)
                 self.console.log("Conversion finished with some problems. Check the report for details.", "error")
@@ -680,11 +783,6 @@ class App(ctk.CTk):
             self.completed_tasks = 0
             self.current_progress = 0.0
             self.target_progress = 0.0
-            sessions_word = "session" if self.total_tasks == 1 else "sessions"
-            self.after(0, lambda: self.label_status.configure(
-                text=f"Preparing to convert {self.total_tasks} {sessions_word}...", 
-                text_color="#FFC107"
-            ))
         
         # [PROGRESS:TASK_START:N] - Task N starting
         elif match := re.match(r'\[PROGRESS:TASK_START:(\d+)\]', marker):
@@ -709,19 +807,11 @@ class App(ctk.CTk):
                 stage_progress = (stage_num / total_stages) / self.total_tasks
                 self.target_progress = task_base + stage_progress * 0.95
             
-            # User-friendly status message
-            self.after(0, lambda s=stage_name, sub=sub_id, ses=ses_id: self.label_status.configure(
-                text=f"Subject {sub}, Session {ses}: {s}",
-                text_color="#FFC107"
-            ))
+            # Progress tracking only - no status message for normal progress
         
-        # [PROGRESS:STATUS:message] - General status update
+        # [PROGRESS:STATUS:message] - General status update (no UI status for normal messages)
         elif match := re.match(r'\[PROGRESS:STATUS:(.+)\]', marker):
-            message = match.group(1)
-            self.after(0, lambda m=message: self.label_status.configure(
-                text=m,
-                text_color="#FFC107"
-            ))
+            pass  # Progress tracking only - no status message
         
         # [PROGRESS:TASK:N] - Task N completed
         elif match := re.match(r'\[PROGRESS:TASK:(\d+)\]', marker):
@@ -733,23 +823,14 @@ class App(ctk.CTk):
                 self.target_progress = self.current_progress
                 self.after(0, lambda p=self.current_progress: self.progress_bar.set(p))
                 
-                remaining = self.total_tasks - self.completed_tasks
-                if remaining > 0:
-                    sessions_word = "session" if remaining == 1 else "sessions"
-                    self.after(0, lambda r=remaining, w=sessions_word: self.label_status.configure(
-                        text=f"{r} {w} remaining...",
-                        text_color="#FFC107"
-                    ))
+                # Progress tracking only - no status message for normal progress
         
         # [PROGRESS:COMPLETE] - All done
         elif marker == "[PROGRESS:COMPLETE]":
             self._stop_progress_animation()
             self.current_progress = 1.0
             self.after(0, lambda: self.progress_bar.set(1.0))
-            self.after(0, lambda: self.label_status.configure(
-                text="Cleaning up and generating report...",
-                text_color="#FFC107"
-            ))
+            # No status message - only show errors/warnings
     
     def _start_progress_animation(self):
         """Start animating the progress bar gradually."""
@@ -765,7 +846,7 @@ class App(ctk.CTk):
     
     def _animate_progress(self):
         """Gradually animate progress towards target."""
-        if not self.task_in_progress or self.stop_requested:
+        if not self.task_in_progress:
             self.progress_animation_id = None
             return
         
@@ -779,94 +860,6 @@ class App(ctk.CTk):
         
         # Continue animation every 100ms
         self.progress_animation_id = self.after(100, self._animate_progress)
-
-    def request_stop(self):
-        """Handle stop button click - show confirmation dialog."""
-        if not self.is_running:
-            return
-            
-        # Show confirmation dialog
-        result = messagebox.askyesno(
-            "Confirm Stop",
-            "Are you sure you want to cancel the execution?\n\nAll processed sessions will be deleted.",
-            icon="warning"
-        )
-        
-        if result:  # User clicked Yes
-            self.stop_requested = True
-            self.btn_stop.configure(state="disabled", text="Stopping...")
-            self.console.log("⏹ Stop requested by user...", "warning")
-        # If No, just continue (do nothing)
-    
-    def _perform_stop(self):
-        """Terminate process and clean up output folder."""
-        # Capture values for background cleanup
-        process_to_kill = self.current_process
-        folder_to_delete = self.current_output_folder
-        
-        # Immediately clear references and reset UI
-        self.current_process = None
-        self.current_output_folder = None
-        
-        self.console.log("=" * 60)
-        self.console.log("⏹ EXECUTION CANCELLED BY USER", "warning")
-        self.after(0, lambda: self.label_status.configure(
-            text="⏹ Cancelled by user", 
-            text_color="#FFC107"
-        ))
-        
-        # Reset UI immediately so user can start new process
-        self.after(0, self._reset_ui)
-        
-        # Cleanup in background thread
-        def cleanup_background():
-            try:
-                # Terminate the subprocess (platform-specific)
-                if process_to_kill:
-                    try:
-                        if IS_WINDOWS:
-                            # On Windows, use taskkill to terminate process tree
-                            subprocess.run(
-                                ['taskkill', '/F', '/T', '/PID', str(process_to_kill.pid)],
-                                capture_output=True,
-                                timeout=10
-                            )
-                        else:
-                            # On Unix, send SIGTERM to process group
-                            try:
-                                os.killpg(os.getpgid(process_to_kill.pid), signal.SIGTERM)
-                            except (ProcessLookupError, PermissionError):
-                                process_to_kill.terminate()
-                        
-                        try:
-                            process_to_kill.wait(timeout=5)
-                        except subprocess.TimeoutExpired:
-                            process_to_kill.kill()
-                    except Exception:
-                        # Last resort
-                        try:
-                            process_to_kill.kill()
-                        except Exception:
-                            pass
-                
-                # Delete the output folder
-                if folder_to_delete:
-                    output_path = Path(folder_to_delete)
-                    if output_path.exists():
-                        # On Windows, sometimes files are locked briefly
-                        for attempt in range(3):
-                            try:
-                                shutil.rmtree(output_path)
-                                break
-                            except PermissionError:
-                                import time
-                                time.sleep(1)
-                        
-            except Exception as e:
-                # Log errors but don't block - user already moved on
-                self.console.log(f"Warning: Background cleanup: {e}", "warning")
-        
-        threading.Thread(target=cleanup_background, daemon=True).start()
     
     def _update_status_success(self):
         self.label_status.configure(
@@ -882,14 +875,12 @@ class App(ctk.CTk):
 
     def _reset_ui(self):
         self.is_running = False
-        self.stop_requested = False
         self.task_in_progress = False
         self._stop_progress_animation()
         self.current_progress = 0.0
         self.target_progress = 0.0
         self.progress_bar.set(0)
         self.frame_progress.grid_remove()
-        self.btn_stop.configure(state="normal", text="⏹ Stop")
         self._set_buttons_state("normal")
 
 

@@ -9,7 +9,12 @@ import subprocess
 import sys
 import json
 import base64
+import time
+import shutil
 from pathlib import Path
+
+# Default fMRIPrep Docker image
+FMRIPREP_IMAGE = "nipreps/fmriprep:latest"
 
 
 def to_docker_path(path):
@@ -58,6 +63,146 @@ def find_freesurfer_license():
     return None
 
 
+def is_docker_installed():
+    """Check if Docker is installed on the system."""
+    return shutil.which("docker") is not None
+
+
+def is_docker_running():
+    """Check if Docker daemon is running."""
+    try:
+        result = subprocess.run(
+            ["docker", "info"],
+            capture_output=True,
+            text=True,
+            timeout=10
+        )
+        return result.returncode == 0
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def start_docker(timeout=60, callback=None):
+    """
+    Attempt to start Docker Desktop.
+    
+    Args:
+        timeout: Maximum seconds to wait for Docker to start
+        callback: Optional callback function for progress updates (receives message string)
+        
+    Returns:
+        Tuple of (success: bool, error_message: str or None)
+    """
+    if is_docker_running():
+        return True, None
+    
+    if callback:
+        callback("Starting Docker Desktop...")
+    
+    # Try to start Docker based on platform
+    if sys.platform == "darwin":
+        # macOS - open Docker Desktop app
+        try:
+            subprocess.run(["open", "-a", "Docker"], check=True)
+        except subprocess.CalledProcessError:
+            return False, "Could not start Docker Desktop. Please start it manually."
+    elif sys.platform == "win32":
+        # Windows - try to start Docker Desktop
+        docker_paths = [
+            Path(r"C:\Program Files\Docker\Docker\Docker Desktop.exe"),
+            Path.home() / "AppData" / "Local" / "Docker" / "Docker Desktop.exe",
+        ]
+        started = False
+        for docker_path in docker_paths:
+            if docker_path.exists():
+                try:
+                    subprocess.Popen([str(docker_path)])
+                    started = True
+                    break
+                except Exception:
+                    continue
+        if not started:
+            return False, "Could not find Docker Desktop. Please start it manually."
+    else:
+        # Linux - try systemctl
+        try:
+            subprocess.run(["sudo", "systemctl", "start", "docker"], check=True, timeout=30)
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            return False, "Could not start Docker service. Try: sudo systemctl start docker"
+    
+    # Wait for Docker to be ready
+    start_time = time.time()
+    while time.time() - start_time < timeout:
+        if callback:
+            elapsed = int(time.time() - start_time)
+            callback(f"Waiting for Docker to start... ({elapsed}s)")
+        
+        if is_docker_running():
+            if callback:
+                callback("Docker is ready!")
+            return True, None
+        time.sleep(2)
+    
+    return False, f"Docker did not start within {timeout} seconds. Please start it manually."
+
+
+def is_fmriprep_image_available():
+    """Check if the fMRIPrep Docker image is downloaded."""
+    try:
+        result = subprocess.run(
+            ["docker", "images", "-q", FMRIPREP_IMAGE],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        return bool(result.stdout.strip())
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return False
+
+
+def pull_fmriprep_image(callback=None):
+    """
+    Pull the fMRIPrep Docker image.
+    
+    Args:
+        callback: Optional callback function for progress updates
+        
+    Returns:
+        Tuple of (success: bool, error_message: str or None)
+    """
+    if callback:
+        callback(f"Downloading fMRIPrep image ({FMRIPREP_IMAGE})...")
+        callback("This may take 10-30 minutes on first run...")
+    
+    try:
+        # Use Popen to stream output
+        process = subprocess.Popen(
+            ["docker", "pull", FMRIPREP_IMAGE],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1
+        )
+        
+        for line in process.stdout:
+            line = line.strip()
+            if line and callback:
+                # Simplify Docker pull progress messages
+                if "Pulling" in line or "Downloading" in line or "Extracting" in line:
+                    callback(f"  {line[:80]}")
+        
+        process.wait()
+        
+        if process.returncode == 0:
+            if callback:
+                callback("fMRIPrep image downloaded successfully!")
+            return True, None
+        else:
+            return False, "Failed to download fMRIPrep image."
+    except Exception as e:
+        return False, f"Error pulling fMRIPrep image: {e}"
+
+
 def check_docker():
     """
     Check if Docker is available and running.
@@ -65,20 +210,91 @@ def check_docker():
     Returns:
         Tuple of (available: bool, error_message: str or None)
     """
-    try:
-        result = subprocess.run(
-            ["docker", "info"],
-            capture_output=True,
-            text=True,
-            timeout=30
+    if not is_docker_installed():
+        return False, "Docker is not installed. Please install Docker Desktop from https://docker.com"
+    
+    if not is_docker_running():
+        return False, "Docker is not running. Please start Docker Desktop."
+    
+    return True, None
+
+
+def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True):
+    """
+    Perform all pre-flight checks for fMRIPrep.
+    
+    This function checks and optionally fixes all prerequisites:
+    1. Docker installation
+    2. Docker daemon running (auto-start if possible)
+    3. fMRIPrep image available (auto-pull if missing)
+    4. FreeSurfer license file
+    
+    Args:
+        callback: Optional callback for progress messages
+        auto_start_docker: Attempt to start Docker if not running
+        auto_pull_image: Attempt to pull fMRIPrep image if missing
+        
+    Returns:
+        Tuple of (success: bool, error_message: str or None)
+    """
+    # Check Docker installation
+    if callback:
+        callback("Checking Docker installation...")
+    
+    if not is_docker_installed():
+        return False, (
+            "Docker is not installed.\n\n"
+            "Please install Docker Desktop:\n"
+            "• macOS/Windows: https://www.docker.com/products/docker-desktop\n"
+            "• Linux: https://docs.docker.com/engine/install/"
         )
-        if result.returncode != 0:
+    
+    # Check if Docker is running (auto-start if needed)
+    if callback:
+        callback("Checking if Docker is running...")
+    
+    if not is_docker_running():
+        if auto_start_docker:
+            success, error = start_docker(timeout=90, callback=callback)
+            if not success:
+                return False, error
+        else:
             return False, "Docker is not running. Please start Docker Desktop."
-        return True, None
-    except FileNotFoundError:
-        return False, "Docker is not installed or not in PATH."
-    except subprocess.TimeoutExpired:
-        return False, "Docker is not responding. Please check Docker Desktop."
+    
+    # Check if fMRIPrep image is available
+    if callback:
+        callback("Checking fMRIPrep Docker image...")
+    
+    if not is_fmriprep_image_available():
+        if auto_pull_image:
+            success, error = pull_fmriprep_image(callback=callback)
+            if not success:
+                return False, error
+        else:
+            return False, (
+                f"fMRIPrep Docker image not found.\n\n"
+                f"Run this command to download it:\n"
+                f"  docker pull {FMRIPREP_IMAGE}"
+            )
+    
+    # Check FreeSurfer license
+    if callback:
+        callback("Checking FreeSurfer license...")
+    
+    license_path = find_freesurfer_license()
+    if not license_path:
+        return False, (
+            "FreeSurfer license file not found.\n\n"
+            "To get a free license:\n"
+            "1. Register at https://surfer.nmr.mgh.harvard.edu/registration.html\n"
+            "2. You'll receive an email with the license\n"
+            "3. Save it as '.freesurfer_license.txt' in the project folder"
+        )
+    
+    if callback:
+        callback("All pre-flight checks passed!")
+    
+    return True, None
 
 
 def run_fmriprep(
@@ -147,7 +363,7 @@ def run_fmriprep(
         "-v", f"{bids_mount}:/data:ro",
         "-v", f"{output_mount}:/out",
         "-v", f"{license_mount}:/opt/freesurfer/license.txt:ro",
-        "nipreps/fmriprep:latest",
+        FMRIPREP_IMAGE,
         "/data", "/out",
         "participant",
         "--participant-label", participant_label,
