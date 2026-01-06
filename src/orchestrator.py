@@ -52,7 +52,7 @@ setup_encoding()
 
 def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script, 
                         skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker, 
-                        desc_created_event, report, anonymize=False):
+                        desc_created_event, report, anonymize=False, debug_log_file=None):
     """
     Process a single subject-session task.
     
@@ -142,14 +142,72 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
             
             if result.returncode != 0:
                 safe_print(f"[FAIL] {task_label} - fMRIPrep failed", flush=True)
-                report.add_failure(sub_id, ses_id, "fMRIPrep processing failed", "fMRIPrep")
-                error = f"{task_label} (fMRIPrep failed)"
+                
+                # Write detailed error output to debug log file
+                if debug_log_file:
+                    try:
+                        with open(debug_log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"\n{'='*80}\n")
+                            f.write(f"fMRIPrep FAILURE: {task_label}\n")
+                            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                            f.write(f"Return code: {result.returncode}\n")
+                            f.write(f"{'='*80}\n\n")
+                            
+                            if result.stdout:
+                                f.write("--- STDOUT ---\n")
+                                f.write(result.stdout)
+                                f.write("\n\n")
+                            
+                            if result.stderr:
+                                f.write("--- STDERR ---\n")
+                                f.write(result.stderr)
+                                f.write("\n\n")
+                    except Exception as e:
+                        safe_print(f"Warning: Could not write to debug log: {e}", flush=True)
+                
+                # Print detailed error output for debugging
+                if result.stdout:
+                    safe_print("\n--- fMRIPrep stdout ---", flush=True)
+                    safe_print(result.stdout, flush=True)
+                
+                if result.stderr:
+                    safe_print("\n--- fMRIPrep stderr ---", flush=True)
+                    safe_print(result.stderr, flush=True)
+                
+                # Extract key error message from stderr
+                error_detail = "fMRIPrep processing failed"
+                if result.stderr:
+                    stderr_lines = result.stderr.split('\n')
+                    # Look for the last meaningful error line
+                    for line in reversed(stderr_lines):
+                        line = line.strip()
+                        if line and not line.startswith('[') and len(line) > 10:
+                            error_detail = line[:200]  # Limit length
+                            break
+                
+                # Also check stdout for error messages
+                if result.stdout and error_detail == "fMRIPrep processing failed":
+                    stdout_lines = result.stdout.split('\n')
+                    for line in reversed(stdout_lines):
+                        line = line.strip()
+                        if line and any(keyword in line.lower() for keyword in ['error', 'failed', 'exception']):
+                            error_detail = line[:200]
+                            break
+                
+                report.add_failure(sub_id, ses_id, error_detail, "fMRIPrep")
+                error = f"{task_label} (fMRIPrep failed: {error_detail[:100]})"
+                
+                # Show debug log location if available
+                if debug_log_file:
+                    safe_print(f"\n💾 Full error details saved to: {debug_log_file}", flush=True)
             else:
                 safe_print(f"[OK] {task_label} - fMRIPrep completed ({fmriprep_elapsed:.1f}s)", flush=True)
         except Exception as e:
             error = f"{task_label} (fMRIPrep error: {e})"
             report.add_failure(sub_id, ses_id, str(e), "fMRIPrep")
             safe_print(f"[FAIL] {task_label} - fMRIPrep failed: {e}", flush=True)
+            import traceback
+            safe_print(f"Traceback:\n{traceback.format_exc()}", flush=True)
     
     return error
 
@@ -307,6 +365,13 @@ Examples:
     
     fmriprep_script = project_root / "src" / "fmriprep" / "runner.py"
     
+    # Create debug log file for detailed error tracking
+    debug_log_file = output_folder / "fmriprep_debug.log"
+    if debug_log_file.exists():
+        debug_log_file.unlink()  # Remove old log if exists
+    debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
+    safe_print(f"💾 Debug log: {debug_log_file}", flush=True)
+    
     # Initialize report
     report = ConversionReport()
     report.input_folder = str(input_root)
@@ -448,7 +513,7 @@ Examples:
                 process_single_task,
                 task, bids_dir, derivatives_dir, fmriprep_script,
                 args.skip_bids, args.skip_fmriprep, fmriprep_opts, 
-                progress_tracker, desc_created_event, report, anonymize
+                progress_tracker, desc_created_event, report, anonymize, debug_log_file
             ): task for task in all_tasks
         }
         

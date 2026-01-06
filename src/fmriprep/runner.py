@@ -398,18 +398,72 @@ def run_fmriprep(
     print(f"BIDS Directory: {bids_dir}")
     print(f"Output Directory: {output_dir}")
     print(f"Options: spaces={output_spaces}, fs_reconall={fs_reconall}")
+    print(f"Docker command: {' '.join(docker_cmd[:10])}...")  # Show first part of command
     
-    # Run fMRIPrep
+    # Run fMRIPrep with output capture
     try:
-        result = subprocess.run(docker_cmd, check=False)
+        result = subprocess.run(
+            docker_cmd,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            errors='replace'
+        )
+        
+        # Print stdout/stderr for debugging
+        if result.stdout:
+            print("--- fMRIPrep stdout ---")
+            print(result.stdout)
+        
+        if result.stderr:
+            print("--- fMRIPrep stderr ---")
+            print(result.stderr)
+        
         if result.returncode == 0:
             return True, None
         else:
-            return False, f"fMRIPrep exited with code {result.returncode}"
+            # Build detailed error message
+            error_msg = f"fMRIPrep exited with code {result.returncode}\n\n"
+            
+            # Extract key error information from stderr
+            if result.stderr:
+                # Look for common error patterns
+                stderr_lines = result.stderr.split('\n')
+                error_lines = []
+                for line in stderr_lines:
+                    line_lower = line.lower()
+                    if any(keyword in line_lower for keyword in ['error', 'failed', 'exception', 'traceback', 'cannot', 'unable']):
+                        error_lines.append(line)
+                
+                if error_lines:
+                    error_msg += "Key error messages:\n"
+                    error_msg += "\n".join(error_lines[-20:])  # Last 20 error lines
+                else:
+                    # If no obvious errors, show last part of stderr
+                    error_msg += "Last stderr output:\n"
+                    error_msg += "\n".join(stderr_lines[-30:])
+            
+            # Also check stdout for errors
+            if result.stdout:
+                stdout_lines = result.stdout.split('\n')
+                error_lines = []
+                for line in stdout_lines:
+                    line_lower = line.lower()
+                    if any(keyword in line_lower for keyword in ['error', 'failed', 'exception', 'traceback']):
+                        error_lines.append(line)
+                
+                if error_lines:
+                    error_msg += "\n\nKey stdout errors:\n"
+                    error_msg += "\n".join(error_lines[-20:])
+            
+            return False, error_msg
+            
     except KeyboardInterrupt:
         return False, "Interrupted by user"
+    except FileNotFoundError:
+        return False, "Docker command not found. Is Docker installed?"
     except Exception as e:
-        return False, str(e)
+        return False, f"Exception running fMRIPrep: {str(e)}\n\nTraceback:\n{type(e).__name__}: {e}"
 
 
 # Command-line interface for backward compatibility
