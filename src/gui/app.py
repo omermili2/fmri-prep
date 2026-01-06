@@ -558,25 +558,76 @@ class App(ctk.CTk):
             return
         
         # Validate it looks like a BIDS folder
-        bids_path = Path(bids_folder)
+        bids_path = Path(bids_folder).resolve()
         if not bids_path.exists():
             self.console.log(f"⚠️  Folder does not exist: {bids_folder}", "warning")
             return
-            
+        
+        # Check if this is the root folder with output_* subfolders
+        # If so, automatically use the most recent one
+        output_subfolders = [p for p in bids_path.iterdir() 
+                            if p.is_dir() and p.name.startswith("output_")]
+        
+        if output_subfolders:
+            # Use the most recent output folder (by modification time)
+            most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
+            bids_path = most_recent.resolve()
+            self.console.log(f"ℹ️  Found output folder: {most_recent.name}", "info")
+            self.console.log(f"   Using this as the BIDS folder.", "info")
+        
+        # Resolve path and check for dataset_description.json
         dataset_desc = bids_path / "dataset_description.json"
+        dataset_desc_resolved = dataset_desc.resolve() if dataset_desc.exists() else None
+        
+        # Debug: list what files are actually in the folder
+        try:
+            files_in_folder = [f.name for f in bids_path.iterdir() if f.is_file()]
+            self.console.log(f"ℹ️  Files in folder: {', '.join(files_in_folder[:10])}", "info")
+        except Exception as e:
+            self.console.log(f"⚠️  Could not list files: {e}", "warning")
+        
         if not dataset_desc.exists():
-            self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
-            self.console.log("   (Missing dataset_description.json)", "warning")
-            self.console.log("   Tip: Select the OUTPUT folder from a previous BIDS conversion.", "info")
-            self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
-            return
+            # On Windows, check case-insensitively
+            if sys.platform == 'win32':
+                found_file = None
+                try:
+                    for item in bids_path.iterdir():
+                        if item.is_file() and item.name.lower() == "dataset_description.json":
+                            found_file = item
+                            break
+                except Exception as e:
+                    self.console.log(f"⚠️  Error checking files: {e}", "warning")
+                
+                if found_file:
+                    dataset_desc = found_file
+                    self.console.log(f"ℹ️  Found file with different case: {found_file.name}", "info")
+                else:
+                    self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
+                    self.console.log("   (Missing dataset_description.json)", "warning")
+                    self.console.log(f"   Checked path: {bids_path}", "info")
+                    self.console.log(f"   Absolute path: {bids_path.resolve()}", "info")
+                    self.console.log("   Tip: Select the OUTPUT folder from a previous BIDS conversion.", "info")
+                    self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
+                    return
+            else:
+                self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
+                self.console.log("   (Missing dataset_description.json)", "warning")
+                self.console.log(f"   Checked path: {bids_path}", "info")
+                self.console.log(f"   Absolute path: {bids_path.resolve()}", "info")
+                self.console.log("   Tip: Select the OUTPUT folder from a previous BIDS conversion.", "info")
+                self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
+                return
         
         # Check for subject folders
         has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
         if not has_subjects:
             self.console.log("⚠️  No 'sub-*' folders found in the BIDS folder.", "warning")
+            self.console.log(f"   Checked: {bids_path}", "info")
             self.console.log("   Make sure you're selecting the correct BIDS output folder.", "info")
             return
+        
+        # Update bids_folder to the actual path we're using
+        bids_folder = str(bids_path.resolve())
         
         self._run_bids = False
         self._run_fmriprep = True
