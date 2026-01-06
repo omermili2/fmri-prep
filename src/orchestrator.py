@@ -331,9 +331,27 @@ Examples:
         if not bids_folder_path.exists():
             safe_print(f"Error: BIDS folder does not exist: {bids_folder_path}", flush=True)
             sys.exit(1)
-        if not (bids_folder_path / "dataset_description.json").exists():
-            safe_print(f"Error: Not a valid BIDS folder (missing dataset_description.json): {bids_folder_path}", flush=True)
-            sys.exit(1)
+        
+        # Check for dataset_description.json (case-insensitive on Windows)
+        desc_path = bids_folder_path / "dataset_description.json"
+        if not desc_path.exists():
+            # On Windows, check case-insensitively
+            if sys.platform == 'win32':
+                found = False
+                try:
+                    for item in bids_folder_path.iterdir():
+                        if item.is_file() and item.name.lower() == "dataset_description.json":
+                            found = True
+                            safe_print(f"Found dataset_description.json (case variant: {item.name})", flush=True)
+                            break
+                except Exception as e:
+                    safe_print(f"Warning: Could not check for dataset_description.json: {e}", flush=True)
+                
+                if not found:
+                    safe_print(f"Warning: dataset_description.json not found. Will create it...", flush=True)
+            else:
+                safe_print(f"Warning: dataset_description.json not found. Will create it...", flush=True)
+        
         # Force skip-bids in this mode
         args.skip_bids = True
     else:
@@ -351,6 +369,18 @@ Examples:
         derivatives_dir = bids_dir / "derivatives"
         output_folder = bids_dir
         input_root = bids_dir  # For report
+        
+        # Create dataset_description.json if missing (for incomplete conversions)
+        if not (bids_dir / "dataset_description.json").exists():
+            safe_print(f"Creating dataset_description.json in {bids_dir}...", flush=True)
+            if create_dataset_description(bids_dir):
+                safe_print(f"✓ Created dataset_description.json", flush=True)
+            else:
+                # Check if it exists now (might have been created by another process)
+                if (bids_dir / "dataset_description.json").exists():
+                    safe_print(f"✓ dataset_description.json now exists", flush=True)
+                else:
+                    safe_print(f"Warning: Could not create dataset_description.json", flush=True)
     else:
         input_root = Path(args.input).resolve()
         base_output = Path(args.output_dir).resolve()
