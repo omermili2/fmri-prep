@@ -11,10 +11,33 @@ import json
 import base64
 import time
 import shutil
+import io
 from pathlib import Path
 
 # Default fMRIPrep Docker image
 FMRIPREP_IMAGE = "nipreps/fmriprep:latest"
+
+
+def safe_print_error(msg):
+    """
+    Safely print error messages, handling Unicode encoding issues on Windows.
+    
+    Args:
+        msg: Error message string (may contain Unicode characters)
+    """
+    try:
+        # Try to print normally first
+        print(msg, file=sys.stderr)
+    except UnicodeEncodeError:
+        # If that fails, replace problematic characters
+        safe_msg = msg.encode('ascii', errors='replace').decode('ascii')
+        print(safe_msg, file=sys.stderr)
+        # Also try with UTF-8 if stderr supports it
+        try:
+            sys.stderr.buffer.write(msg.encode('utf-8', errors='replace'))
+            sys.stderr.buffer.write(b'\n')
+        except Exception:
+            pass
 
 
 def to_docker_path(path):
@@ -294,7 +317,7 @@ def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True)
     if callback:
         callback("All pre-flight checks passed!")
     
-    return True, None
+        return True, None
 
 
 def run_fmriprep(
@@ -427,17 +450,18 @@ def run_fmriprep(
     print(f"Output Directory: {output_dir}")
     print(f"Options: spaces={output_spaces}, fs_reconall={fs_reconall}")
     
-    # Show Docker command with special attention to Windows fixes
+    # Show Docker command (full command for debugging)
     cmd_str = ' '.join(docker_cmd)
-    if is_windows:
-        # Show that tmpfs is included
-        if "--tmpfs" in cmd_str:
-            print(f"Docker command (Windows mode with tmpfs): {' '.join(docker_cmd[:15])}...")
-        else:
-            print(f"WARNING: tmpfs not found in Docker command!")
-            print(f"Docker command: {' '.join(docker_cmd[:15])}...")
+    # Truncate if too long, but show important parts
+    if len(cmd_str) > 200:
+        # Show first part and last part
+        print(f"Docker command: {cmd_str[:150]}... [truncated] ...{cmd_str[-50:]}")
     else:
-        print(f"Docker command: {' '.join(docker_cmd[:15])}...")
+        print(f"Docker command: {cmd_str}")
+    
+    # Confirm tmpfs is applied on Windows
+    if is_windows and "--tmpfs" in cmd_str:
+        print("Note: Using --tmpfs /tmp to avoid Windows multiprocessing issues")
     
     # Run fMRIPrep with output capture
     try:
@@ -473,6 +497,7 @@ def run_fmriprep(
             )
             
             if is_multiproc_error and is_windows:
+                # Use ASCII-safe characters for Windows compatibility
                 error_msg += "[WARNING] WINDOWS DOCKER MULTIPROCESSING ERROR DETECTED\n\n"
                 error_msg += "This is a known issue with Docker Desktop on Windows.\n"
                 error_msg += "The container cannot create Unix sockets for multiprocessing.\n\n"
@@ -491,8 +516,8 @@ def run_fmriprep(
                 error_msg += "4. Check Docker Desktop logs:\n"
                 error_msg += "   - Docker Desktop > Troubleshoot > View logs\n"
                 error_msg += "   - Look for any errors related to file access\n\n"
-                error_msg += "NOTE: The tmpfs fix should have been applied automatically.\n"
-                error_msg += "If you still see this error, the tmpfs may not be working.\n\n"
+                error_msg += "NOTE: The --tmpfs /tmp option should help with this issue.\n"
+                error_msg += "If you still see this error, try the solutions above.\n\n"
                 error_msg += "Full error details:\n"
             
             # Extract key error information from stderr
@@ -544,21 +569,6 @@ def main():
     Usage: python -m src.fmriprep.runner <bids_dir> <output_dir> <participant_label> [options]
     """
     import argparse
-    # Setup UTF-8 encoding for Windows compatibility
-    try:
-        from ..core.utils import setup_encoding
-        setup_encoding()
-    except ImportError:
-        try:
-            from core.utils import setup_encoding
-            setup_encoding()
-        except ImportError:
-            # Fallback: try to set encoding manually
-            import io
-            if sys.stdout.encoding != 'utf-8':
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if sys.stderr.encoding != 'utf-8':
-                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     
     parser = argparse.ArgumentParser(description="Run fMRIPrep via Docker")
     parser.add_argument("bids_dir", help="Path to BIDS dataset")
@@ -599,19 +609,7 @@ def main():
     )
     
     if not success:
-        # Handle Unicode encoding issues on Windows
-        try:
-            print(f"Error: {error}")
-        except UnicodeEncodeError:
-            # Fallback: encode to ASCII with error replacement
-            error_safe = error.encode('ascii', errors='replace').decode('ascii')
-            print(f"Error: {error_safe}")
-            # Also try to print original to stderr with UTF-8
-            import sys
-            try:
-                sys.stderr.buffer.write(f"Error (UTF-8): {error}\n".encode('utf-8'))
-            except:
-                pass
+        safe_print_error(f"Error: {error}")
         sys.exit(1)
     sys.exit(0)
 

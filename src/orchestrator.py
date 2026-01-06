@@ -83,7 +83,7 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
     if skip_bids:
         safe_print(f"[{task_label}] Starting fMRIPrep processing...", flush=True)
     else:
-        safe_print(f"[{task_label}] Starting conversion...", flush=True)
+    safe_print(f"[{task_label}] Starting conversion...", flush=True)
     
     # Signal task start for progress tracking
     progress_tracker.task_start(task_num)
@@ -382,16 +382,16 @@ Examples:
                 else:
                     safe_print(f"Warning: Could not create dataset_description.json", flush=True)
     else:
-        input_root = Path(args.input).resolve()
-        base_output = Path(args.output_dir).resolve()
-        
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_folder = base_output / f"output_{timestamp}"
-        output_folder.mkdir(parents=True, exist_ok=True)
-        
-        # BIDS output goes directly in output folder
-        bids_dir = output_folder
-        derivatives_dir = output_folder / "derivatives"
+    input_root = Path(args.input).resolve()
+    base_output = Path(args.output_dir).resolve()
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_folder = base_output / f"output_{timestamp}"
+    output_folder.mkdir(parents=True, exist_ok=True)
+    
+    # BIDS output goes directly in output folder
+    bids_dir = output_folder
+    derivatives_dir = output_folder / "derivatives"
     
     fmriprep_script = project_root / "src" / "fmriprep" / "runner.py"
     
