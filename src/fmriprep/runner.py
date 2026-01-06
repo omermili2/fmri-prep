@@ -358,17 +358,45 @@ def run_fmriprep(
     output_mount = to_docker_path(output_dir)
     license_mount = to_docker_path(license_path)
     
+    # Detect Windows/WSL 2 for special handling
+    is_windows = sys.platform == 'win32'
+    
     docker_cmd = [
         "docker", "run", "-t", "--rm",
         "-v", f"{bids_mount}:/data:ro",
         "-v", f"{output_mount}:/out",
         "-v", f"{license_mount}:/opt/freesurfer/license.txt:ro",
+    ]
+    
+    # Fix for Windows Docker Desktop multiprocessing issues
+    # Docker Desktop on Windows (with or without WSL 2) can have issues with
+    # Unix sockets used by Python's multiprocessing module
+    if is_windows:
+        # Set environment variables to help with multiprocessing
+        # Use 'spawn' method which works better in containers
+        docker_cmd.extend([
+            "-e", "MPLCONFIGDIR=/tmp/mpl",
+            "-e", "PYTHONUNBUFFERED=1",
+            "-e", "MP_START_METHOD=spawn",
+            "-e", "TMPDIR=/tmp",
+        ])
+        
+        # Use a tmpfs for /tmp to avoid Windows file sharing issues
+        # This creates an in-memory filesystem for temp files and sockets
+        # Size of 2GB should be enough for multiprocessing sockets
+        # This helps with Unix socket creation in Docker containers on Windows
+        # The 'exec' flag allows execution, 'mode=1777' gives proper permissions
+        docker_cmd.extend([
+            "--tmpfs", "/tmp:exec,mode=1777,size=2g",
+        ])
+    
+    docker_cmd.extend([
         FMRIPREP_IMAGE,
         "/data", "/out",
         "participant",
         "--participant-label", participant_label,
         "--skip-bids-validation",
-    ]
+    ])
     
     # Add output spaces
     docker_cmd.extend(["--output-spaces"] + output_spaces)
@@ -424,6 +452,35 @@ def run_fmriprep(
         else:
             # Build detailed error message
             error_msg = f"fMRIPrep exited with code {result.returncode}\n\n"
+            
+            # Check for specific WSL 2 multiprocessing error
+            combined_output = (result.stdout or "") + (result.stderr or "")
+            is_multiproc_error = (
+                "FileNotFoundError" in combined_output and 
+                "multiprocessing" in combined_output.lower() and
+                ("No such file or directory" in combined_output or "socket" in combined_output.lower())
+            )
+            
+            if is_multiproc_error and is_windows:
+                error_msg += "⚠️  WINDOWS DOCKER MULTIPROCESSING ERROR DETECTED\n\n"
+                error_msg += "This is a known issue with Docker Desktop on Windows.\n"
+                error_msg += "The container cannot create Unix sockets for multiprocessing.\n\n"
+                error_msg += "SOLUTIONS TO TRY:\n"
+                error_msg += "1. Restart Docker Desktop completely:\n"
+                error_msg += "   - Right-click Docker Desktop icon > Quit Docker Desktop\n"
+                error_msg += "   - Wait a few seconds, then start it again\n"
+                error_msg += "   - Try running fMRIPrep again\n"
+                error_msg += "2. Try running with fewer threads:\n"
+                error_msg += "   - In fMRIPrep options, reduce nthreads to 2 or 1\n"
+                error_msg += "   - This reduces multiprocessing overhead\n"
+                error_msg += "3. If you have WSL 2 installed:\n"
+                error_msg += "   - Go to Docker Desktop Settings > Resources > WSL Integration\n"
+                error_msg += "   - Enable integration with your WSL distro\n"
+                error_msg += "   - Move data to WSL filesystem (e.g., /mnt/d/data)\n"
+                error_msg += "4. Check Docker Desktop logs:\n"
+                error_msg += "   - Docker Desktop > Troubleshoot > View logs\n"
+                error_msg += "   - Look for any errors related to file access\n\n"
+                error_msg += "Full error details:\n"
             
             # Extract key error information from stderr
             if result.stderr:

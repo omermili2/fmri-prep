@@ -548,11 +548,13 @@ class App(ctk.CTk):
                 self._toggle_fmriprep_options()
             return
         
-        # Use input folder as BIDS folder
-        bids_folder = self.entry_input.get().strip()
+        # For fMRIPrep Only, use the OUTPUT folder as the BIDS folder
+        # (since that's where the BIDS conversion wrote the data)
+        bids_folder = self.entry_output.get().strip()
         
         if not bids_folder:
-            self.console.log("⚠️  Please enter the BIDS folder path in the Source Folder field.", "warning")
+            self.console.log("⚠️  Please select the BIDS output folder in the Output Root Folder field.", "warning")
+            self.console.log("   This should be the folder from a previous BIDS conversion.", "info")
             return
         
         # Validate it looks like a BIDS folder
@@ -565,7 +567,15 @@ class App(ctk.CTk):
         if not dataset_desc.exists():
             self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
             self.console.log("   (Missing dataset_description.json)", "warning")
-            self.console.log("   Tip: For fMRIPrep Only, set Source Folder to your BIDS output folder.", "info")
+            self.console.log("   Tip: Select the OUTPUT folder from a previous BIDS conversion.", "info")
+            self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
+            return
+        
+        # Check for subject folders
+        has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
+        if not has_subjects:
+            self.console.log("⚠️  No 'sub-*' folders found in the BIDS folder.", "warning")
+            self.console.log("   Make sure you're selecting the correct BIDS output folder.", "info")
             return
         
         self._run_bids = False
