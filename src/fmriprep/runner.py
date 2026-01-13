@@ -544,21 +544,36 @@ def main():
     Usage: python -m src.fmriprep.runner <bids_dir> <output_dir> <participant_label> [options]
     """
     import argparse
-    # Setup UTF-8 encoding for Windows compatibility
+
+    # Setup UTF-8 encoding for Windows compatibility.
+    # This works both when the module is executed as part of the `src` package
+    # and when `runner.py` is executed directly as a script by path.
     try:
-        from ..core.utils import setup_encoding
+        if __package__:
+            # Executed as part of the src.fmriprep package
+            from ..core.utils import setup_encoding  # type: ignore[import]
+        else:
+            # Executed as a standalone script: add src/ (parent dir) to sys.path
+            from pathlib import Path
+
+            src_root = Path(__file__).resolve().parent.parent
+            if str(src_root) not in sys.path:
+                sys.path.insert(0, str(src_root))
+            from core.utils import setup_encoding  # type: ignore[import]
+
         setup_encoding()
-    except ImportError:
-        try:
-            from core.utils import setup_encoding
-            setup_encoding()
-        except ImportError:
-            # Fallback: try to set encoding manually
-            import io
-            if sys.stdout.encoding != 'utf-8':
-                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-            if sys.stderr.encoding != 'utf-8':
-                sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    except Exception:
+        # Fallback: try to set encoding manually
+        import io
+
+        if sys.stdout.encoding != "utf-8":
+            sys.stdout = io.TextIOWrapper(
+                sys.stdout.buffer, encoding="utf-8", errors="replace"
+            )
+        if sys.stderr.encoding != "utf-8":
+            sys.stderr = io.TextIOWrapper(
+                sys.stderr.buffer, encoding="utf-8", errors="replace"
+            )
     
     parser = argparse.ArgumentParser(description="Run fMRIPrep via Docker")
     parser.add_argument("bids_dir", help="Path to BIDS dataset")
@@ -607,10 +622,11 @@ def main():
             error_safe = error.encode('ascii', errors='replace').decode('ascii')
             print(f"Error: {error_safe}")
             # Also try to print original to stderr with UTF-8
-            import sys
             try:
-                sys.stderr.buffer.write(f"Error (UTF-8): {error}\n".encode('utf-8'))
-            except:
+                sys.stderr.buffer.write(
+                    f"Error (UTF-8): {error}\n".encode("utf-8")
+                )
+            except Exception:
                 pass
         sys.exit(1)
     sys.exit(0)
