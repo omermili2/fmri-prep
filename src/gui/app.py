@@ -246,7 +246,7 @@ class App(ctk.CTk):
         
         self.check_freesurfer = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
-            text="FreeSurfer surface reconstruction (adds ~6 hours per subject)",
+            text="FreeSurfer surface reconstruction (adds ~6+ hours per subject)",
             font=ctk.CTkFont(size=11)
         )
         self.check_freesurfer.grid(row=4, column=0, padx=30, pady=3, sticky="w")

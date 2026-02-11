@@ -621,7 +621,8 @@ def main():
     
     # Extract options from decoded dict
     output_spaces = opts.get("output_spaces", None)
-    fs_reconall = opts.get("fs_reconall", True)
+    # Default to SHORT run: no FreeSurfer recon-all unless explicitly requested
+    fs_reconall = opts.get("fs_reconall", False)
     skip_slice_timing = opts.get("skip_slice_timing", False)
     use_syn_sdc = opts.get("use_syn_sdc", False)
     use_aroma = opts.get("use_aroma", False)
