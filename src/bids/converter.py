@@ -161,6 +161,10 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
         
         # Determine modality from metadata
         series_desc = metadata.get("SeriesDescription", "").lower()
+        
+        # Try to auto-fill missing PhaseEncodingDirection for fieldmap EPIs
+        _infer_phase_encoding_direction(metadata, series_desc, json_file.name)
+        
         modality_info = _classify_scan(metadata, series_desc)
         
         if modality_info is None:
@@ -192,7 +196,15 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
         out_json = out_dir / f"{bids_name}.json"
         
         shutil.copy2(nii_file, out_nii)
-        shutil.copy2(json_file, out_json)
+
+        # Write (possibly updated) metadata back out to BIDS JSON
+        try:
+            with open(out_json, 'w', encoding='utf-8') as f:
+                json.dump(metadata, f, indent=4)
+        except Exception as e:
+            # Fallback to raw copy if we cannot write updated JSON
+            safe_print(f"  Warning: could not write updated JSON for {json_file.name}: {e}", flush=True)
+            shutil.copy2(json_file, out_json)
         organized_count += 1
         safe_print(f"  Organized: {series_desc} -> {datatype}/{suffix}", flush=True)
     
@@ -291,6 +303,57 @@ def _classify_scan(metadata, series_desc):
             return ("func", "bold", "task-unknown")
     
     return None
+
+
+def _infer_phase_encoding_direction(metadata, series_desc, json_name=""):
+    """
+    Best-effort inference of PhaseEncodingDirection for fieldmap EPIs.
+
+    Some scanners / dcm2niix combinations do not populate the BIDS
+    PhaseEncodingDirection field, which causes fMRIPrep to fail on
+    EPI fieldmaps. Here we try to infer a reasonable value when:
+
+    - The series looks like an EPI fieldmap (AP/PA, se_epi, spinecho, topup)
+    - PhaseEncodingDirection is missing or empty
+
+    Heuristics (conservative):
+    - If JSON already has PhaseEncodingDirection -> keep it
+    - Else, if "ap" in SeriesDescription and not "pa" -> assume dir-AP, use "j-"
+    - Else, if "pa" in SeriesDescription and not "ap" -> assume dir-PA, use "j"
+
+    Notes:
+    - The sign (j vs j-) is a heuristic based on common AP/PA conventions
+      with dcm2niix, but users should verify for their scanner if possible.
+    - We log a warning the first time we infer a direction so users are aware.
+    """
+    try:
+        phase_dir = metadata.get("PhaseEncodingDirection", "")
+        if phase_dir:
+            return  # Nothing to do
+
+        # Only consider likely fieldmap EPIs
+        is_fmap_candidate = any(
+            x in series_desc for x in ["ap", "pa", "se_epi", "spinecho", "topup", "distortion"]
+        )
+        if not is_fmap_candidate:
+            return
+
+        inferred = None
+        if "ap" in series_desc and "pa" not in series_desc:
+            inferred = "j-"
+        elif "pa" in series_desc and "ap" not in series_desc:
+            inferred = "j"
+
+        if inferred:
+            metadata["PhaseEncodingDirection"] = inferred
+            safe_print(
+                f"  Inferred PhaseEncodingDirection='{inferred}' for {json_name} "
+                f"(SeriesDescription='{series_desc}')",
+                flush=True,
+            )
+    except Exception:
+        # Never let inference failure break conversion
+        return
 
 
 def create_dataset_description(bids_dir, name="fMRI Pipeline Output"):
