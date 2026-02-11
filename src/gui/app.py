@@ -6,12 +6,9 @@ from pathlib import Path
 import sys
 import os
 import re
-import shutil
-import signal
 import platform
 import json
 import base64
-from datetime import datetime
 
 # Detect platform
 IS_WINDOWS = platform.system() == 'Windows'
@@ -351,25 +348,16 @@ class App(ctk.CTk):
         self.target_progress = 0.0
         self.task_in_progress = False
 
-        # --- Status Label ---
-        self.label_status = ctk.CTkLabel(
-            self.main_scroll, 
-            text="", 
-            font=ctk.CTkFont(size=12),
-            text_color="#888888"
-        )
-        self.label_status.grid(row=6, column=0, padx=20, pady=(0, 5), sticky="w")
-
         # --- Log Area ---
         self.label_logs = ctk.CTkLabel(
             self.main_scroll, 
             text="📋 Execution Logs", 
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_logs.grid(row=7, column=0, padx=20, pady=(10, 0), sticky="w")
+        self.label_logs.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
         
         self.console = ConsoleLog(self.main_scroll, height=250)
-        self.console.grid(row=8, column=0, padx=20, pady=(5, 20), sticky="ew")
+        self.console.grid(row=7, column=0, padx=20, pady=(5, 20), sticky="ew")
 
         self.is_running = False
         
@@ -826,11 +814,9 @@ class App(ctk.CTk):
             else:
                 self.console.log("=" * 60)
                 self.console.log("Conversion finished with some problems. Check the report for details.", "error")
-                self.after(0, self._update_status_error)
 
         except Exception as e:
             self.console.log(f"❌ Critical Error: {e}", "error")
-            self.after(0, self._update_status_error)
 
         # Reset UI state (thread-safe)
         self.current_process = None
@@ -921,18 +907,6 @@ class App(ctk.CTk):
         
         # Continue animation every 100ms
         self.progress_animation_id = self.after(100, self._animate_progress)
-    
-    def _update_status_success(self):
-        self.label_status.configure(
-            text="All done! Your converted files are ready.", 
-            text_color="#4CAF50"
-        )
-
-    def _update_status_error(self):
-        self.label_status.configure(
-            text="Something went wrong. See the logs below for details.", 
-            text_color="#F44336"
-        )
 
     def _reset_ui(self):
         self.is_running = False
