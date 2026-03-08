@@ -105,6 +105,29 @@ python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output -
 
 ---
 
+## Quality Control (QC) & Alerts
+
+Every pipeline run automatically produces a **`qc_report.html`** in the output folder — open it in any browser for a color-coded, per-subject overview.
+
+### What is checked
+
+| Check | When | What it flags |
+|---|---|---|
+| Missing T1w / BOLD scans | After BIDS conversion | Sessions that would fail fMRIPrep or have incomplete data |
+| Truncated runs | After BIDS conversion | BOLD runs with suspiciously few timepoints (scan aborted early) |
+| Small files | After BIDS conversion | Files too small to be valid (possible corruption) |
+| Parameter drift | After BIDS conversion | TR or field strength inconsistencies across subjects |
+| Head motion (FD) | After fMRIPrep | Runs with mean FD > 0.5 mm or > 20% high-motion frames |
+
+### Output files
+
+| File | Description |
+|---|---|
+| `qc_report.html` | Visual color-coded QC report (open in browser) |
+| `conversion_report.txt` | Text report including QC findings summary |
+
+---
+
 ## License
 
 MIT License

@@ -38,6 +38,9 @@ try:
     from .bids.converter import run_bids_conversion, create_dataset_description
     from .bids.analyzer import count_output_files
     from .reporting.report import ConversionReport
+    from .reporting.html_report import generate as generate_html_report
+    from .qc.checker import BIDSQualityChecker
+    from .qc import motion_parser
 except ImportError:
     # When run directly as script
     from core.utils import setup_encoding, safe_print
@@ -46,13 +49,17 @@ except ImportError:
     from bids.converter import run_bids_conversion, create_dataset_description
     from bids.analyzer import count_output_files
     from reporting.report import ConversionReport
+    from reporting.html_report import generate as generate_html_report
+    from qc.checker import BIDSQualityChecker
+    from qc import motion_parser
 
 setup_encoding()
 
 
-def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script, 
-                        skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker, 
-                        desc_created_event, report, anonymize=False, debug_log_file=None):
+def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
+                        skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker,
+                        desc_created_event, report, anonymize=False, debug_log_file=None,
+                        qc_checker=None):
     """
     Process a single subject-session task.
     
@@ -98,7 +105,27 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
         
         if success:
             report.add_success(sub_id, ses_id, duration)
-            
+
+            # Layer 1: Run BIDS quality checks immediately after conversion
+            if qc_checker is not None:
+                session_findings = qc_checker.check_session(bids_dir, sub_id, ses_id)
+                n_errors = sum(1 for f in session_findings if f.severity.value == "ERROR")
+                n_warnings = sum(1 for f in session_findings if f.severity.value == "WARNING")
+                if n_errors > 0:
+                    safe_print(
+                        f"[QC] {task_label} - {n_errors} error(s), {n_warnings} warning(s) found",
+                        flush=True,
+                    )
+                    for finding in session_findings:
+                        if finding.severity.value == "ERROR":
+                            safe_print(f"  [QC-ERROR] {finding.message}", flush=True)
+                elif n_warnings > 0:
+                    safe_print(
+                        f"[QC] {task_label} - {n_warnings} warning(s) found", flush=True
+                    )
+                else:
+                    safe_print(f"[QC] {task_label} - OK", flush=True)
+
             # Create dataset_description.json if missing (thread-safe)
             if not desc_created_event.is_set():
                 if create_dataset_description(bids_dir):
@@ -275,6 +302,112 @@ def cleanup_temp_files(bids_dir, report):
         report.set_cleanup_info(0, 0)
 
 
+def run_qc_only(output_folder: Path):
+    """
+    Run QC analysis only on an existing pipeline output folder.
+
+    Expects the folder to contain:
+      - sub-*/ses-*/ BIDS structure  (for Layer 1 checks)
+      - derivatives/                 (for Layer 3 motion analysis)
+
+    Generates qc_report.html and prints a summary.
+    """
+    safe_print(f"\nRunning QC-only analysis on: {output_folder}", flush=True)
+    safe_print("=" * 60, flush=True)
+
+    if not output_folder.exists():
+        safe_print(f"Error: folder does not exist: {output_folder}", flush=True)
+        sys.exit(1)
+
+    derivatives_dir = output_folder / "derivatives"
+
+    # Discover subjects/sessions from BIDS structure
+    sessions = []
+    for sub_dir in sorted(output_folder.iterdir()):
+        if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
+            continue
+        sub_id = sub_dir.name.replace("sub-", "")
+        ses_dirs = sorted(d for d in sub_dir.iterdir() if d.is_dir() and d.name.startswith("ses-"))
+        if ses_dirs:
+            for ses_dir in ses_dirs:
+                sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
+        else:
+            sessions.append((sub_id, "01"))
+
+    if not sessions:
+        safe_print("No sub-*/ses-* structure found. Is this a valid BIDS output folder?", flush=True)
+        sys.exit(1)
+
+    safe_print(f"Found {len(sessions)} session(s) across {len({s[0] for s in sessions})} subject(s)", flush=True)
+
+    # Layer 1: BIDS quality checks
+    safe_print("\nRunning BIDS quality checks...", flush=True)
+    qc_checker = BIDSQualityChecker()
+    for sub_id, ses_id in sessions:
+        findings = qc_checker.check_session(output_folder, sub_id, ses_id)
+        n_err = sum(1 for f in findings if f.severity.value == "ERROR")
+        n_warn = sum(1 for f in findings if f.severity.value == "WARNING")
+        if n_err:
+            safe_print(f"  [QC-ERROR] sub-{sub_id}/ses-{ses_id}: {n_err} error(s), {n_warn} warning(s)", flush=True)
+            for f in findings:
+                if f.severity.value == "ERROR":
+                    safe_print(f"    - {f.message}", flush=True)
+        elif n_warn:
+            safe_print(f"  [QC-WARN]  sub-{sub_id}/ses-{ses_id}: {n_warn} warning(s)", flush=True)
+        else:
+            safe_print(f"  [QC-OK]    sub-{sub_id}/ses-{ses_id}", flush=True)
+
+    # Layer 3: Motion analysis
+    motion_results = []
+    if derivatives_dir.exists():
+        safe_print("\nAnalyzing motion from fMRIPrep confounds...", flush=True)
+        motion_results = motion_parser.parse_all_subjects(derivatives_dir)
+        if motion_results:
+            rescans = [m for m in motion_results if m.flag == "RESCAN"]
+            warns   = [m for m in motion_results if m.flag == "WARNING"]
+            ok      = [m for m in motion_results if m.flag == "OK"]
+            safe_print(
+                f"  Motion: {len(ok)} OK, {len(warns)} warning(s), {len(rescans)} re-scan flag(s)",
+                flush=True,
+            )
+            for m in rescans:
+                safe_print(
+                    f"  [MOTION-RESCAN] sub-{m.sub_id}/ses-{m.ses_id} [{m.run_label}]: "
+                    f"mean FD={m.mean_fd:.2f}mm, {m.pct_high_motion:.0f}% high-motion frames",
+                    flush=True,
+                )
+        else:
+            safe_print("  No confounds files found in derivatives/.", flush=True)
+    else:
+        safe_print("\nNo derivatives/ folder found — skipping motion analysis.", flush=True)
+
+    # Layer 4: HTML report
+    html_path = generate_html_report(
+        str(output_folder),
+        qc_checker.get_all(),
+        motion_results,
+        [],
+        [],
+    )
+    safe_print(f"\nQC report saved to: {html_path}", flush=True)
+
+    # Summary
+    all_errors = qc_checker.get_errors()
+    all_rescans = [m for m in motion_results if m.flag == "RESCAN"]
+    safe_print("\n" + "=" * 60, flush=True)
+    if all_errors or all_rescans:
+        safe_print(
+            f"QC COMPLETE — {len(all_errors)} scan error(s), {len(all_rescans)} motion re-scan flag(s)",
+            flush=True,
+        )
+        safe_print("Open qc_report.html for full details.", flush=True)
+        sys.exit(1)
+    else:
+        safe_print("QC COMPLETE — No critical issues found.", flush=True)
+        safe_print("Open qc_report.html for full details.", flush=True)
+        sys.exit(0)
+
+
 def main():
     """Main entry point for the pipeline."""
     parser = argparse.ArgumentParser(
@@ -290,6 +423,9 @@ Examples:
 
   # Run fMRIPrep only on existing BIDS folder
   python -m src.pipeline --bids-folder /data/processed/output_20250101_120000
+
+  # Run QC analysis only on an existing output folder (no re-processing)
+  python -m src.orchestrator --qc-only --bids-folder /data/processed/output_20250101_120000
         """
     )
     
@@ -319,8 +455,18 @@ Examples:
                         help="Keep temporary files for debugging (don't cleanup)")
     parser.add_argument("--fmriprep-opts", type=str, default="",
                         help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
+    parser.add_argument("--qc-only", action="store_true",
+                        help="Run QC analysis only on an existing output folder (use with --bids-folder)")
 
     args = parser.parse_args()
+
+    # QC-only mode: analyse an existing output folder, no re-processing
+    if args.qc_only:
+        if not args.bids_folder:
+            safe_print("Error: --qc-only requires --bids-folder <path/to/output_folder>", flush=True)
+            sys.exit(1)
+        run_qc_only(Path(args.bids_folder).resolve())
+        return  # run_qc_only calls sys.exit(), but return as safety
 
     # Validate arguments
     fmriprep_only_mode = bool(args.bids_folder)
@@ -537,13 +683,16 @@ Examples:
 
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
+    qc_checker = BIDSQualityChecker()
+
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {
             executor.submit(
                 process_single_task,
                 task, bids_dir, derivatives_dir, fmriprep_script,
-                args.skip_bids, args.skip_fmriprep, fmriprep_opts, 
-                progress_tracker, desc_created_event, report, anonymize, debug_log_file
+                args.skip_bids, args.skip_fmriprep, fmriprep_opts,
+                progress_tracker, desc_created_event, report, anonymize, debug_log_file,
+                qc_checker
             ): task for task in all_tasks
         }
         
@@ -584,6 +733,41 @@ Examples:
         if output_stats['fmap'] > 0:
             safe_print(f"    - Fieldmaps (fmap): {output_stats['fmap']}", flush=True)
     
+    # Layer 3: Parse fMRIPrep confounds for motion analysis
+    motion_results = []
+    if not args.skip_fmriprep:
+        safe_print("Analyzing motion from fMRIPrep confounds...", flush=True)
+        motion_results = motion_parser.parse_all_subjects(derivatives_dir)
+        if motion_results:
+            rescans = [m for m in motion_results if m.flag == "RESCAN"]
+            warns = [m for m in motion_results if m.flag == "WARNING"]
+            ok = [m for m in motion_results if m.flag == "OK"]
+            safe_print(
+                f"  Motion: {len(ok)} OK, {len(warns)} warning(s), {len(rescans)} re-scan flag(s)",
+                flush=True,
+            )
+            for m in rescans:
+                safe_print(
+                    f"  [MOTION-RESCAN] sub-{m.sub_id}/ses-{m.ses_id} [{m.run_label}]: "
+                    f"mean FD={m.mean_fd:.2f}mm, {m.pct_high_motion:.0f}% high-motion frames",
+                    flush=True,
+                )
+        else:
+            safe_print("  No confounds files found (fMRIPrep may not have completed).", flush=True)
+
+    # Attach QC + motion to the report
+    report.set_qc_results(qc_checker.get_all(), motion_results)
+
+    # Layer 4: Generate HTML QC report
+    html_path = generate_html_report(
+        str(output_folder),
+        qc_checker.get_all(),
+        motion_results,
+        report.successful,
+        report.failed,
+    )
+    safe_print(f"QC report: {html_path}", flush=True)
+
     # Save report
     report_text = report.generate_report()
     report_path = output_folder / "conversion_report.txt"
