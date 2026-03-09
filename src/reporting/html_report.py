@@ -68,20 +68,20 @@ def _build_html(output_folder, qc_findings, motion_results,
         banner_color = "#c0392b"
         banner_bg = "#fdf0ef"
         banner_icon = "&#x26A0;"
-        banner_title = f"ACTION REQUIRED — {n_critical} critical issue(s) found"
-        banner_sub = "Some patients may need to be called back for re-scanning."
+        banner_title = f"{n_critical} error(s) detected"
+        banner_sub = f"{n_critical} error(s) and {n_warnings} warning(s) found. See details below."
     elif n_warnings > 0:
         banner_color = "#d68910"
         banner_bg = "#fef9e7"
         banner_icon = "&#x26A0;"
-        banner_title = f"REVIEW NEEDED — {n_warnings} warning(s) to review"
-        banner_sub = "No immediate re-scanning required, but please review the details below."
+        banner_title = f"{n_warnings} warning(s) detected"
+        banner_sub = "No errors found. See warning details below."
     else:
         banner_color = "#1e8449"
         banner_bg = "#eafaf1"
         banner_icon = "&#x2714;"
-        banner_title = "ALL SCANS PASSED QC"
-        banner_sub = "No issues were detected. Data looks good."
+        banner_title = "NO ISSUES DETECTED"
+        banner_sub = "All checks passed with no errors or warnings."
 
     subjects = _collect_subjects(
         conversion_successes, conversion_failures, qc_findings, motion_results
@@ -221,7 +221,7 @@ def _section_summary_table(subjects, qc_findings, motion_results) -> str:
 
         sub_motion = motion_by_sub.get((sub_id, ses_id), [])
         if any(m.flag == "RESCAN" for m in sub_motion):
-            motion_badge = '<span class="badge badge-rescan">Re-scan needed</span>'
+            motion_badge = '<span class="badge badge-rescan">High motion</span>'
         elif any(m.flag == "WARNING" for m in sub_motion):
             motion_badge = '<span class="badge badge-warning">Elevated motion</span>'
         elif sub_motion:
@@ -252,16 +252,12 @@ def _section_bids_findings(errors, warnings) -> str:
     for f in sorted(all_findings, key=lambda x: (x.sub_id, x.ses_id)):
         sev_class = "badge-error" if f.severity.value == "ERROR" else "badge-warning"
         badge = f'<span class="badge {sev_class}">{f.severity.value}</span>'
-        action_html = (
-            f'<div class="action-box">&#x1F4CC; {f.action}</div>'
-            if f.action else ""
-        )
         rows.append(
             f"<tr>"
             f"<td><b>sub-{f.sub_id}</b><br><span class='meta'>ses-{f.ses_id}</span></td>"
             f"<td>{badge}</td>"
             f"<td><span class='meta'>{f.category.replace('_', ' ').title()}</span></td>"
-            f"<td><span class='plain-msg'>{f.plain_message}</span>{action_html}</td>"
+            f"<td><span class='plain-msg'>{f.plain_message}</span></td>"
             f"</tr>"
         )
     rows_html = "\n".join(rows)
@@ -270,7 +266,7 @@ def _section_bids_findings(errors, warnings) -> str:
 <h2>Scan Quality Findings</h2>
 <table>
   <thead><tr>
-    <th>Subject</th><th>Severity</th><th>Category</th><th>Details &amp; Action</th>
+    <th>Subject</th><th>Severity</th><th>Category</th><th>Details</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -287,10 +283,6 @@ def _section_motion(motion_results) -> str:
             badge = '<span class="badge badge-ok">OK</span>'
 
         fd_bar = _fd_bar(m.pct_high_motion)
-        action_html = (
-            f'<div class="action-box">&#x1F4CC; {m.action}</div>'
-            if m.action else ""
-        )
         rows.append(
             f"<tr>"
             f"<td><b>sub-{m.sub_id}</b><br><span class='meta'>ses-{m.ses_id}</span></td>"
@@ -299,7 +291,7 @@ def _section_motion(motion_results) -> str:
             f"<td style='text-align:center'>{m.mean_fd:.2f} mm</td>"
             f"<td>{fd_bar}<br><span class='meta'>{m.pct_high_motion:.0f}% "
             f"({m.n_high_motion}/{m.n_frames} frames)</span></td>"
-            f"<td><span class='plain-msg'>{m.plain_message}</span>{action_html}</td>"
+            f"<td><span class='plain-msg'>{m.plain_message}</span></td>"
             f"</tr>"
         )
     rows_html = "\n".join(rows)
@@ -307,13 +299,14 @@ def _section_motion(motion_results) -> str:
     return f"""<hr class="sep">
 <h2>Motion Analysis (fMRIPrep Confounds)</h2>
 <p style="color:#555;font-size:13px;margin-bottom:12px;">
-  Threshold: &gt;0.5 mm framewise displacement (FD).
-  Re-scan flag = &ge;20% of frames above threshold or mean FD &ge;1.0 mm.
+  FD threshold: {0.5} mm. 
+  RESCAN flag: &ge;20% of frames above threshold or mean FD &ge;1.0 mm.
+  WARNING flag: &ge;10% of frames above threshold or mean FD &ge;0.5 mm.
 </p>
 <table>
   <thead><tr>
     <th>Subject</th><th>Run</th><th>Status</th>
-    <th>Mean FD</th><th>High-motion frames</th><th>Details &amp; Action</th>
+    <th>Mean FD</th><th>High-motion frames</th><th>Details</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""

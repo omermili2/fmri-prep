@@ -42,7 +42,7 @@ class BIDSQualityChecker:
     """
     Checks BIDS data quality immediately after conversion.
 
-    Detects common issues that would require calling patients back for re-scanning.
+    Detects common data quality issues after BIDS conversion.
     Thread-safe: can be shared across parallel worker threads.
 
     Usage:
@@ -128,10 +128,10 @@ class BIDSQualityChecker:
                     category="missing_scan",
                     message="No T1w anatomical scan found",
                     plain_message=(
-                        "No structural brain image (T1w) was found for this session. "
-                        "fMRIPrep cannot run without a T1w scan."
+                        "No T1w anatomical scan was found for this session. "
+                        "fMRIPrep requires a T1w scan as input."
                     ),
-                    action="Re-scan: acquire a T1w structural scan for this patient.",
+                    action="",
                 )
             )
 
@@ -144,12 +144,9 @@ class BIDSQualityChecker:
                     category="missing_scan",
                     message="No BOLD functional scan found",
                     plain_message=(
-                        "No functional brain scan (BOLD) was found in this session."
+                        "No BOLD functional scan was found in this session."
                     ),
-                    action=(
-                        "Verify this session was intended to include BOLD scans. "
-                        "If yes, re-scan the patient."
-                    ),
+                    action="",
                 )
             )
 
@@ -183,11 +180,10 @@ class BIDSQualityChecker:
                         category="small_file",
                         message=f"{nii_file.name}: {size_mb:.1f} MB (minimum expected: {min_mb:.0f} MB)",
                         plain_message=(
-                            f"The {scan_type} scan '{nii_file.name}' is suspiciously small "
-                            f"({size_mb:.1f} MB). The scan may be corrupted or the acquisition "
-                            f"was aborted early."
+                            f"The {scan_type} scan '{nii_file.name}' is {size_mb:.1f} MB, "
+                            f"below the expected minimum of {min_mb:.0f} MB."
                         ),
-                        action="Re-scan the patient — the scan data appears incomplete.",
+                        action="",
                     )
                 )
 
@@ -217,14 +213,10 @@ class BIDSQualityChecker:
                             f"(minimum expected: {self.min_bold_trs})"
                         ),
                         plain_message=(
-                            f"The functional scan '{bold_file.name}' has only {n_trs} "
-                            f"timepoints. A complete scan should have at least "
-                            f"{self.min_bold_trs}. The scan was likely aborted early."
+                            f"The functional scan '{bold_file.name}' has {n_trs} "
+                            f"timepoints (minimum expected: {self.min_bold_trs})."
                         ),
-                        action=(
-                            "Check whether the scan was interrupted. "
-                            "Consider re-scanning this patient."
-                        ),
+                        action="",
                     )
                 )
 
@@ -273,14 +265,10 @@ class BIDSQualityChecker:
                             f"(cohort baseline: {baseline['TR']}s)"
                         ),
                         plain_message=(
-                            f"The scan timing (TR = {params['TR']}s) differs from "
-                            f"other subjects in this dataset ({baseline['TR']}s). "
-                            f"This inconsistency may affect group analysis results."
+                            f"TR for this session is {params['TR']}s; "
+                            f"other subjects in this dataset have TR = {baseline['TR']}s."
                         ),
-                        action=(
-                            "Verify the scan protocol was applied correctly. "
-                            "Check with the MRI technician."
-                        ),
+                        action="",
                     )
                 )
 
@@ -297,14 +285,10 @@ class BIDSQualityChecker:
                             f"(expected: {baseline['FieldStrength']}T)"
                         ),
                         plain_message=(
-                            f"This scan was acquired at {params['FieldStrength']}T field "
-                            f"strength, but other subjects used {baseline['FieldStrength']}T. "
-                            f"Scans from different field strengths cannot be directly compared."
+                            f"Field strength is {params['FieldStrength']}T; "
+                            f"other subjects in this dataset used {baseline['FieldStrength']}T."
                         ),
-                        action=(
-                            "Verify the correct scanner was used. This subject's data "
-                            "may need to be excluded from group analysis."
-                        ),
+                        action="",
                     )
                 )
 

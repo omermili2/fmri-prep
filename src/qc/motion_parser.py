@@ -103,33 +103,25 @@ def _parse_confounds_file(tsv_path: Path) -> Optional[MotionResult]:
         if pct_high >= RESCAN_MOTION_PERCENT or mean_fd >= RESCAN_MEAN_FD:
             flag = "RESCAN"
             plain_message = (
-                f"Very high head motion detected. "
-                f"Mean movement: {mean_fd:.2f} mm. "
-                f"{pct_high:.0f}% of scan frames are corrupted by motion "
-                f"({n_high} / {n_frames} frames exceed {FD_THRESHOLD} mm threshold)."
+                f"Mean FD: {mean_fd:.2f} mm. "
+                f"{pct_high:.0f}% of frames exceed {FD_THRESHOLD} mm threshold "
+                f"({n_high}/{n_frames} frames)."
             )
-            action = (
-                "Strongly consider re-scanning this patient. "
-                "Too much data is corrupted by motion to allow reliable analysis."
-            )
+            action = ""
         elif pct_high >= WARN_MOTION_PERCENT or mean_fd >= WARN_MEAN_FD:
             flag = "WARNING"
             plain_message = (
-                f"Elevated head motion detected. "
-                f"Mean movement: {mean_fd:.2f} mm. "
-                f"{pct_high:.0f}% of frames exceed the {FD_THRESHOLD} mm threshold "
-                f"({n_high} / {n_frames} frames)."
+                f"Mean FD: {mean_fd:.2f} mm. "
+                f"{pct_high:.0f}% of frames exceed {FD_THRESHOLD} mm threshold "
+                f"({n_high}/{n_frames} frames)."
             )
-            action = (
-                "Review motion parameters carefully. "
-                "Consider re-scanning if additional clean data is needed."
-            )
+            action = ""
         else:
             flag = "OK"
             plain_message = (
-                f"Motion within acceptable range. "
-                f"Mean FD: {mean_fd:.2f} mm, "
-                f"{pct_high:.0f}% of frames above threshold."
+                f"Mean FD: {mean_fd:.2f} mm. "
+                f"{pct_high:.0f}% of frames above threshold "
+                f"({n_high}/{n_frames} frames)."
             )
             action = ""
 
