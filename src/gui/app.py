@@ -286,7 +286,7 @@ class App(ctk.CTk):
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_actions.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
-        self.frame_actions.grid_columnconfigure((0, 1, 2), weight=1)
+        self.frame_actions.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
         self.btn_bids_only = ctk.CTkButton(
             self.frame_actions,
@@ -320,11 +320,23 @@ class App(ctk.CTk):
             command=self.run_full_pipeline
         )
         self.btn_full_pipeline.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
+
+        self.btn_qc_only = ctk.CTkButton(
+            self.frame_actions,
+            text="🔍 Run QC Only",
+            height=50,
+            fg_color="#00796B",  # Teal
+            hover_color="#004D40",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            command=self.run_qc_only
+        )
+        self.btn_qc_only.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
         
         # Internal state for pipeline steps (not shown in UI)
         self._run_bids = True
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
+        self._qc_only_mode = False
 
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
@@ -508,6 +520,8 @@ class App(ctk.CTk):
         """Run BIDS conversion only."""
         self._run_bids = True
         self._run_fmriprep = False
+        self._fmriprep_only_mode = False
+        self._qc_only_mode = False
         self._start_pipeline_internal("BIDS Conversion")
 
     def run_full_pipeline(self):
@@ -524,7 +538,49 @@ class App(ctk.CTk):
         self._run_bids = True
         self._run_fmriprep = True
         self._fmriprep_only_mode = False
+        self._qc_only_mode = False
         self._run_with_docker_preflight("BIDS Conversion + fMRIPrep")
+
+    def run_qc_only(self):
+        """Run QC analysis only on an existing output folder (no re-processing)."""
+        # Use the OUTPUT folder as the target
+        bids_folder = self.entry_output.get().strip()
+
+        if not bids_folder:
+            self.console.log("⚠️  Please select the output folder in the Output Root Folder field.", "warning")
+            self.console.log("   This should be a folder from a previous pipeline run.", "info")
+            return
+
+        bids_path = Path(bids_folder).resolve()
+        if not bids_path.exists():
+            self.console.log(f"⚠️  Folder does not exist: {bids_folder}", "warning")
+            return
+
+        # If root contains output_* subfolders, pick the most recent one
+        output_subfolders = [p for p in bids_path.iterdir()
+                            if p.is_dir() and p.name.startswith("output_")]
+        if output_subfolders:
+            most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
+            bids_path = most_recent.resolve()
+            self.console.log(f"ℹ️  Found output folder: {most_recent.name}", "info")
+            self.console.log(f"   Using this as the target folder.", "info")
+
+        # Validate that sub-* directories exist
+        has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
+        if not has_subjects:
+            self.console.log("⚠️  No 'sub-*' folders found in the selected folder.", "warning")
+            self.console.log(f"   Checked: {bids_path}", "info")
+            self.console.log("   Make sure you're selecting a valid pipeline output folder.", "info")
+            return
+
+        bids_folder = str(bids_path)
+
+        self._run_bids = False
+        self._run_fmriprep = False
+        self._fmriprep_only_mode = False
+        self._qc_only_mode = True
+        self._bids_folder_for_qc = bids_folder
+        self._start_pipeline_internal("QC Analysis Only")
 
     def run_fmriprep_only(self):
         """Run fMRIPrep on an existing BIDS folder (uses input folder as BIDS folder)."""
@@ -620,6 +676,7 @@ class App(ctk.CTk):
         self._run_bids = False
         self._run_fmriprep = True
         self._fmriprep_only_mode = True
+        self._qc_only_mode = False
         self._bids_folder_for_fmriprep = bids_folder
         self._run_with_docker_preflight("fMRIPrep Only")
 
@@ -684,7 +741,9 @@ class App(ctk.CTk):
     def _start_pipeline_internal(self, mode_label):
         """Start the pipeline with the configured options."""
         # For fMRIPrep-only mode, we use the BIDS folder directly
-        if self._fmriprep_only_mode:
+        if self._qc_only_mode:
+            bids_folder = self._bids_folder_for_qc
+        elif self._fmriprep_only_mode:
             bids_folder = self._bids_folder_for_fmriprep
         else:
             if not self._validate_paths():
@@ -732,14 +791,21 @@ class App(ctk.CTk):
         self.btn_bids_only.configure(state=state)
         self.btn_full_pipeline.configure(state=state)
         self.btn_fmriprep_only.configure(state=state)
+        self.btn_qc_only.configure(state=state)
         self.btn_browse_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
     def run_subprocess(self, input_dir, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
         
+        # QC-only mode
+        if self._qc_only_mode and bids_folder:
+            cmd = [
+                sys.executable, str(script_path),
+                "--qc-only", "--bids-folder", bids_folder
+            ]
         # For fMRIPrep-only mode, use the BIDS folder as input
-        if self._fmriprep_only_mode and bids_folder:
+        elif self._fmriprep_only_mode and bids_folder:
             cmd = [
                 sys.executable, str(script_path),
                 "--bids-folder", bids_folder
@@ -751,22 +817,24 @@ class App(ctk.CTk):
                 "--output_dir", output_dir
             ]
 
-        if not self._run_bids:
-            cmd.append("--skip-bids")
-        if not self._run_fmriprep:
-            cmd.append("--skip-fmriprep")
-        if self.check_anonymize.get():
-            cmd.append("--anonymize")
-        
-        if self.check_keep_temp.get():
-            cmd.append("--keep-temp")
-        
-        # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
-        if self._run_fmriprep:
-            fmriprep_opts = self._get_fmriprep_options()
-            if fmriprep_opts:
-                encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
-                cmd.extend(["--fmriprep-opts", encoded_opts])
+        # QC-only mode needs no extra flags — the orchestrator handles everything
+        if not self._qc_only_mode:
+            if not self._run_bids:
+                cmd.append("--skip-bids")
+            if not self._run_fmriprep:
+                cmd.append("--skip-fmriprep")
+            if self.check_anonymize.get():
+                cmd.append("--anonymize")
+            
+            if self.check_keep_temp.get():
+                cmd.append("--keep-temp")
+            
+            # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
+            if self._run_fmriprep:
+                fmriprep_opts = self._get_fmriprep_options()
+                if fmriprep_opts:
+                    encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
+                    cmd.extend(["--fmriprep-opts", encoded_opts])
 
         try:
             popen_kwargs = {
