@@ -26,14 +26,14 @@ sys.path.insert(0, str(src_path))
 
 def has_display():
     """Check if a display is available for GUI."""
-    # Check for DISPLAY environment variable (X11)
-    if sys.platform != 'win32' and 'DISPLAY' not in os.environ:
+    # On Linux, require the DISPLAY variable (X11)
+    if sys.platform == 'linux' and 'DISPLAY' not in os.environ:
         return False
-    # Try to import tkinter to see if GUI is available
+    # On macOS/Windows just check tkinter is importable — don't instantiate
+    # Tk() here as it can segfault on non-framework Python builds on macOS.
+    # Any real display failure will be caught when App() is created.
     try:
-        import tkinter
-        root = tkinter.Tk()
-        root.destroy()
+        import tkinter  # noqa: F401
         return True
     except Exception:
         return False

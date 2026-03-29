@@ -172,6 +172,16 @@ class App(ctk.CTk):
         self.check_keep_temp.grid(row=1, column=0, padx=10, pady=5, sticky="w")
         self.check_keep_temp.deselect()  # Default: OFF (clean up temp files)
 
+        self.check_mriqc_with_bids = ctk.CTkCheckBox(
+            self.frame_bids_options,
+            text="Include MRIQC image quality assessment after BIDS conversion (requires Docker, ~30–45 min/subject)",
+            font=ctk.CTkFont(size=12),
+            onvalue=True,
+            offvalue=False
+        )
+        self.check_mriqc_with_bids.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.check_mriqc_with_bids.deselect()  # Default: OFF
+
         # --- fMRIPrep Options Frame (Collapsible) ---
         self.frame_fmriprep_container = ctk.CTkFrame(self.main_scroll)
         self.frame_fmriprep_container.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="ew")
@@ -310,6 +320,17 @@ class App(ctk.CTk):
         )
         self.btn_fmriprep_only.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
         
+        self.btn_connectivity_qc = ctk.CTkButton(
+            self.frame_actions,
+            text="🔬 Run Connectivity QC",
+            height=50,
+            fg_color="#00796B",  # Teal
+            hover_color="#004D40",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            command=self.run_connectivity_qc_only
+        )
+        self.btn_connectivity_qc.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
+
         self.btn_full_pipeline = ctk.CTkButton(
             self.frame_actions,
             text="🚀 Run Full Pipeline",
@@ -319,24 +340,13 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_full_pipeline
         )
-        self.btn_full_pipeline.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
-
-        self.btn_qc_only = ctk.CTkButton(
-            self.frame_actions,
-            text="🔍 Run QC Only",
-            height=50,
-            fg_color="#00796B",  # Teal
-            hover_color="#004D40",
-            font=ctk.CTkFont(size=15, weight="bold"),
-            command=self.run_qc_only
-        )
-        self.btn_qc_only.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
+        self.btn_full_pipeline.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
         
         # Internal state for pipeline steps (not shown in UI)
         self._run_bids = True
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
-        self._qc_only_mode = False
+        self._connectivity_only_mode = False
 
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
@@ -517,12 +527,15 @@ class App(ctk.CTk):
         return True
 
     def run_bids_only(self):
-        """Run BIDS conversion only."""
+        """Run BIDS conversion only, with optional MRIQC."""
         self._run_bids = True
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
         self._qc_only_mode = False
-        self._start_pipeline_internal("BIDS Conversion")
+        if self.check_mriqc_with_bids.get():
+            self._run_with_docker_preflight("BIDS Conversion + MRIQC")
+        else:
+            self._start_pipeline_internal("BIDS Conversion")
 
     def run_full_pipeline(self):
         """Run both BIDS conversion and fMRIPrep."""
@@ -538,12 +551,10 @@ class App(ctk.CTk):
         self._run_bids = True
         self._run_fmriprep = True
         self._fmriprep_only_mode = False
-        self._qc_only_mode = False
         self._run_with_docker_preflight("BIDS Conversion + fMRIPrep")
 
-    def run_qc_only(self):
-        """Run QC analysis only on an existing output folder (no re-processing)."""
-        # Use the OUTPUT folder as the target
+    def run_connectivity_qc_only(self):
+        """Run connectivity QC (Nilearn) on an existing fMRIPrep output folder."""
         bids_folder = self.entry_output.get().strip()
 
         if not bids_folder:
@@ -556,31 +567,30 @@ class App(ctk.CTk):
             self.console.log(f"⚠️  Folder does not exist: {bids_folder}", "warning")
             return
 
-        # If root contains output_* subfolders, pick the most recent one
+        # Auto-select most recent output_* subfolder if needed
         output_subfolders = [p for p in bids_path.iterdir()
-                            if p.is_dir() and p.name.startswith("output_")]
+                             if p.is_dir() and p.name.startswith("output_")]
         if output_subfolders:
             most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
             bids_path = most_recent.resolve()
-            self.console.log(f"ℹ️  Found output folder: {most_recent.name}", "info")
-            self.console.log(f"   Using this as the target folder.", "info")
+            self.console.log(f"ℹ️  Using output folder: {most_recent.name}", "info")
 
-        # Validate that sub-* directories exist
         has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
         if not has_subjects:
-            self.console.log("⚠️  No 'sub-*' folders found in the selected folder.", "warning")
-            self.console.log(f"   Checked: {bids_path}", "info")
-            self.console.log("   Make sure you're selecting a valid pipeline output folder.", "info")
+            self.console.log("⚠️  No 'sub-*' folders found. Select a valid pipeline output folder.", "warning")
             return
 
-        bids_folder = str(bids_path)
+        derivatives = bids_path / "derivatives"
+        if not derivatives.exists():
+            self.console.log("⚠️  No 'derivatives/' folder found. fMRIPrep must run before Connectivity QC.", "warning")
+            return
 
         self._run_bids = False
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
-        self._qc_only_mode = True
-        self._bids_folder_for_qc = bids_folder
-        self._start_pipeline_internal("QC Analysis Only")
+        self._connectivity_only_mode = True
+        self._connectivity_bids_folder = str(bids_path)
+        self._start_pipeline_internal("Connectivity QC (Nilearn)")
 
     def run_fmriprep_only(self):
         """Run fMRIPrep on an existing BIDS folder (uses input folder as BIDS folder)."""
@@ -676,7 +686,6 @@ class App(ctk.CTk):
         self._run_bids = False
         self._run_fmriprep = True
         self._fmriprep_only_mode = True
-        self._qc_only_mode = False
         self._bids_folder_for_fmriprep = bids_folder
         self._run_with_docker_preflight("fMRIPrep Only")
 
@@ -789,21 +798,23 @@ class App(ctk.CTk):
     def _set_buttons_state(self, state):
         """Enable/disable all action buttons."""
         self.btn_bids_only.configure(state=state)
-        self.btn_full_pipeline.configure(state=state)
         self.btn_fmriprep_only.configure(state=state)
-        self.btn_qc_only.configure(state=state)
+        self.btn_connectivity_qc.configure(state=state)
+        self.btn_full_pipeline.configure(state=state)
         self.btn_browse_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
     def run_subprocess(self, input_dir, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
         
-        # QC-only mode
-        if self._qc_only_mode and bids_folder:
+        # Connectivity QC only mode
+        if self._connectivity_only_mode:
             cmd = [
                 sys.executable, str(script_path),
-                "--qc-only", "--bids-folder", bids_folder
+                "--qc-only", "--bids-folder", self._connectivity_bids_folder,
+                "--connectivity-qc"
             ]
+            self._connectivity_only_mode = False
         # For fMRIPrep-only mode, use the BIDS folder as input
         elif self._fmriprep_only_mode and bids_folder:
             cmd = [
@@ -817,24 +828,25 @@ class App(ctk.CTk):
                 "--output_dir", output_dir
             ]
 
-        # QC-only mode needs no extra flags — the orchestrator handles everything
-        if not self._qc_only_mode:
-            if not self._run_bids:
-                cmd.append("--skip-bids")
-            if not self._run_fmriprep:
-                cmd.append("--skip-fmriprep")
-            if self.check_anonymize.get():
-                cmd.append("--anonymize")
-            
-            if self.check_keep_temp.get():
-                cmd.append("--keep-temp")
-            
-            # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
-            if self._run_fmriprep:
-                fmriprep_opts = self._get_fmriprep_options()
-                if fmriprep_opts:
-                    encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
-                    cmd.extend(["--fmriprep-opts", encoded_opts])
+        if not self._run_bids:
+            cmd.append("--skip-bids")
+        if not self._run_fmriprep:
+            cmd.append("--skip-fmriprep")
+        if self.check_anonymize.get():
+            cmd.append("--anonymize")
+        if self.check_keep_temp.get():
+            cmd.append("--keep-temp")
+
+        # Add --run-mriqc if the MRIQC checkbox is ticked (BIDS-only mode)
+        if self.check_mriqc_with_bids.get() and not self._run_fmriprep:
+            cmd.append("--run-mriqc")
+
+        # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
+        if self._run_fmriprep:
+            fmriprep_opts = self._get_fmriprep_options()
+            if fmriprep_opts:
+                encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
+                cmd.extend(["--fmriprep-opts", encoded_opts])
 
         try:
             popen_kwargs = {
