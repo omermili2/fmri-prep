@@ -40,7 +40,8 @@ try:
     from .reporting.report import ConversionReport
     from .reporting.html_report import generate as generate_html_report
     from .qc.checker import BIDSQualityChecker
-    from .qc import motion_parser
+    from .qc import motion_parser, iqm_parser
+    from .fmriprep import mriqc_runner
 except ImportError:
     # When run directly as script
     from core.utils import setup_encoding, safe_print
@@ -51,7 +52,8 @@ except ImportError:
     from reporting.report import ConversionReport
     from reporting.html_report import generate as generate_html_report
     from qc.checker import BIDSQualityChecker
-    from qc import motion_parser
+    from qc import motion_parser, iqm_parser
+    from fmriprep import mriqc_runner
 
 setup_encoding()
 
@@ -59,7 +61,7 @@ setup_encoding()
 def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
                         skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker,
                         desc_created_event, report, anonymize=False, debug_log_file=None,
-                        qc_checker=None):
+                        qc_checker=None, run_mriqc=False, mriqc_dir=None):
     """
     Process a single subject-session task.
     
@@ -125,6 +127,22 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
                     )
                 else:
                     safe_print(f"[QC] {task_label} - OK", flush=True)
+
+            # Layer 2: MRIQC (optional, runs per-subject after BIDS conversion)
+            if run_mriqc and mriqc_dir is not None:
+                safe_print(f"[MRIQC] {task_label} - starting...", flush=True)
+                ok, err = mriqc_runner.run_mriqc_participant(
+                    bids_dir, mriqc_dir, sub_id
+                )
+                if ok:
+                    safe_print(f"[MRIQC] {task_label} - done", flush=True)
+                else:
+                    safe_print(
+                        f"[MRIQC] {task_label} - warning: {err[:120]}", flush=True
+                    )
+                    report.add_warning(
+                        f"MRIQC failed for sub-{sub_id}: {err[:120]}"
+                    )
 
             # Create dataset_description.json if missing (thread-safe)
             if not desc_created_event.is_set():
@@ -302,13 +320,14 @@ def cleanup_temp_files(bids_dir, report):
         report.set_cleanup_info(0, 0)
 
 
-def run_qc_only(output_folder: Path):
+def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     """
     Run QC analysis only on an existing pipeline output folder.
 
     Expects the folder to contain:
       - sub-*/ses-*/ BIDS structure  (for Layer 1 checks)
       - derivatives/                 (for Layer 3 motion analysis)
+      - mriqc/                       (for Layer 2 IQM parsing, if --run-mriqc)
 
     Generates qc_report.html and prints a summary.
     """
@@ -381,13 +400,82 @@ def run_qc_only(output_folder: Path):
     else:
         safe_print("\nNo derivatives/ folder found — skipping motion analysis.", flush=True)
 
-    # Layer 4: HTML report
+    # Layer 4: Connectivity QC (optional)
+    censoring_results = []
+    connectivity_results = []
+    # Check if --connectivity-qc was requested (it's in run_qc_only args via run_mriqc for now)
+    # For qc-only mode, we'll add a separate check
+    try:
+        import sys
+        if '--connectivity-qc' in sys.argv and derivatives_dir.exists():
+            from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+
+            if CONNECTIVITY_QC_AVAILABLE:
+                safe_print("\nRunning connectivity quality assessment...", flush=True)
+
+                safe_print("  Analyzing volume censoring...", flush=True)
+                censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, output_folder)
+                if censoring_results:
+                    unsuitable = [c for c in censoring_results if not c.connectivity_ready]
+                    safe_print(
+                        f"    {len(censoring_results)} runs analyzed, {len(unsuitable)} unsuitable for connectivity",
+                        flush=True,
+                    )
+
+                safe_print("  Computing connectivity metrics (may take several minutes)...", flush=True)
+                connectivity_results = connectivity_qc.analyze_all_subjects(
+                    derivatives_dir,
+                    output_folder,
+                    atlas='schaefer_100',
+                    compute_qc_fc=True,
+                    compute_dm_fc=True,
+                    compute_modularity=False
+                )
+                if connectivity_results:
+                    failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
+                    safe_print(f"    {len(connectivity_results)} runs analyzed, {len(failed)} failed QC", flush=True)
+            else:
+                safe_print("\nConnectivity QC skipped (Nilearn not installed)", flush=True)
+    except Exception as e:
+        safe_print(f"\nConnectivity QC skipped (error: {e})", flush=True)
+
+    # Layer 2: MRIQC IQM parsing (if mriqc/ folder exists or --run-mriqc requested)
+    iqm_results = []
+    mriqc_reports = {}
+    mriqc_dir = output_folder / "mriqc"
+    if run_mriqc and mriqc_dir.exists():
+        safe_print("\nParsing MRIQC IQM files...", flush=True)
+        iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
+        mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+        if iqm_results:
+            flagged = [r for r in iqm_results if r.worst_severity != "OK"]
+            safe_print(
+                f"  IQM: {len(iqm_results)} scan(s) parsed, {len(flagged)} with flag(s)",
+                flush=True,
+            )
+            for r in flagged:
+                for flag in r.flags:
+                    safe_print(
+                        f"  [IQM-{flag.severity}] sub-{flag.sub_id} "
+                        f"{flag.modality}: {flag.metric_label} = {flag.value:.3f}",
+                        flush=True,
+                    )
+        else:
+            safe_print("  No IQM JSON files found in mriqc/.", flush=True)
+    elif run_mriqc:
+        safe_print(f"\nNo mriqc/ folder found at {mriqc_dir} — skipping IQM parsing.", flush=True)
+
+    # Layer 5: HTML report
     html_path = generate_html_report(
         str(output_folder),
         qc_checker.get_all(),
         motion_results,
         [],
         [],
+        iqm_results=iqm_results,
+        mriqc_reports=mriqc_reports,
+        censoring_results=censoring_results,
+        connectivity_results=connectivity_results,
     )
     safe_print(f"\nQC report saved to: {html_path}", flush=True)
 
@@ -455,6 +543,10 @@ Examples:
                         help="Keep temporary files for debugging (don't cleanup)")
     parser.add_argument("--fmriprep-opts", type=str, default="",
                         help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
+    parser.add_argument("--run-mriqc", action="store_true",
+                        help="Run MRIQC image quality assessment after BIDS conversion (requires docker pull nipreps/mriqc:latest)")
+    parser.add_argument("--connectivity-qc", action="store_true",
+                        help="Run connectivity quality assessment (requires nilearn, analyzes motion-connectivity coupling)")
     parser.add_argument("--qc-only", action="store_true",
                         help="Run QC analysis only on an existing output folder (use with --bids-folder)")
 
@@ -465,7 +557,7 @@ Examples:
         if not args.bids_folder:
             safe_print("Error: --qc-only requires --bids-folder <path/to/output_folder>", flush=True)
             sys.exit(1)
-        run_qc_only(Path(args.bids_folder).resolve())
+        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=getattr(args, 'run_mriqc', False))
         return  # run_qc_only calls sys.exit(), but return as safety
 
     # Validate arguments
@@ -684,6 +776,17 @@ Examples:
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
     qc_checker = BIDSQualityChecker()
+    run_mriqc = getattr(args, 'run_mriqc', False)
+    mriqc_dir = output_folder / "mriqc" if run_mriqc else None
+
+    if run_mriqc:
+        safe_print("Checking MRIQC prerequisites...", flush=True)
+        ok, err = mriqc_runner.mriqc_preflight(callback=lambda m: safe_print(f"  {m}", flush=True))
+        if not ok:
+            safe_print(f"  MRIQC pre-flight failed: {err}", flush=True)
+            safe_print("  Continuing without MRIQC.", flush=True)
+            run_mriqc = False
+            mriqc_dir = None
 
     with ThreadPoolExecutor(max_workers=num_workers) as executor:
         futures = {
@@ -692,7 +795,7 @@ Examples:
                 task, bids_dir, derivatives_dir, fmriprep_script,
                 args.skip_bids, args.skip_fmriprep, fmriprep_opts,
                 progress_tracker, desc_created_event, report, anonymize, debug_log_file,
-                qc_checker
+                qc_checker, run_mriqc, mriqc_dir
             ): task for task in all_tasks
         }
         
@@ -755,16 +858,106 @@ Examples:
         else:
             safe_print("  No confounds files found (fMRIPrep may not have completed).", flush=True)
 
+    # Layer 4: Connectivity QC (optional, requires --connectivity-qc flag and Nilearn)
+    censoring_results = []
+    connectivity_results = []
+    if args.connectivity_qc and not args.skip_fmriprep:
+        from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+
+        if CONNECTIVITY_QC_AVAILABLE:
+            safe_print("Running connectivity quality assessment...", flush=True)
+
+            # 5a: Volume censoring analysis
+            safe_print("  Analyzing volume censoring...", flush=True)
+            censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, bids_dir)
+            if censoring_results:
+                unsuitable = [c for c in censoring_results if not c.connectivity_ready]
+                marginal = [c for c in censoring_results if c.connectivity_ready and c.severity == "WARNING"]
+                good = [c for c in censoring_results if c.connectivity_ready and c.severity == "OK"]
+                safe_print(
+                    f"    Volume censoring: {len(good)} OK, {len(marginal)} marginal, {len(unsuitable)} unsuitable",
+                    flush=True,
+                )
+                for c in unsuitable:
+                    safe_print(
+                        f"    [CONN-FAIL] sub-{c.sub_id}/ses-{c.ses_id} [{c.run_label}]: "
+                        f"{c.pct_censored_02mm:.0f}% censored, {c.usable_minutes_02mm:.1f}min usable",
+                        flush=True,
+                    )
+
+            # 5b: QC-FC, DM-FC analysis (computationally expensive)
+            safe_print("  Computing connectivity metrics (QC-FC, DM-FC)...", flush=True)
+            connectivity_results = connectivity_qc.analyze_all_subjects(
+                derivatives_dir,
+                bids_dir,
+                atlas='schaefer_100',
+                compute_qc_fc=True,
+                compute_dm_fc=True,
+                compute_modularity=False  # Too expensive for routine QC
+            )
+            if connectivity_results:
+                failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
+                warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
+                ok_conn = [r for r in connectivity_results if r.worst_severity == "OK"]
+                safe_print(
+                    f"    Connectivity metrics: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
+                    flush=True,
+                )
+                for r in failed:
+                    safe_print(
+                        f"    [CONN-ERROR] sub-{r.sub_id}/ses-{r.ses_id} [{r.run_label}]: "
+                        f"{r.plain_message}",
+                        flush=True,
+                    )
+        else:
+            safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
+            safe_print("  Install with: pip install nilearn nibabel", flush=True)
+
+    # Layer 2: MRIQC group-level report + IQM parsing
+    iqm_results = []
+    mriqc_reports = {}
+    if run_mriqc and mriqc_dir is not None:
+        safe_print("Running MRIQC group-level report...", flush=True)
+        grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
+        if grp_ok:
+            safe_print(
+                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
+                flush=True,
+            )
+        else:
+            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
+
+        iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
+        mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+        if iqm_results:
+            flagged = [r for r in iqm_results if r.worst_severity != "OK"]
+            safe_print(
+                f"  IQM: {len(iqm_results)} scan(s) analysed, "
+                f"{len(flagged)} with flag(s)",
+                flush=True,
+            )
+            for r in flagged:
+                for flag in r.flags:
+                    safe_print(
+                        f"  [IQM-{flag.severity}] sub-{flag.sub_id} "
+                        f"{flag.modality}: {flag.metric_label} = {flag.value:.3f}",
+                        flush=True,
+                    )
+
     # Attach QC + motion to the report
     report.set_qc_results(qc_checker.get_all(), motion_results)
 
-    # Layer 4: Generate HTML QC report
+    # Layer 5: Generate HTML QC report
     html_path = generate_html_report(
         str(output_folder),
         qc_checker.get_all(),
         motion_results,
         report.successful,
         report.failed,
+        iqm_results=iqm_results,
+        mriqc_reports=mriqc_reports,
+        censoring_results=censoring_results,
+        connectivity_results=connectivity_results,
     )
     safe_print(f"QC report: {html_path}", flush=True)
 
