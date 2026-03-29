@@ -532,11 +532,12 @@ class App(ctk.CTk):
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
         if self.check_mriqc_with_bids.get():
-            import importlib.util
-            mriqc_path = Path(__file__).parent.parent / "fmriprep" / "mriqc_runner.py"
-            spec = importlib.util.spec_from_file_location("mriqc_runner", mriqc_path)
-            mriqc_module = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mriqc_module)
+            import importlib
+            import sys
+            src_dir = str(Path(__file__).parent.parent)
+            if src_dir not in sys.path:
+                sys.path.insert(0, src_dir)
+            mriqc_module = importlib.import_module("fmriprep.mriqc_runner")
             self._run_with_docker_preflight(
                 "BIDS Conversion + MRIQC",
                 preflight_fn=mriqc_module.mriqc_preflight,
