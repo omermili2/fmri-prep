@@ -22,7 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .runner import check_docker, to_docker_path
+from .runner import (
+    check_docker, to_docker_path,
+    is_docker_installed, is_docker_running, start_docker,
+)
 
 MRIQC_IMAGE = "nipreps/mriqc:latest"
 
@@ -69,22 +72,43 @@ def pull_mriqc_image(callback=None):
         return False, f"Error pulling MRIQC image: {e}"
 
 
-def mriqc_preflight(callback=None, auto_pull=True):
+def mriqc_preflight(callback=None, auto_start_docker=True, auto_pull=True):
     """
     Check all prerequisites for MRIQC (Docker only, no FreeSurfer license needed).
+
+    Mirrors the fMRIPrep preflight flow:
+      1. Docker installed?
+      2. Docker daemon running? (auto-start if possible)
+      3. MRIQC image available? (auto-pull if missing)
 
     Returns: (success: bool, error: str or None)
     """
     if callback:
-        callback("Checking Docker for MRIQC...")
-    docker_ok, docker_err = check_docker()
-    if not docker_ok:
-        return False, docker_err
+        callback("Checking Docker installation...")
+    if not is_docker_installed():
+        return False, (
+            "Docker is not installed.\n\n"
+            "Please install Docker Desktop:\n"
+            "\u2022 macOS/Windows: https://www.docker.com/products/docker-desktop\n"
+            "\u2022 Linux: https://docs.docker.com/engine/install/"
+        )
 
+    if callback:
+        callback("Checking if Docker is running...")
+    if not is_docker_running():
+        if auto_start_docker:
+            success, error = start_docker(timeout=90, callback=callback)
+            if not success:
+                return False, error
+        else:
+            return False, "Docker is not running. Please start Docker Desktop."
+
+    if callback:
+        callback("Checking MRIQC Docker image...")
     if not is_mriqc_image_available():
         if auto_pull:
             if callback:
-                callback("MRIQC image not found — downloading automatically...")
+                callback("MRIQC image not found \u2014 downloading automatically...")
             success, err = pull_mriqc_image(callback=callback)
             if not success:
                 return False, (

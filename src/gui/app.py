@@ -531,9 +531,16 @@ class App(ctk.CTk):
         self._run_bids = True
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
-        self._qc_only_mode = False
         if self.check_mriqc_with_bids.get():
-            self._run_with_docker_preflight("BIDS Conversion + MRIQC")
+            import importlib.util
+            mriqc_path = Path(__file__).parent.parent / "fmriprep" / "mriqc_runner.py"
+            spec = importlib.util.spec_from_file_location("mriqc_runner", mriqc_path)
+            mriqc_module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mriqc_module)
+            self._run_with_docker_preflight(
+                "BIDS Conversion + MRIQC",
+                preflight_fn=mriqc_module.mriqc_preflight,
+            )
         else:
             self._start_pipeline_internal("BIDS Conversion")
 
@@ -689,47 +696,53 @@ class App(ctk.CTk):
         self._bids_folder_for_fmriprep = bids_folder
         self._run_with_docker_preflight("fMRIPrep Only")
 
-    def _run_with_docker_preflight(self, mode_label):
-        """Run Docker preflight checks before starting fMRIPrep pipeline."""
+    def _run_with_docker_preflight(self, mode_label, preflight_fn=None):
+        """Run Docker preflight checks before starting a pipeline step.
+
+        Args:
+            mode_label:   Display label shown in the log header.
+            preflight_fn: Optional callable(callback) -> (bool, str|None).
+                          Defaults to fMRIPrep's preflight_check if not provided.
+        """
         # Clear console and show preflight status
         self.console.configure(state="normal")
         self.console.delete("1.0", "end")
         self.console.configure(state="disabled")
-        
-        self.console.log("🔍 Running pre-flight checks for fMRIPrep...", "header")
+
+        label = "MRIQC" if preflight_fn else "fMRIPrep"
+        self.console.log(f"🔍 Running pre-flight checks for {label}...", "header")
         self.console.log("=" * 60)
-        
+
         # Disable buttons during preflight
         self._set_buttons_state("disabled")
-        
-        # Run preflight in background thread
+
         def preflight_thread():
             try:
-                # Import the preflight function (dynamic import for flexibility)
-                import importlib.util
-                runner_path = Path(__file__).parent.parent / "fmriprep" / "runner.py"
-                spec = importlib.util.spec_from_file_location("runner", runner_path)
-                if spec is None or spec.loader is None:
-                    raise ImportError(f"Could not load module from {runner_path}")
-                runner_module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(runner_module)
-                preflight_check = runner_module.preflight_check
-                
                 def log_callback(message):
                     self.console.log(message)
-                
-                success, error_msg = preflight_check(
-                    callback=log_callback,
-                    auto_start_docker=True,
-                    auto_pull_image=True
-                )
-                
+
+                if preflight_fn is not None:
+                    success, error_msg = preflight_fn(callback=log_callback)
+                else:
+                    # Default: fMRIPrep preflight (dynamic import)
+                    import importlib.util
+                    runner_path = Path(__file__).parent.parent / "fmriprep" / "runner.py"
+                    spec = importlib.util.spec_from_file_location("runner", runner_path)
+                    if spec is None or spec.loader is None:
+                        raise ImportError(f"Could not load module from {runner_path}")
+                    runner_module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(runner_module)
+                    success, error_msg = runner_module.preflight_check(
+                        callback=log_callback,
+                        auto_start_docker=True,
+                        auto_pull_image=True,
+                    )
+
                 if success:
                     self.console.log("")
                     self.console.log("✅ All pre-flight checks passed!", "success")
                     self.console.log("=" * 60)
                     self.console.log("")
-                    # Now start the actual pipeline
                     self.after(100, lambda: self._start_pipeline_internal(mode_label))
                 else:
                     self.console.log("")
@@ -738,21 +751,16 @@ class App(ctk.CTk):
                         for line in error_msg.split('\n'):
                             self.console.log(f"   {line}", "error")
                     self._set_buttons_state("normal")
-                    self.label_status.configure(text="Pre-flight check failed", text_color="#F44336")
-                    
+
             except Exception as e:
                 self.console.log(f"❌ Error during pre-flight check: {e}", "error")
                 self._set_buttons_state("normal")
-                self.label_status.configure(text="Error", text_color="#F44336")
-        
+
         threading.Thread(target=preflight_thread, daemon=True).start()
 
     def _start_pipeline_internal(self, mode_label):
         """Start the pipeline with the configured options."""
-        # For fMRIPrep-only mode, we use the BIDS folder directly
-        if self._qc_only_mode:
-            bids_folder = self._bids_folder_for_qc
-        elif self._fmriprep_only_mode:
+        if self._fmriprep_only_mode:
             bids_folder = self._bids_folder_for_fmriprep
         else:
             if not self._validate_paths():
