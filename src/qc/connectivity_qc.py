@@ -96,6 +96,12 @@ def analyze_all_subjects(
     if not NILEARN_AVAILABLE:
         return []
 
+    # Load atlas once — avoids repeated failed download attempts per run
+    try:
+        atlas_img, atlas_labels = _load_atlas(atlas)
+    except Exception:
+        return []
+
     results: List[ConnectivityQCResult] = []
     deriv_path = Path(derivatives_dir)
 
@@ -117,7 +123,9 @@ def analyze_all_subjects(
         for bold_path in bold_files:
             result = _analyze_single_run(
                 bold_path,
-                atlas=atlas,
+                atlas_img=atlas_img,
+                atlas_labels=atlas_labels,
+                atlas_name=atlas,
                 compute_qc_fc=compute_qc_fc,
                 compute_dm_fc=compute_dm_fc,
                 compute_modularity=compute_modularity
@@ -133,7 +141,9 @@ def analyze_all_subjects(
 
 def _analyze_single_run(
     bold_path: Path,
-    atlas: str,
+    atlas_img,
+    atlas_labels,
+    atlas_name: str,
     compute_qc_fc: bool,
     compute_dm_fc: bool,
     compute_modularity: bool
@@ -178,8 +188,6 @@ def _analyze_single_run(
         mean_fd = float(fd_series.mean())
         n_volumes = len(fd_series)
 
-        # Load atlas
-        atlas_img, atlas_labels = _load_atlas(atlas)
         n_rois = len(atlas_labels) if atlas_labels else 0
 
         # Extract time series using Nilearn masker
@@ -213,7 +221,7 @@ def _analyze_single_run(
             run_label=run_label,
             mean_fd=mean_fd,
             n_volumes=n_volumes,
-            atlas_name=atlas,
+            atlas_name=atlas_name,
             n_rois=n_rois
         )
 
