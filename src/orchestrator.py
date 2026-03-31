@@ -58,6 +58,14 @@ except ImportError:
 setup_encoding()
 
 
+def _pick_mni_space(output_spaces):
+    """Return the first MNI space from output_spaces, or the default."""
+    for space in (output_spaces or []):
+        if space.startswith("MNI"):
+            return space
+    return "MNI152NLin2009cAsym"
+
+
 def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
                         skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker,
                         desc_created_event, report, anonymize=False, debug_log_file=None,
@@ -432,7 +440,8 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                     atlas='schaefer_100',
                     compute_qc_fc=True,
                     compute_dm_fc=True,
-                    compute_modularity=False
+                    compute_modularity=False,
+                    mni_space=_pick_mni_space([])
                 )
                 if connectivity_results:
                     failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
@@ -899,7 +908,8 @@ Examples:
                 atlas='schaefer_100',
                 compute_qc_fc=True,
                 compute_dm_fc=True,
-                compute_modularity=False  # Too expensive for routine QC
+                compute_modularity=False,  # Too expensive for routine QC
+                mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", []))
             )
             if connectivity_results:
                 failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]

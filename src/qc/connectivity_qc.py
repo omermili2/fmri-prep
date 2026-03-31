@@ -77,7 +77,8 @@ def analyze_all_subjects(
     atlas='schaefer_100',
     compute_qc_fc=True,
     compute_dm_fc=True,
-    compute_modularity=False  # Expensive, off by default
+    compute_modularity=False,  # Expensive, off by default
+    mni_space='MNI152NLin2009cAsym'
 ) -> List[ConnectivityQCResult]:
     """
     Analyze connectivity quality for all subjects.
@@ -115,9 +116,9 @@ def analyze_all_subjects(
         if not root.exists():
             continue
 
-        # Find space-MNI152NLin2009cAsym preprocessed BOLD files
+        # Find preprocessed BOLD files in the configured MNI space
         bold_files = sorted(
-            root.rglob("*space-MNI152NLin2009cAsym*_desc-preproc_bold.nii.gz")
+            root.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")
         )
 
         for bold_path in bold_files:

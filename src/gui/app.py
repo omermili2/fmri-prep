@@ -233,6 +233,15 @@ class App(ctk.CTk):
         )
         self.check_space_mni.grid(row=1, column=0, padx=30, pady=3, sticky="w")
         self.check_space_mni.select()  # Default: ON
+
+        self.check_space_mni6 = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="MNI152NLin6Asym (FSL standard — used by some pipelines)",
+            font=ctk.CTkFont(size=11),
+            command=self._validate_fmriprep_options
+        )
+        self.check_space_mni6.grid(row=2, column=0, padx=30, pady=3, sticky="w")
+        self.check_space_mni6.deselect()  # Default: OFF
         
         self.check_space_t1w = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
@@ -240,7 +249,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             command=self._validate_fmriprep_options
         )
-        self.check_space_t1w.grid(row=2, column=0, padx=30, pady=3, sticky="w")
+        self.check_space_t1w.grid(row=3, column=0, padx=30, pady=3, sticky="w")
         self.check_space_t1w.deselect()  # Default: OFF
         
         # --- Processing Options Section ---
@@ -249,14 +258,14 @@ class App(ctk.CTk):
             text="Processing Options:",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_processing.grid(row=3, column=0, columnspan=2, padx=15, pady=(15, 5), sticky="w")
+        self.label_processing.grid(row=4, column=0, columnspan=2, padx=15, pady=(15, 5), sticky="w")
         
         self.check_freesurfer = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
             text="FreeSurfer surface reconstruction (adds ~6+ hours per subject)",
             font=ctk.CTkFont(size=11)
         )
-        self.check_freesurfer.grid(row=4, column=0, padx=30, pady=3, sticky="w")
+        self.check_freesurfer.grid(row=5, column=0, padx=30, pady=3, sticky="w")
         self.check_freesurfer.deselect()  # Default: OFF (skip FreeSurfer)
         
         self.check_slice_timing = ctk.CTkCheckBox(
@@ -264,7 +273,7 @@ class App(ctk.CTk):
             text="Slice timing correction",
             font=ctk.CTkFont(size=11)
         )
-        self.check_slice_timing.grid(row=5, column=0, padx=30, pady=3, sticky="w")
+        self.check_slice_timing.grid(row=6, column=0, padx=30, pady=3, sticky="w")
         self.check_slice_timing.select()  # Default: ON
         
         self.check_syn_sdc = ctk.CTkCheckBox(
@@ -272,7 +281,7 @@ class App(ctk.CTk):
             text="Fieldmap-less distortion correction (SyN SDC)",
             font=ctk.CTkFont(size=11)
         )
-        self.check_syn_sdc.grid(row=6, column=0, padx=30, pady=3, sticky="w")
+        self.check_syn_sdc.grid(row=7, column=0, padx=30, pady=3, sticky="w")
         self.check_syn_sdc.deselect()  # Default: OFF
         
         self.check_aroma = ctk.CTkCheckBox(
@@ -281,7 +290,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             command=self._validate_fmriprep_options
         )
-        self.check_aroma.grid(row=7, column=0, padx=30, pady=(3, 10), sticky="w")
+        self.check_aroma.grid(row=8, column=0, padx=30, pady=(3, 10), sticky="w")
         self.check_aroma.deselect()  # Default: OFF
         
         # Validation warning label
@@ -291,7 +300,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#FFC107"
         )
-        self.label_fmriprep_warning.grid(row=8, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
+        self.label_fmriprep_warning.grid(row=9, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
 
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
@@ -443,13 +452,13 @@ class App(ctk.CTk):
         warnings = []
         
         # Check that at least one output space is selected
-        if not self.check_space_mni.get() and not self.check_space_t1w.get():
+        if not self.check_space_mni.get() and not self.check_space_mni6.get() and not self.check_space_t1w.get():
             warnings.append("⚠ Select at least one output space")
         
-        # ICA-AROMA requires MNI output
-        if self.check_aroma.get() and not self.check_space_mni.get():
-            warnings.append("⚠ ICA-AROMA requires MNI output space")
-            # Auto-enable MNI when AROMA is selected
+        # ICA-AROMA requires an MNI output space
+        if self.check_aroma.get() and not self.check_space_mni.get() and not self.check_space_mni6.get():
+            warnings.append("⚠ ICA-AROMA requires an MNI output space")
+            # Auto-enable MNI2009c when AROMA is selected
             self.check_space_mni.select()
         
         if warnings:
@@ -466,6 +475,8 @@ class App(ctk.CTk):
         spaces = []
         if self.check_space_mni.get():
             spaces.append("MNI152NLin2009cAsym")
+        if self.check_space_mni6.get():
+            spaces.append("MNI152NLin6Asym")
         if self.check_space_t1w.get():
             spaces.append("T1w")
         if spaces:
