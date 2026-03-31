@@ -27,8 +27,7 @@ from .runner import (
     is_docker_installed, is_docker_running, start_docker,
 )
 
-MRIQC_IMAGE = "nipreps/mriqc:0.16.1"
-MRIQC_TAR_PATH = Path(__file__).parent.parent.parent.parent / "mriqc-0.16.1.tar"
+MRIQC_IMAGE = "nipreps/mriqc:24.0.2"
 
 
 def is_mriqc_image_available() -> bool:
@@ -41,33 +40,6 @@ def is_mriqc_image_available() -> bool:
         return bool(result.stdout.strip())
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return False
-
-
-def load_mriqc_from_tar(callback=None):
-    """
-    Load the MRIQC Docker image from the local tar archive.
-
-    Returns: (success: bool, error: str or None)
-    """
-    if not MRIQC_TAR_PATH.exists():
-        return False, f"MRIQC tar not found at {MRIQC_TAR_PATH}"
-    if callback:
-        callback(f"Loading MRIQC image from {MRIQC_TAR_PATH.name}...")
-        callback("This may take a minute...")
-    try:
-        result = subprocess.run(
-            ["docker", "load", "-i", str(MRIQC_TAR_PATH)],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode == 0:
-            if callback:
-                callback("MRIQC image loaded successfully from local tar!")
-            return True, None
-        return False, f"docker load failed: {result.stderr.strip()[-500:]}"
-    except subprocess.TimeoutExpired:
-        return False, "docker load timed out (>5 min)"
-    except Exception as e:
-        return False, f"Error loading MRIQC image from tar: {e}"
 
 
 def pull_mriqc_image(callback=None):
@@ -135,33 +107,19 @@ def mriqc_preflight(callback=None, auto_start_docker=True, auto_pull=True):
         callback("Checking MRIQC Docker image...")
     if not is_mriqc_image_available():
         if auto_pull:
-            # Try loading from local tar first, fall back to docker pull
-            if MRIQC_TAR_PATH.exists():
-                if callback:
-                    callback(f"MRIQC image not found \u2014 loading from local tar ({MRIQC_TAR_PATH.name})...")
-                success, err = load_mriqc_from_tar(callback=callback)
-            else:
-                success = False
-                err = "Local tar not found"
-
-            if not success:
-                if callback:
-                    callback(f"Tar load failed ({err}) \u2014 trying docker pull...")
-                success, err = pull_mriqc_image(callback=callback)
-
+            if callback:
+                callback("MRIQC image not found \u2014 downloading automatically...")
+            success, err = pull_mriqc_image(callback=callback)
             if not success:
                 return False, (
-                    f"MRIQC image not found and could not be loaded.\n\n"
-                    f"Options:\n"
-                    f"  1. Place mriqc-0.16.1.tar in {MRIQC_TAR_PATH.parent}\n"
-                    f"  2. Run: docker pull {MRIQC_IMAGE}\n\n"
-                    f"Error: {err}"
+                    f"MRIQC image not found and auto-pull failed.\n\n"
+                    f"Run manually:\n  docker pull {MRIQC_IMAGE}\n\n"
+                    f"Pull error: {err}"
                 )
         else:
             return False, (
                 f"MRIQC Docker image not found.\n\n"
-                f"Load from tar: docker load -i {MRIQC_TAR_PATH}\n"
-                f"Or pull:       docker pull {MRIQC_IMAGE}"
+                f"Download it:\n  docker pull {MRIQC_IMAGE}"
             )
 
     if callback:
