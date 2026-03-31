@@ -408,7 +408,10 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     try:
         import sys
         if '--connectivity-qc' in sys.argv and derivatives_dir.exists():
-            from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            try:
+                from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            except ImportError:
+                from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
 
             if CONNECTIVITY_QC_AVAILABLE:
                 safe_print("\nRunning connectivity quality assessment...", flush=True)
@@ -858,11 +861,14 @@ Examples:
         else:
             safe_print("  No confounds files found (fMRIPrep may not have completed).", flush=True)
 
-    # Layer 4: Connectivity QC (optional, requires --connectivity-qc flag and Nilearn)
+    # Layer 4: Connectivity QC (runs automatically when fMRIPrep output exists)
     censoring_results = []
     connectivity_results = []
-    if args.connectivity_qc and not args.skip_fmriprep:
-        from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+    if not args.skip_fmriprep:
+        try:
+            from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+        except ImportError:
+            from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
 
         if CONNECTIVITY_QC_AVAILABLE:
             safe_print("Running connectivity quality assessment...", flush=True)

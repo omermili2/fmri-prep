@@ -216,6 +216,28 @@ def _html_head(accent_color: str) -> str:
   .plain-msg {{ color: #444; }}
   .meta {{ color: #888; font-size: 12px; }}
   .sep {{ border: none; border-top: 1px solid #e8eaed; margin: 28px 0; }}
+  /* Nilearn / Connectivity QC section */
+  .nilearn-section {{ background: #f0f4ff; border: 1.5px solid #7c83d6;
+                       border-radius: 10px; padding: 20px 24px 12px;
+                       margin: 32px 0 24px; }}
+  .nilearn-header {{ display: flex; align-items: center; gap: 10px;
+                      margin-bottom: 10px; }}
+  .nilearn-tag {{ background: #5c6bc0; color: #fff; font-size: 11px;
+                   font-weight: 800; letter-spacing: .06em; padding: 3px 9px;
+                   border-radius: 20px; text-transform: uppercase; }}
+  .nilearn-title {{ font-size: 1.15rem; font-weight: 700; color: #1a237e; }}
+  .nilearn-legend {{ background: #e8eaf6; border-left: 3px solid #5c6bc0;
+                      padding: 8px 14px; border-radius: 4px; margin: 10px 0 14px;
+                      font-size: 12px; color: #3949ab; line-height: 1.7; }}
+  .nilearn-section h3 {{ font-size: .95rem; font-weight: 700; color: #283593;
+                          margin: 18px 0 8px; border-left: 3px solid #7986cb;
+                          padding-left: 8px; }}
+  .nilearn-section table {{ box-shadow: 0 1px 6px rgba(92,107,192,.15); }}
+  .nilearn-section th {{ background: #e8eaf6; color: #3949ab; }}
+  .metric-ok    {{ font-weight: 700; color: #155724; }}
+  .metric-warn  {{ font-weight: 700; color: #856404; }}
+  .metric-error {{ font-weight: 700; color: #c0392b; }}
+  .metric-unknown {{ color: #888; }}
 </style>
 </head>"""
 
@@ -518,23 +540,47 @@ def _fd_bar(pct: float) -> str:
     )
 
 
+def _metric_span(value: str, severity: str) -> str:
+    """Wrap a metric value in a severity-colored span."""
+    css = {"OK": "metric-ok", "WARNING": "metric-warn",
+           "ERROR": "metric-error"}.get(severity, "metric-unknown")
+    return f'<span class="{css}">{value}</span>'
+
+
 def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
-    """Generate the connectivity QC section (Layer 5)."""
+    """Generate the Nilearn connectivity QC section (Layer 4) with distinctive styling."""
 
     if not censoring_results and not connectivity_results:
         return ""
 
     intro = """<hr class="sep">
-<h2>Connectivity Quality Assessment (Layer 5)</h2>
-<p style="color:#555;font-size:13px;margin-bottom:12px;">
-  Advanced quality control for functional connectivity analysis based on
-  <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank">PMC10977879</a>.
-  Assesses volume censoring, motion-connectivity coupling (QC-FC), and distance-dependent artifacts (DM-FC).
-</p>"""
+<div class="nilearn-section">
+<div class="nilearn-header">
+  <span class="nilearn-tag">Nilearn</span>
+  <span class="nilearn-title">Connectivity Quality Assessment &mdash; Layer 4</span>
+</div>
+<p style="color:#3949ab;font-size:13px;margin-bottom:10px;">
+  Automated functional connectivity QC powered by
+  <a href="https://nilearn.github.io" target="_blank" style="color:#5c6bc0;">Nilearn</a>.
+  Based on <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank" style="color:#5c6bc0;">PMC10977879</a>:
+  analyzes volume censoring, motion-connectivity coupling (QC-FC), and distance-dependent artifacts (DM-FC).
+</p>
+<div class="nilearn-legend">
+  <b>How to read this section:</b><br>
+  &#9679; <b>Volume Censoring</b> &mdash; % of BOLD volumes removed due to motion (FD &gt; 0.2 mm).
+  Runs with &gt;80% censored or &lt;1 min usable are <span class="metric-error">not suitable</span> for connectivity analysis.<br>
+  &#9679; <b>QC-FC</b> &mdash; correlation between head motion and connectivity strength across ROIs.
+  <span class="metric-ok">&lt;0.10 = OK</span> &nbsp;&#9658;&nbsp;
+  <span class="metric-warn">0.10&ndash;0.20 = WARNING</span> &nbsp;&#9658;&nbsp;
+  <span class="metric-error">&gt;0.20 = exclude</span><br>
+  &#9679; <b>DM-FC</b> &mdash; distance-dependent motion bias (inflated short-range correlations).
+  <span class="metric-ok">&#8776;0 = OK</span> &nbsp;&#9658;&nbsp;
+  <span class="metric-error">large values = exclude</span>
+</div>"""
 
     sections = [intro]
 
-    # Section 5a: Volume Censoring
+    # Section 4a: Volume Censoring
     if censoring_results:
         rows = []
         for c in sorted(censoring_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
@@ -545,8 +591,10 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
             else:
                 badge = '<span class="badge badge-error">Not Suitable</span>'
 
-            # Volume censoring bar (at 0.2mm threshold)
             censor_bar = _fd_bar(c.pct_censored_02mm)
+            pct_cls = ("metric-error" if c.pct_censored_02mm > 80
+                       else "metric-warn" if c.pct_censored_02mm > 40
+                       else "metric-ok")
 
             rows.append(
                 f"<tr>"
@@ -554,8 +602,8 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
                 f"<span class='meta'>{c.run_label}</span></td>"
                 f"<td>{badge}</td>"
                 f"<td>{c.mean_fd:.2f} mm</td>"
-                f"<td>{c.pct_censored_02mm:.0f}% {censor_bar}<br>"
-                f"<span class='meta'>({c.n_censored_02mm}/{c.n_volumes} volumes @ 0.2mm)</span></td>"
+                f"<td><span class='{pct_cls}'>{c.pct_censored_02mm:.0f}%</span> {censor_bar}<br>"
+                f"<span class='meta'>({c.n_censored_02mm}/{c.n_volumes} vols @ 0.2mm)</span></td>"
                 f"<td>{c.usable_minutes_02mm:.1f} min<br>"
                 f"<span class='meta'>({c.usable_volumes_02mm} volumes)</span></td>"
                 f"<td style='font-size:12px'>{c.plain_message}</td>"
@@ -563,11 +611,7 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
             )
 
         rows_html = "\n".join(rows) if rows else "<tr><td colspan='6'>No results</td></tr>"
-
-        sections.append(f"""<h3 style="font-size:1rem;margin:16px 0 8px;color:#555;">Volume Censoring Analysis</h3>
-<p style="color:#666;font-size:12px;margin-bottom:8px;">
-  Based on FD threshold of 0.2mm. Runs with >80% censored or <1min usable are not suitable for connectivity.
-</p>
+        sections.append(f"""<h3>Volume Censoring</h3>
 <table>
   <thead><tr>
     <th>Subject / Run</th><th>Status</th><th>Mean FD</th>
@@ -576,7 +620,7 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
   <tbody>{rows_html}</tbody>
 </table>""")
 
-    # Section 5b: Connectivity Metrics (QC-FC, DM-FC)
+    # Section 4b: QC-FC / DM-FC metrics
     if connectivity_results:
         rows = []
         for c in sorted(connectivity_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
@@ -585,45 +629,52 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
             elif c.worst_severity == "WARNING":
                 badge = '<span class="badge badge-warning">WARNING</span>'
             elif c.worst_severity == "ERROR":
-                badge = '<span class="badge badge-error">ERROR</span>'
+                badge = '<span class="badge badge-error">EXCLUDE</span>'
             else:
-                badge = '<span class="meta">UNKNOWN</span>'
+                badge = '<span class="metric-unknown">UNKNOWN</span>'
 
-            qc_fc_str = f"{c.qc_fc_value:.3f}" if c.qc_fc_value is not None else "—"
-            dm_fc_str = f"{c.dm_fc_value:.3f}" if c.dm_fc_value is not None else "—"
-            modularity_str = f"{c.modularity_q:.3f}" if c.modularity_q is not None else "—"
+            qc_fc_str = (_metric_span(f"{c.qc_fc_value:.3f}", c.qc_fc_severity)
+                         if c.qc_fc_value is not None
+                         else '<span class="metric-unknown">&mdash;</span>')
+            dm_fc_str = (_metric_span(f"{c.dm_fc_value:.3f}", c.dm_fc_severity)
+                         if c.dm_fc_value is not None
+                         else '<span class="metric-unknown">&mdash;</span>')
+            mod_str   = (_metric_span(f"{c.modularity_q:.3f}", c.modularity_severity)
+                         if c.modularity_q is not None
+                         else '<span class="metric-unknown">&mdash;</span>')
 
             error_msg = ""
             if c.error_message:
-                error_msg = f"<br><span class='meta' style='color:#c0392b;'>Error: {c.error_message[:100]}</span>"
+                error_msg = (f"<br><span class='meta' style='color:#c0392b;'>"
+                             f"Error: {c.error_message[:100]}</span>")
+
+            action_box = ""
+            if c.action:
+                action_box = (f"<div class='action-box' style='border-color:#5c6bc0;"
+                              f"background:#e8eaf6;color:#283593;'>{c.action}</div>")
 
             rows.append(
                 f"<tr>"
                 f"<td><b>sub-{c.sub_id}</b> / ses-{c.ses_id}<br>"
-                f"<span class='meta'>{c.run_label}</span></td>"
+                f"<span class='meta'>{c.run_label} &bull; {c.atlas_name} &bull; {c.n_rois} ROIs</span></td>"
                 f"<td>{badge}</td>"
                 f"<td>{qc_fc_str}<br><span class='meta'>({c.qc_fc_severity})</span></td>"
                 f"<td>{dm_fc_str}<br><span class='meta'>({c.dm_fc_severity})</span></td>"
-                f"<td>{modularity_str}<br><span class='meta'>({c.modularity_severity})</span></td>"
-                f"<td style='font-size:12px'>{c.plain_message}{error_msg}</td>"
+                f"<td>{mod_str}<br><span class='meta'>({c.modularity_severity})</span></td>"
+                f"<td style='font-size:12px'>{c.plain_message}{error_msg}{action_box}</td>"
                 f"</tr>"
             )
 
         rows_html = "\n".join(rows) if rows else "<tr><td colspan='6'>No results</td></tr>"
-
-        sections.append(f"""<h3 style="font-size:1rem;margin:24px 0 8px;color:#555;">Connectivity Metrics</h3>
-<p style="color:#666;font-size:12px;margin-bottom:8px;">
-  <b>QC-FC</b>: Motion-connectivity correlation (lower is better, <0.1 = OK).
-  <b>DM-FC</b>: Distance-dependent motion (closer to 0 is better).
-  <b>Modularity Q</b>: Network structure preservation (higher is better, >0.3 = OK).
-</p>
+        sections.append(f"""<h3>Motion-Connectivity Metrics (QC-FC &amp; DM-FC)</h3>
 <table>
   <thead><tr>
-    <th>Subject / Run</th><th>Status</th><th>QC-FC</th><th>DM-FC</th><th>Modularity</th><th>Notes</th>
+    <th>Subject / Run</th><th>Status</th><th>QC-FC</th><th>DM-FC</th><th>Modularity Q</th><th>Recommendation</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>""")
 
+    sections.append("</div>")  # close .nilearn-section
     return "\n".join(sections)
 
 
