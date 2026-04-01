@@ -399,7 +399,7 @@ def run_fmriprep(
         output_dir: Path to output directory
         participant_label: Participant label (without 'sub-' prefix)
         license_path: Path to FreeSurfer license file (auto-detected if None)
-        output_spaces: List of output spaces (default: ['MNI152NLin2009cAsym'])
+        output_spaces: List of output spaces (default: ['MNI152NLin2009cAsym:res-2'])
         fs_reconall: Whether to run FreeSurfer reconall (adds ~6 hours)
         skip_slice_timing: Whether to skip slice timing correction
         use_syn_sdc: Whether to use SyN-based distortion correction
@@ -432,7 +432,7 @@ def run_fmriprep(
     
     # Set default output spaces
     if output_spaces is None:
-        output_spaces = ['MNI152NLin2009cAsym']
+        output_spaces = ['MNI152NLin2009cAsym:res-2']
     
     # Build Docker command
     bids_mount = to_docker_path(bids_dir)
@@ -684,7 +684,8 @@ def main():
     skip_slice_timing = opts.get("skip_slice_timing", False)
     use_syn_sdc = opts.get("use_syn_sdc", False)
     use_aroma = opts.get("use_aroma", False)
-    
+    mem_mb = opts.get("mem_mb", 16000)
+
     success, error = run_fmriprep(
         args.bids_dir,
         args.output_dir,
@@ -694,7 +695,8 @@ def main():
         fs_reconall=fs_reconall,
         skip_slice_timing=skip_slice_timing,
         use_syn_sdc=use_syn_sdc,
-        use_aroma=use_aroma
+        use_aroma=use_aroma,
+        mem_mb=mem_mb
     )
     
     if not success:

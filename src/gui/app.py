@@ -227,7 +227,7 @@ class App(ctk.CTk):
         
         self.check_space_mni = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
-            text="MNI152NLin2009cAsym (standard brain template)",
+            text="MNI152NLin2009cAsym @ 2mm (standard brain template)",
             font=ctk.CTkFont(size=11),
             command=self._validate_fmriprep_options
         )
@@ -236,7 +236,7 @@ class App(ctk.CTk):
 
         self.check_space_mni6 = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
-            text="MNI152NLin6Asym (FSL standard — used by some pipelines)",
+            text="MNI152NLin6Asym @ 2mm (FSL standard — used by some pipelines)",
             font=ctk.CTkFont(size=11),
             command=self._validate_fmriprep_options
         )
@@ -474,9 +474,9 @@ class App(ctk.CTk):
         # Output spaces
         spaces = []
         if self.check_space_mni.get():
-            spaces.append("MNI152NLin2009cAsym")
+            spaces.append("MNI152NLin2009cAsym:res-2")
         if self.check_space_mni6.get():
-            spaces.append("MNI152NLin6Asym")
+            spaces.append("MNI152NLin6Asym:res-2")
         if self.check_space_t1w.get():
             spaces.append("T1w")
         if spaces:

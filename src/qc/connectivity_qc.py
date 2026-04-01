@@ -12,6 +12,7 @@ Based on PMC10977879 and Nilearn's connectivity tools.
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Dict
+import re
 import warnings
 
 import numpy as np
@@ -161,17 +162,19 @@ def _analyze_single_run(
             (p.replace("ses-", "") for p in parts if p.startswith("ses-")), "unknown"
         )
 
-        stem = bold_path.name.replace("_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz", "")
+        stem = re.sub(r"_space-.*$", "", bold_path.name.replace(".nii.gz", ""))
         run_label = "_".join(
             p for p in stem.split("_")
             if not p.startswith("sub-") and not p.startswith("ses-")
         )
 
         # Find corresponding confounds file
-        confounds_path = bold_path.parent / bold_path.name.replace(
-            "_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz",
-            "_desc-confounds_timeseries.tsv"
+        confounds_name = re.sub(
+            r"_space-[^_]+(_res-[^_]+)?_desc-preproc_bold\.nii\.gz$",
+            "_desc-confounds_timeseries.tsv",
+            bold_path.name
         )
+        confounds_path = bold_path.parent / confounds_name
 
         if not confounds_path.exists():
             return None
