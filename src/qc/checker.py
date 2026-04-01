@@ -138,13 +138,14 @@ class BIDSQualityChecker:
         if not has_bold:
             findings.append(
                 QCFinding(
-                    severity=Severity.WARNING,
+                    severity=Severity.ERROR,
                     sub_id=sub_id,
                     ses_id=ses_id,
                     category="missing_scan",
                     message="No BOLD functional scan found",
                     plain_message=(
-                        "No BOLD functional scan was found in this session."
+                        "No BOLD functional scan was found in this session. "
+                        "fMRIPrep requires BOLD images and will be skipped."
                     ),
                     action="",
                 )

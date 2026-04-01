@@ -374,8 +374,8 @@ def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True)
     
     if callback:
         callback("All pre-flight checks passed!")
-    
-        return True, None
+
+    return True, None
 
 
 def run_fmriprep(

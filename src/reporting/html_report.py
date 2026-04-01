@@ -11,7 +11,7 @@ Sections:
   3. BIDS quality findings (Layer 1)
   4. MRIQC Image Quality Metrics (Layer 2, optional)
   5. Motion analysis results (Layer 3)
-  6. Connectivity QC results (Layer 4, optional)
+  6. Connectivity QC results (optional)
 """
 
 from datetime import datetime
@@ -216,6 +216,9 @@ def _html_head(accent_color: str) -> str:
   .plain-msg {{ color: #444; }}
   .meta {{ color: #888; font-size: 12px; }}
   .sep {{ border: none; border-top: 1px solid #e8eaed; margin: 28px 0; }}
+  .section-explainer {{ background: #f8f9fa; border-left: 3px solid #b0bec5;
+                          padding: 10px 14px; border-radius: 4px; margin-bottom: 16px;
+                          font-size: 13px; color: #555; line-height: 1.65; }}
   /* Nilearn / Connectivity QC section */
   .nilearn-section {{ background: #f0f4ff; border: 1.5px solid #7c83d6;
                        border-radius: 10px; padding: 20px 24px 12px;
@@ -361,6 +364,11 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
     conn_header = "<th>Connectivity</th>" if has_connectivity else ""
 
     return f"""<h2>Subject Overview</h2>
+<div class="section-explainer">
+  At-a-glance status for every subject and session that passed through the pipeline.
+  Each column corresponds to a quality-control stage; click any flagged badge in the
+  sections below for details.
+</div>
 <table>
   <thead><tr>
     <th>Subject</th><th>Session</th>
@@ -388,6 +396,14 @@ def _section_bids_findings(errors, warnings) -> str:
 
     return f"""<hr class="sep">
 <h2>Scan Quality Findings</h2>
+<div class="section-explainer">
+  Checks performed immediately after DICOM-to-BIDS conversion, before any preprocessing.
+  They verify that the expected scan types are present (T1w anatomical, BOLD functional),
+  that files are not suspiciously small or truncated, and that key acquisition parameters
+  (TR, field strength) are consistent across subjects.
+  Issues flagged here may indicate an aborted scan, a missing sequence, or a protocol change
+  mid-study.
+</div>
 <table>
   <thead><tr>
     <th>Subject</th><th>Severity</th><th>Category</th><th>Details</th>
@@ -422,11 +438,22 @@ def _section_motion(motion_results) -> str:
 
     return f"""<hr class="sep">
 <h2>Motion Analysis (fMRIPrep Confounds)</h2>
-<p style="color:#555;font-size:13px;margin-bottom:12px;">
-  FD threshold: {0.5} mm. 
-  RESCAN flag: &ge;20% of frames above threshold or mean FD &ge;1.0 mm.
-  WARNING flag: &ge;10% of frames above threshold or mean FD &ge;0.5 mm.
-</p>
+<div class="section-explainer">
+  After preprocessing, <a href="https://fmriprep.org/" target="_blank"
+  style="color:#5c6bc0;">fMRIPrep</a> outputs a confounds time-series file for every
+  BOLD run. This section reads the <b>framewise displacement (FD)</b> column from those
+  files to quantify head motion.
+  <br><br>
+  <b>Framewise displacement</b> (Power et al., 2012) summarizes volume-to-volume head
+  movement by combining translational and rotational displacement into a single number
+  (in mm). A frame with FD &gt; {0.5}&nbsp;mm is considered a <i>high-motion frame</i>.
+  Runs with many high-motion frames yield unreliable activation maps and inflated
+  functional-connectivity estimates.
+  <br><br>
+  <b>Thresholds used here:</b>&ensp;
+  RE-SCAN: &ge;20% high-motion frames <i>or</i> mean&nbsp;FD &ge; 1.0&nbsp;mm &nbsp;|&nbsp;
+  WARNING: &ge;10% high-motion frames <i>or</i> mean&nbsp;FD &ge; 0.5&nbsp;mm.
+</div>
 <table>
   <thead><tr>
     <th>Subject</th><th>Run</th><th>Status</th>
@@ -450,6 +477,12 @@ def _section_pipeline_failures(failures) -> str:
 
     return f"""<hr class="sep">
 <h2>Pipeline Failures</h2>
+<div class="section-explainer">
+  Sessions listed here could not be fully processed. The <b>Stage</b> column indicates
+  where the failure occurred (BIDS conversion or fMRIPrep preprocessing) and the
+  <b>Error</b> column shows the reason. Common causes include missing scan types,
+  Docker container issues, or insufficient disk space.
+</div>
 <table>
   <thead><tr>
     <th>Subject</th><th>Session</th><th>Stage</th><th>Error</th>
@@ -517,10 +550,34 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
 
     return f"""<hr class="sep">
 <h2>MRIQC &#x2014; Image Quality Metrics</h2>
-{group_links}<p style="color:#555;font-size:13px;margin-bottom:12px;">
-  IQMs are computed by MRIQC on the raw (pre-processed) images.
-  Thresholds are indicative — always open the visual HTML reports for full context.
-</p>
+<div class="section-explainer">
+  <a href="https://mriqc.readthedocs.io/" target="_blank" style="color:#5c6bc0;">MRIQC</a>
+  (MRI Quality Control) is a tool developed by the
+  <a href="https://www.nipreps.org/" target="_blank" style="color:#5c6bc0;">NiPreps</a>
+  community that computes <b>Image Quality Metrics (IQMs)</b> on unprocessed MRI data.
+  It produces per-scan visual reports and a set of numerical measures that help identify
+  problematic acquisitions <i>before</i> investing time in preprocessing.
+  <br><br>
+  <b>Structural (T1w) metrics:</b>
+  <b>SNR</b> (signal-to-noise ratio in gray matter) quantifies overall image clarity;
+  <b>CNR</b> (contrast-to-noise ratio) measures the ability to distinguish gray from white matter;
+  <b>CJV</b> (coefficient of joint variation) detects tissue-intensity overlap caused by motion or
+  B1-field inhomogeneity;
+  <b>INU range</b> captures the severity of intensity non-uniformity (bias field);
+  <b>QI1</b> estimates the proportion of artifact-contaminated voxels in the air background.
+  <br><br>
+  <b>Functional (BOLD) metrics:</b>
+  <b>tSNR</b> (temporal signal-to-noise ratio) reflects the stability of the BOLD signal over time
+  &mdash; low tSNR means noisy time-series that reduce statistical power;
+  <b>FD mean</b> (mean framewise displacement) summarizes average head movement per volume;
+  <b>GSR</b> (ghost-to-signal ratio, X and Y) detects EPI ghosting artifacts along each
+  phase-encode direction;
+  <b>AOR</b> (AFNI outlier ratio) reports the fraction of volumes flagged as outliers.
+  <br><br>
+  Thresholds shown here are indicative &mdash; always open the MRIQC visual HTML reports
+  for the full picture (carpet plots, tissue segmentation overlays, and mosaic views).
+</div>
+{group_links}
 <table>
   <thead><tr>
     <th>Subject</th><th>Status</th><th>Flags</th><th>Key Metrics</th><th>Visual Report</th>
@@ -548,7 +605,7 @@ def _metric_span(value: str, severity: str) -> str:
 
 
 def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
-    """Generate the Nilearn connectivity QC section (Layer 4) with distinctive styling."""
+    """Generate the Nilearn connectivity QC section with distinctive styling."""
 
     if not censoring_results and not connectivity_results:
         return ""
@@ -557,25 +614,47 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
 <div class="nilearn-section">
 <div class="nilearn-header">
   <span class="nilearn-tag">Nilearn</span>
-  <span class="nilearn-title">Connectivity Quality Assessment &mdash; Layer 4</span>
+  <span class="nilearn-title">Functional Connectivity Quality Assessment</span>
 </div>
-<p style="color:#3949ab;font-size:13px;margin-bottom:10px;">
-  Automated functional connectivity QC powered by
-  <a href="https://nilearn.github.io" target="_blank" style="color:#5c6bc0;">Nilearn</a>.
-  Based on <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank" style="color:#5c6bc0;">PMC10977879</a>:
-  analyzes volume censoring, motion-connectivity coupling (QC-FC), and distance-dependent artifacts (DM-FC).
-</p>
+<div class="section-explainer" style="background:#e8eaf6;border-color:#5c6bc0;color:#3949ab;">
+  This section evaluates whether each BOLD run has sufficient data quality for
+  <b>functional connectivity analysis</b> (e.g., seed-based correlation, network parcellation,
+  or graph-theoretic measures).
+  Connectivity estimates are especially sensitive to head motion because even small movements
+  can introduce spurious short-range correlations and inflate or distort network structure
+  (Power et al., 2012; Satterthwaite et al., 2013).
+  <br><br>
+  The analyses below are computed with
+  <a href="https://nilearn.github.io/" target="_blank" style="color:#5c6bc0;">Nilearn</a>,
+  an open-source Python library for statistical learning on neuroimaging data.
+  Nilearn extracts regional time-series from a brain atlas (here, Schaefer 100-parcel),
+  computes a connectivity matrix (Pearson correlation), and then derives the QC metrics below.
+  Thresholds follow recommendations from
+  <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank" style="color:#5c6bc0;">Parkes et al.</a>
+</div>
 <div class="nilearn-legend">
-  <b>How to read this section:</b><br>
-  &#9679; <b>Volume Censoring</b> &mdash; % of BOLD volumes removed due to motion (FD &gt; 0.2 mm).
-  Runs with &gt;80% censored or &lt;1 min usable are <span class="metric-error">not suitable</span> for connectivity analysis.<br>
-  &#9679; <b>QC-FC</b> &mdash; correlation between head motion and connectivity strength across ROIs.
-  <span class="metric-ok">&lt;0.10 = OK</span> &nbsp;&#9658;&nbsp;
-  <span class="metric-warn">0.10&ndash;0.20 = WARNING</span> &nbsp;&#9658;&nbsp;
-  <span class="metric-error">&gt;0.20 = exclude</span><br>
-  &#9679; <b>DM-FC</b> &mdash; distance-dependent motion bias (inflated short-range correlations).
-  <span class="metric-ok">&#8776;0 = OK</span> &nbsp;&#9658;&nbsp;
-  <span class="metric-error">large values = exclude</span>
+  <b>Metrics at a glance:</b><br>
+  &#9679; <b>Volume Censoring</b> &mdash;
+  Identifies BOLD volumes where framewise displacement exceeds 0.2&nbsp;mm (a strict threshold
+  appropriate for connectivity work) and reports the proportion of volumes that would be
+  removed ("scrubbed"). If more than 80% of volumes are censored or less than 1&nbsp;minute of
+  clean data remains, the run is <span class="metric-error">not suitable</span> for
+  connectivity analysis.<br>
+  &#9679; <b>QC-FC</b> (Quality Control &ndash; Functional Connectivity) &mdash;
+  Measures the partial correlation between each subject&rsquo;s mean framewise displacement and
+  their edge-wise connectivity strength. A high QC-FC value means that motion is systematically
+  related to the connectivity matrix &mdash; a sign of residual motion contamination even after
+  preprocessing.
+  <span class="metric-ok">&lt;0.10 = acceptable</span>,
+  <span class="metric-warn">0.10&ndash;0.20 = caution</span>,
+  <span class="metric-error">&gt;0.20 = likely confounded</span>.<br>
+  &#9679; <b>DM-FC</b> (Distance-dependent Motion &ndash; Functional Connectivity) &mdash;
+  Quantifies whether motion artifacts inflate short-range correlations more than long-range ones.
+  In a clean dataset the correlation between inter-ROI Euclidean distance and connectivity
+  strength should be near zero. A large DM-FC value indicates distance-dependent bias that can
+  distort network topology.
+  <span class="metric-ok">&asymp;0 = acceptable</span>,
+  <span class="metric-error">&gt;0.10 = likely biased</span>.
 </div>"""
 
     sections = [intro]

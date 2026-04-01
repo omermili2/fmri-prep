@@ -101,18 +101,25 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
         safe_print(f"[{task_label}] Starting fMRIPrep processing...", flush=True)
     else:
         safe_print(f"[{task_label}] Starting conversion...", flush=True)
-    
+
     # Signal task start for progress tracking
     progress_tracker.task_start(task_num)
-    
+
     error = None
-    
+    missing_bold = False
+
+    # When skipping BIDS conversion, check for BOLD files in existing data
+    if skip_bids and not skip_fmriprep:
+        ses_path = Path(bids_dir) / f"sub-{sub_id}" / f"ses-{ses_id}" / "func"
+        if not ses_path.exists() or not list(ses_path.glob("*bold.nii.gz")):
+            missing_bold = True
+
     # 1. BIDS Conversion (using dcm2niix)
     if not skip_bids:
         success, duration, error_msg = run_bids_conversion(
             dicom_path, sub_id, ses_id, bids_dir, task_label, anonymize=anonymize
         )
-        
+
         if success:
             report.add_success(sub_id, ses_id, duration)
 
@@ -135,6 +142,12 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
                     )
                 else:
                     safe_print(f"[QC] {task_label} - OK", flush=True)
+
+                # Check if BOLD is missing — fMRIPrep cannot run without it
+                missing_bold = any(
+                    f.category == "missing_scan" and "BOLD" in f.message
+                    for f in session_findings
+                )
 
             # Layer 2: MRIQC (optional, runs per-subject after BIDS conversion)
             if run_mriqc and mriqc_dir is not None:
@@ -165,6 +178,11 @@ def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script,
         progress_tracker.increment()
 
     # 2. fMRIPrep (if enabled)
+    if not skip_fmriprep and missing_bold:
+        safe_print(f"[SKIP] {task_label} - Skipping fMRIPrep (no BOLD images found)", flush=True)
+        report.add_failure(sub_id, ses_id, "No BOLD images — fMRIPrep requires BOLD data", "fMRIPrep")
+        return f"{task_label} (no BOLD images for fMRIPrep)"
+
     if not skip_fmriprep:
         fmriprep_start_time = datetime.now()
         safe_print(f"[{task_label}] Running fMRIPrep...", flush=True)
