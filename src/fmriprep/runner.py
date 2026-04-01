@@ -17,6 +17,48 @@ from pathlib import Path
 # Default fMRIPrep Docker image
 FMRIPREP_IMAGE = "nipreps/fmriprep:latest"
 
+_PROJECT_PARENT = Path(__file__).parent.parent.parent.parent  # dir containing the project folder
+_FMRIPREP_TAR_CANDIDATES = [
+    "fmriprep_latest", "fmriprep_latest.tar", "fmriprep-latest", "fmriprep-latest.tar",
+    "fmriprep.tar", "fmriprep",
+]
+
+
+def _find_fmriprep_tar():
+    """Search the project's parent directory for a fMRIPrep Docker image archive."""
+    for name in _FMRIPREP_TAR_CANDIDATES:
+        p = _PROJECT_PARENT / name
+        if p.exists():
+            return p
+    return None
+
+
+def load_fmriprep_from_tar(callback=None):
+    """
+    Load the fMRIPrep Docker image from a local tar archive in the project parent directory.
+
+    Returns: (success: bool, error: str or None)
+    """
+    tar_path = _find_fmriprep_tar()
+    if tar_path is None:
+        return False, f"No fMRIPrep tar found in {_PROJECT_PARENT}"
+    if callback:
+        callback(f"Loading fMRIPrep image from {tar_path.name}...")
+    try:
+        result = subprocess.run(
+            ["docker", "load", "-i", str(tar_path)],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode == 0:
+            if callback:
+                callback("fMRIPrep image loaded successfully!")
+            return True, None
+        return False, f"docker load failed: {result.stderr.strip()[-500:]}"
+    except subprocess.TimeoutExpired:
+        return False, "docker load timed out (>10 min)"
+    except Exception as e:
+        return False, f"Error loading fMRIPrep image: {e}"
+
 
 def safe_print_error(msg):
     """
@@ -287,12 +329,28 @@ def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True)
     # Check if fMRIPrep image is available
     if callback:
         callback("Checking fMRIPrep Docker image...")
-    
+
     if not is_fmriprep_image_available():
         if auto_pull_image:
-            success, error = pull_fmriprep_image(callback=callback)
+            tar_path = _find_fmriprep_tar()
+            if tar_path is not None:
+                if callback:
+                    callback(f"fMRIPrep image not found \u2014 loading from {tar_path.name}...")
+                success, error = load_fmriprep_from_tar(callback=callback)
+            else:
+                success, error = False, "No local tar found"
             if not success:
-                return False, error
+                if callback:
+                    callback(f"Tar load unavailable ({error}) \u2014 trying docker pull...")
+                success, error = pull_fmriprep_image(callback=callback)
+            if not success:
+                return False, (
+                    f"fMRIPrep image not found and could not be loaded.\n\n"
+                    f"Options:\n"
+                    f"  1. Place a fMRIPrep tar in {_PROJECT_PARENT}\n"
+                    f"  2. Run: docker pull {FMRIPREP_IMAGE}\n\n"
+                    f"Error: {error}"
+                )
         else:
             return False, (
                 f"fMRIPrep Docker image not found.\n\n"
