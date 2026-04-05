@@ -669,11 +669,11 @@ Examples:
         if not (bids_dir / "dataset_description.json").exists():
             safe_print(f"Creating dataset_description.json in {bids_dir}...", flush=True)
             if create_dataset_description(bids_dir):
-                safe_print(f"✓ Created dataset_description.json", flush=True)
+                safe_print("Created dataset_description.json", flush=True)
             else:
                 # Check if it exists now (might have been created by another process)
                 if (bids_dir / "dataset_description.json").exists():
-                    safe_print(f"✓ dataset_description.json now exists", flush=True)
+                    safe_print("dataset_description.json now exists", flush=True)
                 else:
                     safe_print(f"Warning: Could not create dataset_description.json", flush=True)
     else:
@@ -697,7 +697,7 @@ Examples:
     if debug_log_file.exists():
         debug_log_file.unlink()  # Remove old log if exists
     debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
-    safe_print(f"💾 Debug log: {debug_log_file}", flush=True)
+    safe_print(f"Debug log: {debug_log_file}", flush=True)
     
     # Initialize report
     report = ConversionReport()

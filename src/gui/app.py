@@ -174,7 +174,7 @@ class App(ctk.CTk):
 
         self.check_mriqc_with_bids = ctk.CTkCheckBox(
             self.frame_bids_options,
-            text="Include MRIQC image quality assessment after BIDS conversion (requires Docker, ~30–45 min/subject)",
+            text="Include MRIQC image quality assessment (~40 min/subject)",
             font=ctk.CTkFont(size=12),
             onvalue=True,
             offvalue=False
@@ -194,7 +194,7 @@ class App(ctk.CTk):
         
         self.btn_toggle_fmriprep = ctk.CTkButton(
             self.frame_fmriprep_header,
-            text="▶",
+            text=">",
             width=25,
             height=25,
             fg_color="transparent",
@@ -399,6 +399,7 @@ class App(ctk.CTk):
             self.entry_input.delete(0, "end")
             self.entry_input.insert(0, folder)
             self._update_output_info()
+            self._update_time_estimates()
 
     def browse_output(self):
         initial_dir = None
@@ -434,16 +435,75 @@ class App(ctk.CTk):
         else:
             self.label_output_info.grid_remove()  # Hide when empty
 
+    # --- Time-estimate constants (minutes) ---
+    _BIDS_MIN_PER_SESSION = 2        # BIDS conversion + QC per session
+    _FMRIPREP_MIN_PER_SUBJECT = 180  # ~3 hours per subject (all sessions)
+    _MRIQC_MIN_PER_SUBJECT = 40      # ~40 min per subject
+    _CONNECTIVITY_MIN_PER_SUBJECT = 5
+
+    def _update_time_estimates(self):
+        """Scan the source folder and update button labels with time estimates."""
+        input_dir = self.entry_input.get().strip()
+        if not input_dir or not Path(input_dir).is_dir():
+            # Reset to defaults when no valid folder
+            self.btn_bids_only.configure(text="Run BIDS Conversion")
+            self.btn_fmriprep_only.configure(text="Run fMRIPrep Only")
+            self.btn_connectivity_qc.configure(text="Run Connectivity QC")
+            self.btn_full_pipeline.configure(text="Run Full Pipeline")
+            return
+
+        # Count subjects and sessions
+        n_subjects = 0
+        n_sessions = 0
+        src = Path(input_dir)
+        for child in src.iterdir():
+            if child.is_dir() and not child.name.startswith("."):
+                n_subjects += 1
+                ses_count = sum(
+                    1 for s in child.iterdir()
+                    if s.is_dir() and not s.name.startswith(".")
+                )
+                n_sessions += max(ses_count, 1)  # at least 1 session per subject
+
+        if n_subjects == 0:
+            return
+
+        def _fmt(minutes):
+            if minutes < 60:
+                return f"~{minutes:.0f} min"
+            h = minutes / 60
+            return f"~{h:.1f} h"
+
+        bids_min = n_sessions * self._BIDS_MIN_PER_SESSION
+        fmriprep_min = n_subjects * self._FMRIPREP_MIN_PER_SUBJECT
+        conn_min = n_subjects * self._CONNECTIVITY_MIN_PER_SUBJECT
+        full_min = bids_min + fmriprep_min + conn_min
+
+        info = f"{n_subjects} subj, {n_sessions} ses"
+
+        self.btn_bids_only.configure(
+            text=f"Run BIDS Conversion\n{info} | {_fmt(bids_min)}"
+        )
+        self.btn_fmriprep_only.configure(
+            text=f"Run fMRIPrep Only\n{info} | {_fmt(fmriprep_min)}"
+        )
+        self.btn_connectivity_qc.configure(
+            text=f"Run Connectivity QC\n{info} | {_fmt(conn_min)}"
+        )
+        self.btn_full_pipeline.configure(
+            text=f"Run Full Pipeline\n{info} | {_fmt(full_min)}"
+        )
+
     def _toggle_fmriprep_options(self):
         """Toggle the visibility of fMRIPrep options panel."""
         if self.fmriprep_options_visible:
             self.frame_fmriprep_options.grid_remove()
-            self.btn_toggle_fmriprep.configure(text="▶")
+            self.btn_toggle_fmriprep.configure(text=">")
             self.label_fmriprep_header.configure(text="fMRIPrep Options (click to expand)")
             self.fmriprep_options_visible = False
         else:
             self.frame_fmriprep_options.grid(row=1, column=0, sticky="ew", padx=5, pady=(0, 10))
-            self.btn_toggle_fmriprep.configure(text="▼")
+            self.btn_toggle_fmriprep.configure(text="v")
             self.label_fmriprep_header.configure(text="fMRIPrep Options")
             self.fmriprep_options_visible = True
 
@@ -453,11 +513,11 @@ class App(ctk.CTk):
         
         # Check that at least one output space is selected
         if not self.check_space_mni.get() and not self.check_space_mni6.get() and not self.check_space_t1w.get():
-            warnings.append("⚠ Select at least one output space")
+            warnings.append("Select at least one output space")
         
         # ICA-AROMA requires an MNI output space
         if self.check_aroma.get() and not self.check_space_mni.get() and not self.check_space_mni6.get():
-            warnings.append("⚠ ICA-AROMA requires an MNI output space")
+            warnings.append("ICA-AROMA requires an MNI output space")
             # Auto-enable MNI2009c when AROMA is selected
             self.check_space_mni.select()
         
@@ -507,11 +567,11 @@ class App(ctk.CTk):
         output_dir = self.entry_output.get().strip()
 
         if not input_dir:
-            self.console.log("⚠️  Please select a source DICOM folder.", "warning")
+            self.console.log("Please select a source DICOM folder.", "warning")
             return False
             
         if not output_dir:
-            self.console.log("⚠️  Please select an output folder.", "warning")
+            self.console.log("Please select an output folder.", "warning")
             return False
 
         # Resolve to absolute paths for comparison
@@ -519,17 +579,17 @@ class App(ctk.CTk):
         output_path = Path(output_dir).resolve()
 
         if not input_path.exists():
-            self.console.log(f"⚠️  Source folder does not exist: {input_dir}", "warning")
+            self.console.log(f"Source folder does not exist: {input_dir}", "warning")
             return False
 
         # Prevent output inside input or same as input
         if output_path == input_path:
-            self.console.log("⚠️  Output folder cannot be the same as input folder!", "warning")
+            self.console.log("Output folder cannot be the same as input folder!", "warning")
             self.console.log("   Please select a different output location.", "warning")
             return False
 
         if str(output_path).startswith(str(input_path) + os.sep):
-            self.console.log("⚠️  Output folder cannot be inside the input folder!", "warning")
+            self.console.log("Output folder cannot be inside the input folder!", "warning")
             self.console.log("   Please select a different output location.", "warning")
             return False
 
@@ -560,7 +620,7 @@ class App(ctk.CTk):
         """Run both BIDS conversion and fMRIPrep."""
         # Validate fMRIPrep options
         if not self._validate_fmriprep_options():
-            self.console.log("⚠️  Please fix fMRIPrep options before running.", "warning")
+            self.console.log("Please fix fMRIPrep options before running.", "warning")
             # Expand options panel if collapsed
             if not self.fmriprep_options_visible:
                 self._toggle_fmriprep_options()
@@ -577,13 +637,13 @@ class App(ctk.CTk):
         bids_folder = self.entry_output.get().strip()
 
         if not bids_folder:
-            self.console.log("⚠️  Please select the output folder in the Output Root Folder field.", "warning")
+            self.console.log("Please select the output folder in the Output Root Folder field.", "warning")
             self.console.log("   This should be a folder from a previous pipeline run.", "info")
             return
 
         bids_path = Path(bids_folder).resolve()
         if not bids_path.exists():
-            self.console.log(f"⚠️  Folder does not exist: {bids_folder}", "warning")
+            self.console.log(f"Folder does not exist: {bids_folder}", "warning")
             return
 
         # Auto-select most recent output_* subfolder if needed
@@ -596,12 +656,12 @@ class App(ctk.CTk):
 
         has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
         if not has_subjects:
-            self.console.log("⚠️  No 'sub-*' folders found. Select a valid pipeline output folder.", "warning")
+            self.console.log("No 'sub-*' folders found. Select a valid pipeline output folder.", "warning")
             return
 
         derivatives = bids_path / "derivatives"
         if not derivatives.exists():
-            self.console.log("⚠️  No 'derivatives/' folder found. fMRIPrep must run before Connectivity QC.", "warning")
+            self.console.log("No 'derivatives/' folder found. fMRIPrep must run before Connectivity QC.", "warning")
             return
 
         self._run_bids = False
@@ -615,7 +675,7 @@ class App(ctk.CTk):
         """Run fMRIPrep on an existing BIDS folder (uses input folder as BIDS folder)."""
         # Validate fMRIPrep options
         if not self._validate_fmriprep_options():
-            self.console.log("⚠️  Please fix fMRIPrep options before running.", "warning")
+            self.console.log("Please fix fMRIPrep options before running.", "warning")
             # Expand options panel if collapsed
             if not self.fmriprep_options_visible:
                 self._toggle_fmriprep_options()
@@ -626,14 +686,14 @@ class App(ctk.CTk):
         bids_folder = self.entry_output.get().strip()
         
         if not bids_folder:
-            self.console.log("⚠️  Please select the BIDS output folder in the Output Root Folder field.", "warning")
+            self.console.log("Please select the BIDS output folder in the Output Root Folder field.", "warning")
             self.console.log("   This should be the folder from a previous BIDS conversion.", "info")
             return
         
         # Validate it looks like a BIDS folder
         bids_path = Path(bids_folder).resolve()
         if not bids_path.exists():
-            self.console.log(f"⚠️  Folder does not exist: {bids_folder}", "warning")
+            self.console.log(f"Folder does not exist: {bids_folder}", "warning")
             return
         
         # Check if this is the root folder with output_* subfolders
@@ -657,7 +717,7 @@ class App(ctk.CTk):
             files_in_folder = [f.name for f in bids_path.iterdir() if f.is_file()]
             self.console.log(f"ℹ️  Files in folder: {', '.join(files_in_folder[:10])}", "info")
         except Exception as e:
-            self.console.log(f"⚠️  Could not list files: {e}", "warning")
+            self.console.log(f"Could not list files: {e}", "warning")
         
         if not dataset_desc.exists():
             # On Windows, check case-insensitively
@@ -669,13 +729,13 @@ class App(ctk.CTk):
                             found_file = item
                             break
                 except Exception as e:
-                    self.console.log(f"⚠️  Error checking files: {e}", "warning")
+                    self.console.log(f"Error checking files: {e}", "warning")
                 
                 if found_file:
                     dataset_desc = found_file
                     self.console.log(f"ℹ️  Found file with different case: {found_file.name}", "info")
                 else:
-                    self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
+                    self.console.log("Selected folder doesn't appear to be a valid BIDS folder.", "warning")
                     self.console.log("   (Missing dataset_description.json)", "warning")
                     self.console.log(f"   Checked path: {bids_path}", "info")
                     self.console.log(f"   Absolute path: {bids_path.resolve()}", "info")
@@ -683,7 +743,7 @@ class App(ctk.CTk):
                     self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
                     return
             else:
-                self.console.log("⚠️  Selected folder doesn't appear to be a valid BIDS folder.", "warning")
+                self.console.log("Selected folder doesn't appear to be a valid BIDS folder.", "warning")
                 self.console.log("   (Missing dataset_description.json)", "warning")
                 self.console.log(f"   Checked path: {bids_path}", "info")
                 self.console.log(f"   Absolute path: {bids_path.resolve()}", "info")
@@ -694,7 +754,7 @@ class App(ctk.CTk):
         # Check for subject folders
         has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
         if not has_subjects:
-            self.console.log("⚠️  No 'sub-*' folders found in the BIDS folder.", "warning")
+            self.console.log("No 'sub-*' folders found in the BIDS folder.", "warning")
             self.console.log(f"   Checked: {bids_path}", "info")
             self.console.log("   Make sure you're selecting the correct BIDS output folder.", "info")
             return
@@ -722,7 +782,7 @@ class App(ctk.CTk):
         self.console.configure(state="disabled")
 
         label = "MRIQC" if preflight_fn else "fMRIPrep"
-        self.console.log(f"🔍 Running pre-flight checks for {label}...", "header")
+        self.console.log(f"Running pre-flight checks for{label}...", "header")
         self.console.log("=" * 60)
 
         # Disable buttons during preflight
@@ -752,20 +812,20 @@ class App(ctk.CTk):
 
                 if success:
                     self.console.log("")
-                    self.console.log("✅ All pre-flight checks passed!", "success")
+                    self.console.log("All pre-flight checks passed!", "success")
                     self.console.log("=" * 60)
                     self.console.log("")
                     self.after(100, lambda: self._start_pipeline_internal(mode_label))
                 else:
                     self.console.log("")
-                    self.console.log("❌ Pre-flight check failed:", "error")
+                    self.console.log("Pre-flight check failed:", "error")
                     if error_msg:
                         for line in error_msg.split('\n'):
                             self.console.log(f"   {line}", "error")
                     self._set_buttons_state("normal")
 
             except Exception as e:
-                self.console.log(f"❌ Error during pre-flight check: {e}", "error")
+                self.console.log(f"Error during pre-flight check:{e}", "error")
                 self._set_buttons_state("normal")
 
         threading.Thread(target=preflight_thread, daemon=True).start()
@@ -800,12 +860,12 @@ class App(ctk.CTk):
         self.console.delete("1.0", "end")
         self.console.configure(state="disabled")
         
-        self.console.log(f"🚀 {mode_label}", "header")
+        self.console.log(f"{mode_label}", "header")
         if self._fmriprep_only_mode:
-            self.console.log(f"📁 BIDS Folder: {bids_folder}")
+            self.console.log(f"BIDS Folder: {bids_folder}")
         else:
-            self.console.log(f"📁 Source: {input_dir}")
-            self.console.log(f"📂 Output Root: {output_dir}")
+            self.console.log(f"Source: {input_dir}")
+            self.console.log(f"Output Root: {output_dir}")
         self.console.log("=" * 60)
 
         # Run in background thread
@@ -916,7 +976,7 @@ class App(ctk.CTk):
                 self.console.log("Conversion finished with some problems. Check the report for details.", "error")
 
         except Exception as e:
-            self.console.log(f"❌ Critical Error: {e}", "error")
+            self.console.log(f"Critical Error:{e}", "error")
 
         # Reset UI state (thread-safe)
         self.current_process = None
