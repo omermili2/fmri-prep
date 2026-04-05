@@ -97,7 +97,7 @@ class App(ctk.CTk):
         # Input Directory
         self.label_input = ctk.CTkLabel(
             self.frame_config, 
-            text="Source DICOM Folder:",
+            text="Source Folder:",
             font=ctk.CTkFont(weight="bold")
         )
         self.label_input.grid(row=0, column=0, padx=15, pady=15, sticky="w")
@@ -444,7 +444,7 @@ class App(ctk.CTk):
         
 
     def browse_input(self):
-        folder = filedialog.askdirectory(title="Select Source DICOM Folder")
+        folder = filedialog.askdirectory(title="Select Source Folder")
         if folder:
             self.entry_input.delete(0, "end")
             self.entry_input.insert(0, folder)
