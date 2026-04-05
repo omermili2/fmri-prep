@@ -857,8 +857,8 @@ class App(ctk.CTk):
         if self.check_keep_temp.get():
             cmd.append("--keep-temp")
 
-        # Add --run-mriqc if the MRIQC checkbox is ticked (BIDS-only mode)
-        if self.check_mriqc_with_bids.get() and not self._run_fmriprep:
+        # Add --run-mriqc if the MRIQC checkbox is ticked
+        if self.check_mriqc_with_bids.get():
             cmd.append("--run-mriqc")
 
         # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
