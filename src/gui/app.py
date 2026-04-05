@@ -307,6 +307,16 @@ class App(ctk.CTk):
         self.frame_actions.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
         self.frame_actions.grid_columnconfigure((0, 1, 2, 3), weight=1)
 
+        # Dataset summary label (above buttons, hidden until a folder is selected)
+        self.label_dataset_summary = ctk.CTkLabel(
+            self.frame_actions,
+            text="",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color="#888888"
+        )
+        self.label_dataset_summary.grid(row=0, column=0, columnspan=4, pady=(0, 4))
+        self.label_dataset_summary.grid_remove()
+
         self.btn_bids_only = ctk.CTkButton(
             self.frame_actions,
             text="Run BIDS Conversion",
@@ -316,7 +326,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_bids_only
         )
-        self.btn_bids_only.grid(row=0, column=0, padx=10, pady=10, sticky="ew")
+        self.btn_bids_only.grid(row=1, column=0, padx=10, pady=(10, 2), sticky="ew")
 
         self.btn_fmriprep_only = ctk.CTkButton(
             self.frame_actions,
@@ -327,8 +337,8 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_fmriprep_only
         )
-        self.btn_fmriprep_only.grid(row=0, column=1, padx=10, pady=10, sticky="ew")
-        
+        self.btn_fmriprep_only.grid(row=1, column=1, padx=10, pady=(10, 2), sticky="ew")
+
         self.btn_connectivity_qc = ctk.CTkButton(
             self.frame_actions,
             text="Run Connectivity QC",
@@ -338,7 +348,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_connectivity_qc_only
         )
-        self.btn_connectivity_qc.grid(row=0, column=2, padx=10, pady=10, sticky="ew")
+        self.btn_connectivity_qc.grid(row=1, column=2, padx=10, pady=(10, 2), sticky="ew")
 
         self.btn_full_pipeline = ctk.CTkButton(
             self.frame_actions,
@@ -349,7 +359,30 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_full_pipeline
         )
-        self.btn_full_pipeline.grid(row=0, column=3, padx=10, pady=10, sticky="ew")
+        self.btn_full_pipeline.grid(row=1, column=3, padx=10, pady=(10, 2), sticky="ew")
+
+        # Time estimate labels (below each button, hidden until a folder is selected)
+        est_font = ctk.CTkFont(size=11)
+        est_color = "#888888"
+        self.label_est_bids = ctk.CTkLabel(
+            self.frame_actions, text="", font=est_font, text_color=est_color)
+        self.label_est_bids.grid(row=2, column=0, pady=(0, 6))
+        self.label_est_bids.grid_remove()
+
+        self.label_est_fmriprep = ctk.CTkLabel(
+            self.frame_actions, text="", font=est_font, text_color=est_color)
+        self.label_est_fmriprep.grid(row=2, column=1, pady=(0, 6))
+        self.label_est_fmriprep.grid_remove()
+
+        self.label_est_conn = ctk.CTkLabel(
+            self.frame_actions, text="", font=est_font, text_color=est_color)
+        self.label_est_conn.grid(row=2, column=2, pady=(0, 6))
+        self.label_est_conn.grid_remove()
+
+        self.label_est_full = ctk.CTkLabel(
+            self.frame_actions, text="", font=est_font, text_color=est_color)
+        self.label_est_full.grid(row=2, column=3, pady=(0, 6))
+        self.label_est_full.grid_remove()
         
         # Internal state for pipeline steps (not shown in UI)
         self._run_bids = True
@@ -441,15 +474,30 @@ class App(ctk.CTk):
     _MRIQC_MIN_PER_SUBJECT = 40      # ~40 min per subject
     _CONNECTIVITY_MIN_PER_SUBJECT = 5
 
+    @staticmethod
+    def _fmt_time(minutes):
+        """Format minutes as 'Xh XXmin' or 'XXmin'."""
+        if minutes < 60:
+            return f"{minutes:.0f}min"
+        h = int(minutes // 60)
+        m = int(minutes % 60)
+        if m == 0:
+            return f"{h}h"
+        return f"{h}h {m:02d}min"
+
     def _update_time_estimates(self):
-        """Scan the source folder and update button labels with time estimates."""
+        """Scan the source folder and update dataset summary + time labels."""
         input_dir = self.entry_input.get().strip()
+
+        est_labels = [
+            self.label_est_bids, self.label_est_fmriprep,
+            self.label_est_conn, self.label_est_full,
+        ]
+
         if not input_dir or not Path(input_dir).is_dir():
-            # Reset to defaults when no valid folder
-            self.btn_bids_only.configure(text="Run BIDS Conversion")
-            self.btn_fmriprep_only.configure(text="Run fMRIPrep Only")
-            self.btn_connectivity_qc.configure(text="Run Connectivity QC")
-            self.btn_full_pipeline.configure(text="Run Full Pipeline")
+            self.label_dataset_summary.grid_remove()
+            for lbl in est_labels:
+                lbl.grid_remove()
             return
 
         # Count subjects and sessions
@@ -463,36 +511,31 @@ class App(ctk.CTk):
                     1 for s in child.iterdir()
                     if s.is_dir() and not s.name.startswith(".")
                 )
-                n_sessions += max(ses_count, 1)  # at least 1 session per subject
+                n_sessions += max(ses_count, 1)
 
         if n_subjects == 0:
+            self.label_dataset_summary.grid_remove()
+            for lbl in est_labels:
+                lbl.grid_remove()
             return
 
-        def _fmt(minutes):
-            if minutes < 60:
-                return f"~{minutes:.0f} min"
-            h = minutes / 60
-            return f"~{h:.1f} h"
+        # Show dataset summary above buttons
+        self.label_dataset_summary.configure(
+            text=f"Detected {n_subjects} subject(s), {n_sessions} session(s)"
+        )
+        self.label_dataset_summary.grid()
 
+        # Compute estimates
         bids_min = n_sessions * self._BIDS_MIN_PER_SESSION
         fmriprep_min = n_subjects * self._FMRIPREP_MIN_PER_SUBJECT
         conn_min = n_subjects * self._CONNECTIVITY_MIN_PER_SUBJECT
         full_min = bids_min + fmriprep_min + conn_min
 
-        info = f"{n_subjects} subj, {n_sessions} ses"
-
-        self.btn_bids_only.configure(
-            text=f"Run BIDS Conversion\n{info} | {_fmt(bids_min)}"
-        )
-        self.btn_fmriprep_only.configure(
-            text=f"Run fMRIPrep Only\n{info} | {_fmt(fmriprep_min)}"
-        )
-        self.btn_connectivity_qc.configure(
-            text=f"Run Connectivity QC\n{info} | {_fmt(conn_min)}"
-        )
-        self.btn_full_pipeline.configure(
-            text=f"Run Full Pipeline\n{info} | {_fmt(full_min)}"
-        )
+        # Update time labels below buttons
+        for lbl, minutes in zip(est_labels,
+                                [bids_min, fmriprep_min, conn_min, full_min]):
+            lbl.configure(text=f"approx. {self._fmt_time(minutes)}")
+            lbl.grid()
 
     def _toggle_fmriprep_options(self):
         """Toggle the visibility of fMRIPrep options panel."""
