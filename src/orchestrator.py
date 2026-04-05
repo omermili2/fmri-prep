@@ -690,8 +690,10 @@ Examples:
     
     fmriprep_script = project_root / "src" / "fmriprep" / "runner.py"
     
-    # Create debug log file for detailed error tracking
-    debug_log_file = output_folder / "fmriprep_debug.log"
+    # Create debug log file for detailed error tracking (in derivatives/, not the BIDS root,
+    # so the BIDS validator does not flag it as an unrecognised file)
+    derivatives_dir.mkdir(parents=True, exist_ok=True)
+    debug_log_file = derivatives_dir / "fmriprep_debug.log"
     if debug_log_file.exists():
         debug_log_file.unlink()  # Remove old log if exists
     debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')

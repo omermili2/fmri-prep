@@ -197,6 +197,25 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
         
         shutil.copy2(nii_file, out_nii)
 
+        # Repair NIfTI headers with sform_code/qform_code == 0.
+        # dcm2niix sometimes produces fieldmap EPIs with zeroed codes, which
+        # causes the BIDS validator to flag them as errors.  Setting both to 1
+        # (scanner-anat) and copying the qform into the sform is the standard
+        # fix and matches what most tools expect.
+        if datatype == "fmap":
+            try:
+                import nibabel as nib
+                img = nib.load(str(out_nii))
+                hdr = img.header
+                if int(hdr['sform_code']) == 0 or int(hdr['qform_code']) == 0:
+                    hdr['qform_code'] = 1
+                    hdr['sform_code'] = 1
+                    hdr.set_sform(hdr.get_qform())
+                    nib.save(img, str(out_nii))
+                    safe_print(f"  Fixed sform/qform for {out_nii.name}", flush=True)
+            except Exception as e:
+                safe_print(f"  Warning: could not fix NIfTI header for {out_nii.name}: {e}", flush=True)
+
         # Write (possibly updated) metadata back out to BIDS JSON
         try:
             with open(out_json, 'w', encoding='utf-8') as f:
