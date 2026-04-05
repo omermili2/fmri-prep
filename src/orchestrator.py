@@ -139,6 +139,12 @@ def process_bids_task(task, bids_dir, progress_tracker,
                 for f in session_findings
             )
 
+        # Create dataset_description.json before MRIQC — pybids.BIDSLayout
+        # requires this file to exist at startup or it raises BIDSValidationError.
+        if not desc_created_event.is_set():
+            if create_dataset_description(bids_dir):
+                desc_created_event.set()
+
         # Layer 2: MRIQC (optional, runs per-subject after BIDS conversion)
         if run_mriqc and mriqc_dir is not None:
             safe_print(f"[MRIQC] {task_label} - starting...", flush=True)
@@ -154,11 +160,6 @@ def process_bids_task(task, bids_dir, progress_tracker,
                 report.add_warning(
                     f"MRIQC failed for sub-{sub_id}: {err[:120]}"
                 )
-
-        # Create dataset_description.json if missing (thread-safe)
-        if not desc_created_event.is_set():
-            if create_dataset_description(bids_dir):
-                desc_created_event.set()
     else:
         report.add_failure(sub_id, ses_id, error_msg, "BIDS Conversion")
         progress_tracker.increment()
