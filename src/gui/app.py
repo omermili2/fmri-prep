@@ -174,7 +174,7 @@ class App(ctk.CTk):
 
         self.check_mriqc_with_bids = ctk.CTkCheckBox(
             self.frame_bids_options,
-            text="Include MRIQC image quality assessment (~40 min/subject)",
+            text="Include MRIQC image quality assessment",
             font=ctk.CTkFont(size=12),
             onvalue=True,
             offvalue=False
@@ -498,6 +498,9 @@ class App(ctk.CTk):
             self.label_dataset_summary.grid_remove()
             for lbl in est_labels:
                 lbl.grid_remove()
+            self.check_mriqc_with_bids.configure(
+                text="Include MRIQC image quality assessment"
+            )
             return
 
         # Count subjects and sessions
@@ -517,6 +520,9 @@ class App(ctk.CTk):
             self.label_dataset_summary.grid_remove()
             for lbl in est_labels:
                 lbl.grid_remove()
+            self.check_mriqc_with_bids.configure(
+                text="Include MRIQC image quality assessment"
+            )
             return
 
         # Show dataset summary above buttons
@@ -536,6 +542,12 @@ class App(ctk.CTk):
                                 [bids_min, fmriprep_min, conn_min, full_min]):
             lbl.configure(text=f"approx. {self._fmt_time(minutes)}")
             lbl.grid()
+
+        # Update MRIQC checkbox with total estimate
+        mriqc_min = n_subjects * self._MRIQC_MIN_PER_SUBJECT
+        self.check_mriqc_with_bids.configure(
+            text=f"Include MRIQC image quality assessment (approx. {self._fmt_time(mriqc_min)})"
+        )
 
     def _toggle_fmriprep_options(self):
         """Toggle the visibility of fMRIPrep options panel."""
