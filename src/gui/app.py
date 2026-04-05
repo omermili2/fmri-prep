@@ -97,7 +97,7 @@ class App(ctk.CTk):
         # Input Directory
         self.label_input = ctk.CTkLabel(
             self.frame_config, 
-            text="📁 Source DICOM Folder:", 
+            text="Source DICOM Folder:",
             font=ctk.CTkFont(weight="bold")
         )
         self.label_input.grid(row=0, column=0, padx=15, pady=15, sticky="w")
@@ -119,7 +119,7 @@ class App(ctk.CTk):
         # Output Directory
         self.label_output = ctk.CTkLabel(
             self.frame_config, 
-            text="📂 Output Root Folder:", 
+            text="Output Root Folder:",
             font=ctk.CTkFont(weight="bold")
         )
         self.label_output.grid(row=1, column=0, padx=15, pady=15, sticky="w")
@@ -309,7 +309,7 @@ class App(ctk.CTk):
 
         self.btn_bids_only = ctk.CTkButton(
             self.frame_actions,
-            text="📊 Run BIDS Conversion",
+            text="Run BIDS Conversion",
             height=50,
             fg_color="#2E7D32",  # Green
             hover_color="#1B5E20",
@@ -320,7 +320,7 @@ class App(ctk.CTk):
 
         self.btn_fmriprep_only = ctk.CTkButton(
             self.frame_actions,
-            text="🧠 Run fMRIPrep Only",
+            text="Run fMRIPrep Only",
             height=50,
             fg_color="#7B1FA2",  # Purple
             hover_color="#4A148C",
@@ -331,7 +331,7 @@ class App(ctk.CTk):
         
         self.btn_connectivity_qc = ctk.CTkButton(
             self.frame_actions,
-            text="🔬 Run Connectivity QC",
+            text="Run Connectivity QC",
             height=50,
             fg_color="#00796B",  # Teal
             hover_color="#004D40",
@@ -342,7 +342,7 @@ class App(ctk.CTk):
 
         self.btn_full_pipeline = ctk.CTkButton(
             self.frame_actions,
-            text="🚀 Run Full Pipeline",
+            text="Run Full Pipeline",
             height=50,
             fg_color="#1565C0",  # Blue
             hover_color="#0D47A1",
@@ -382,7 +382,7 @@ class App(ctk.CTk):
         # --- Log Area ---
         self.label_logs = ctk.CTkLabel(
             self.main_scroll, 
-            text="📋 Execution Logs", 
+            text="Execution Logs",
             font=ctk.CTkFont(size=12, weight="bold")
         )
         self.label_logs.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
