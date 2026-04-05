@@ -361,26 +361,31 @@ class App(ctk.CTk):
         )
         self.btn_full_pipeline.grid(row=1, column=3, padx=10, pady=(10, 2), sticky="ew")
 
-        # Time estimate labels (below each button, hidden until a folder is selected)
+        # Time estimate / requirement labels (below each button)
         est_font = ctk.CTkFont(size=11)
         est_color = "#888888"
+        est_wrap = 160  # wrap text to fit within the button column width
         self.label_est_bids = ctk.CTkLabel(
-            self.frame_actions, text="", font=est_font, text_color=est_color)
+            self.frame_actions, text="", font=est_font,
+            text_color=est_color, wraplength=est_wrap)
         self.label_est_bids.grid(row=2, column=0, pady=(0, 6))
         self.label_est_bids.grid_remove()
 
         self.label_est_fmriprep = ctk.CTkLabel(
-            self.frame_actions, text="", font=est_font, text_color=est_color)
+            self.frame_actions, text="", font=est_font,
+            text_color=est_color, wraplength=est_wrap)
         self.label_est_fmriprep.grid(row=2, column=1, pady=(0, 6))
         self.label_est_fmriprep.grid_remove()
 
         self.label_est_conn = ctk.CTkLabel(
-            self.frame_actions, text="", font=est_font, text_color=est_color)
+            self.frame_actions, text="", font=est_font,
+            text_color=est_color, wraplength=est_wrap)
         self.label_est_conn.grid(row=2, column=2, pady=(0, 6))
         self.label_est_conn.grid_remove()
 
         self.label_est_full = ctk.CTkLabel(
-            self.frame_actions, text="", font=est_font, text_color=est_color)
+            self.frame_actions, text="", font=est_font,
+            text_color=est_color, wraplength=est_wrap)
         self.label_est_full.grid(row=2, column=3, pady=(0, 6))
         self.label_est_full.grid_remove()
         
