@@ -104,7 +104,7 @@ class App(ctk.CTk):
         
         self.entry_input = ctk.CTkEntry(
             self.frame_config, 
-            placeholder_text="Select folder containing subject folders"
+            placeholder_text="DICOM folder, BIDS dataset, or previous pipeline output"
         )
         self.entry_input.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
         
@@ -390,6 +390,18 @@ class App(ctk.CTk):
         self._fmriprep_only_mode = False
         self._connectivity_only_mode = False
 
+        # Store original button colors for enable/disable toggling
+        self._btn_colors = {
+            "bids":      ("#2E7D32", "#1B5E20"),
+            "fmriprep":  ("#7B1FA2", "#4A148C"),
+            "conn":      ("#00796B", "#004D40"),
+            "full":      ("#1565C0", "#0D47A1"),
+        }
+        self._disabled_color = "#555555"
+
+        # Start with all buttons disabled until folders are selected
+        self._update_button_states()
+
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_progress.grid(row=5, column=0, padx=20, pady=(10, 5), sticky="ew")
@@ -432,7 +444,7 @@ class App(ctk.CTk):
             self.entry_input.delete(0, "end")
             self.entry_input.insert(0, folder)
             self._update_output_info()
-            self._update_time_estimates()
+            self._update_button_states()
 
     def browse_output(self):
         initial_dir = None
@@ -455,6 +467,7 @@ class App(ctk.CTk):
             self.entry_output.delete(0, "end")
             self.entry_output.insert(0, folder)
             self._update_output_info()
+            self._update_button_states()
 
     def _update_output_info(self):
         """Update the output info label to show where files will be saved."""
@@ -474,6 +487,91 @@ class App(ctk.CTk):
     _MRIQC_MIN_PER_SUBJECT = 40      # ~40 min per subject
     _CONNECTIVITY_MIN_PER_SUBJECT = 5
 
+    def _update_button_states(self):
+        """Enable/disable buttons based on what the source folder contains.
+
+        The Source folder can point to:
+        - Raw DICOM data  -> enables BIDS Conversion and Full Pipeline
+        - A BIDS dataset  -> enables fMRIPrep Only (and the above)
+        - Pipeline output with derivatives/ -> enables Connectivity QC (and the above)
+
+        The Output folder is always just a destination for results.
+        """
+        input_dir = self.entry_input.get().strip()
+
+        has_subjects = False
+        has_bids_data = False
+        has_derivatives = False
+
+        if input_dir and Path(input_dir).is_dir():
+            src = Path(input_dir)
+
+            # Check for output_* subfolders (previous pipeline run) and
+            # auto-resolve to the most recent one
+            output_subs = sorted(
+                [p for p in src.iterdir()
+                 if p.is_dir() and p.name.startswith("output_")],
+                key=lambda p: p.stat().st_mtime, reverse=True
+            )
+            check_path = output_subs[0] if output_subs else src
+
+            has_subjects = any(
+                p.is_dir() and not p.name.startswith(".")
+                for p in src.iterdir()
+            )
+            has_bids_data = (
+                any(p.name.startswith("sub-") and p.is_dir()
+                    for p in check_path.iterdir())
+                and (check_path / "dataset_description.json").exists()
+            )
+            has_derivatives = (check_path / "derivatives").is_dir()
+
+        # --- Apply button states ---
+        # BIDS Conversion: needs any subject-like folders (raw DICOMs)
+        self._set_button_enabled(
+            self.btn_bids_only, self.label_est_bids, "bids",
+            enabled=has_subjects,
+            reason="Select a Source DICOM Folder"
+        )
+
+        # Full Pipeline: same as BIDS Conversion
+        self._set_button_enabled(
+            self.btn_full_pipeline, self.label_est_full, "full",
+            enabled=has_subjects,
+            reason="Select a Source DICOM Folder"
+        )
+
+        # fMRIPrep Only: needs BIDS data (sub-* + dataset_description.json)
+        self._set_button_enabled(
+            self.btn_fmriprep_only, self.label_est_fmriprep, "fmriprep",
+            enabled=has_bids_data,
+            reason="Source must contain BIDS data (sub-* folders)"
+        )
+
+        # Connectivity QC: needs fMRIPrep derivatives
+        self._set_button_enabled(
+            self.btn_connectivity_qc, self.label_est_conn, "conn",
+            enabled=has_derivatives,
+            reason="Source must contain fMRIPrep output (derivatives/)"
+        )
+
+        # Update time estimates for enabled buttons
+        self._update_time_estimates()
+
+    def _set_button_enabled(self, btn, est_label, color_key, enabled, reason):
+        """Enable or disable a button with visual feedback."""
+        if enabled:
+            fg, hover = self._btn_colors[color_key]
+            btn.configure(state="normal", fg_color=fg, hover_color=hover)
+        else:
+            btn.configure(
+                state="disabled",
+                fg_color=self._disabled_color,
+                hover_color=self._disabled_color
+            )
+            est_label.configure(text=reason, text_color="#aa4444")
+            est_label.grid()
+
     @staticmethod
     def _fmt_time(minutes):
         """Format minutes as 'Xh XXmin' or 'XXmin'."""
@@ -489,15 +587,8 @@ class App(ctk.CTk):
         """Scan the source folder and update dataset summary + time labels."""
         input_dir = self.entry_input.get().strip()
 
-        est_labels = [
-            self.label_est_bids, self.label_est_fmriprep,
-            self.label_est_conn, self.label_est_full,
-        ]
-
         if not input_dir or not Path(input_dir).is_dir():
             self.label_dataset_summary.grid_remove()
-            for lbl in est_labels:
-                lbl.grid_remove()
             self.check_mriqc_with_bids.configure(
                 text="Include MRIQC image quality assessment"
             )
@@ -518,8 +609,6 @@ class App(ctk.CTk):
 
         if n_subjects == 0:
             self.label_dataset_summary.grid_remove()
-            for lbl in est_labels:
-                lbl.grid_remove()
             self.check_mriqc_with_bids.configure(
                 text="Include MRIQC image quality assessment"
             )
@@ -537,11 +626,21 @@ class App(ctk.CTk):
         conn_min = n_subjects * self._CONNECTIVITY_MIN_PER_SUBJECT
         full_min = bids_min + fmriprep_min + conn_min
 
-        # Update time labels below buttons
-        for lbl, minutes in zip(est_labels,
-                                [bids_min, fmriprep_min, conn_min, full_min]):
-            lbl.configure(text=f"approx. {self._fmt_time(minutes)}")
-            lbl.grid()
+        # Update time labels below enabled buttons only
+        # (disabled buttons keep their requirement text from _update_button_states)
+        btn_label_pairs = [
+            (self.btn_bids_only, self.label_est_bids, bids_min),
+            (self.btn_fmriprep_only, self.label_est_fmriprep, fmriprep_min),
+            (self.btn_connectivity_qc, self.label_est_conn, conn_min),
+            (self.btn_full_pipeline, self.label_est_full, full_min),
+        ]
+        for btn, lbl, minutes in btn_label_pairs:
+            if str(btn.cget("state")) != "disabled":
+                lbl.configure(
+                    text=f"approx. {self._fmt_time(minutes)}",
+                    text_color="#888888"
+                )
+                lbl.grid()
 
         # Update MRIQC checkbox with total estimate
         mriqc_min = n_subjects * self._MRIQC_MIN_PER_SUBJECT
@@ -689,16 +788,15 @@ class App(ctk.CTk):
 
     def run_connectivity_qc_only(self):
         """Run connectivity QC (Nilearn) on an existing fMRIPrep output folder."""
-        bids_folder = self.entry_output.get().strip()
+        source_folder = self.entry_input.get().strip()
 
-        if not bids_folder:
-            self.console.log("Please select the output folder in the Output Root Folder field.", "warning")
-            self.console.log("   This should be a folder from a previous pipeline run.", "info")
+        if not source_folder:
+            self.console.log("Please select a Source folder containing fMRIPrep output.", "warning")
             return
 
-        bids_path = Path(bids_folder).resolve()
+        bids_path = Path(source_folder).resolve()
         if not bids_path.exists():
-            self.console.log(f"Folder does not exist: {bids_folder}", "warning")
+            self.console.log(f"Folder does not exist: {source_folder}", "warning")
             return
 
         # Auto-select most recent output_* subfolder if needed
@@ -707,11 +805,11 @@ class App(ctk.CTk):
         if output_subfolders:
             most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
             bids_path = most_recent.resolve()
-            self.console.log(f"ℹ️  Using output folder: {most_recent.name}", "info")
+            self.console.log(f"Using output folder: {most_recent.name}", "info")
 
         has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
         if not has_subjects:
-            self.console.log("No 'sub-*' folders found. Select a valid pipeline output folder.", "warning")
+            self.console.log("No 'sub-*' folders found. Select a folder with pipeline output.", "warning")
             return
 
         derivatives = bids_path / "derivatives"
@@ -727,96 +825,47 @@ class App(ctk.CTk):
         self._start_pipeline_internal("Connectivity QC (Nilearn)")
 
     def run_fmriprep_only(self):
-        """Run fMRIPrep on an existing BIDS folder (uses input folder as BIDS folder)."""
+        """Run fMRIPrep on an existing BIDS folder (Source folder = BIDS data)."""
         # Validate fMRIPrep options
         if not self._validate_fmriprep_options():
             self.console.log("Please fix fMRIPrep options before running.", "warning")
-            # Expand options panel if collapsed
             if not self.fmriprep_options_visible:
                 self._toggle_fmriprep_options()
             return
-        
-        # For fMRIPrep Only, use the OUTPUT folder as the BIDS folder
-        # (since that's where the BIDS conversion wrote the data)
-        bids_folder = self.entry_output.get().strip()
-        
-        if not bids_folder:
-            self.console.log("Please select the BIDS output folder in the Output Root Folder field.", "warning")
-            self.console.log("   This should be the folder from a previous BIDS conversion.", "info")
+
+        source_folder = self.entry_input.get().strip()
+
+        if not source_folder:
+            self.console.log("Please select a Source folder containing BIDS data.", "warning")
             return
-        
-        # Validate it looks like a BIDS folder
-        bids_path = Path(bids_folder).resolve()
+
+        bids_path = Path(source_folder).resolve()
         if not bids_path.exists():
-            self.console.log(f"Folder does not exist: {bids_folder}", "warning")
+            self.console.log(f"Folder does not exist: {source_folder}", "warning")
             return
-        
-        # Check if this is the root folder with output_* subfolders
-        # If so, automatically use the most recent one
-        output_subfolders = [p for p in bids_path.iterdir() 
+
+        # Auto-select most recent output_* subfolder if needed
+        output_subfolders = [p for p in bids_path.iterdir()
                             if p.is_dir() and p.name.startswith("output_")]
-        
         if output_subfolders:
-            # Use the most recent output folder (by modification time)
             most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
             bids_path = most_recent.resolve()
-            self.console.log(f"ℹ️  Found output folder: {most_recent.name}", "info")
-            self.console.log(f"   Using this as the BIDS folder.", "info")
-        
-        # Resolve path and check for dataset_description.json
+            self.console.log(f"Using output folder: {most_recent.name}", "info")
+
+        # Validate BIDS structure
         dataset_desc = bids_path / "dataset_description.json"
-        dataset_desc_resolved = dataset_desc.resolve() if dataset_desc.exists() else None
-        
-        # Debug: list what files are actually in the folder
-        try:
-            files_in_folder = [f.name for f in bids_path.iterdir() if f.is_file()]
-            self.console.log(f"ℹ️  Files in folder: {', '.join(files_in_folder[:10])}", "info")
-        except Exception as e:
-            self.console.log(f"Could not list files: {e}", "warning")
-        
         if not dataset_desc.exists():
-            # On Windows, check case-insensitively
-            if sys.platform == 'win32':
-                found_file = None
-                try:
-                    for item in bids_path.iterdir():
-                        if item.is_file() and item.name.lower() == "dataset_description.json":
-                            found_file = item
-                            break
-                except Exception as e:
-                    self.console.log(f"Error checking files: {e}", "warning")
-                
-                if found_file:
-                    dataset_desc = found_file
-                    self.console.log(f"ℹ️  Found file with different case: {found_file.name}", "info")
-                else:
-                    self.console.log("Selected folder doesn't appear to be a valid BIDS folder.", "warning")
-                    self.console.log("   (Missing dataset_description.json)", "warning")
-                    self.console.log(f"   Checked path: {bids_path}", "info")
-                    self.console.log(f"   Absolute path: {bids_path.resolve()}", "info")
-                    self.console.log("   Tip: Select the OUTPUT folder from a previous BIDS conversion.", "info")
-                    self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
-                    return
-            else:
-                self.console.log("Selected folder doesn't appear to be a valid BIDS folder.", "warning")
-                self.console.log("   (Missing dataset_description.json)", "warning")
-                self.console.log(f"   Checked path: {bids_path}", "info")
-                self.console.log(f"   Absolute path: {bids_path.resolve()}", "info")
-                self.console.log("   Tip: Select the OUTPUT folder from a previous BIDS conversion.", "info")
-                self.console.log("   It should contain 'dataset_description.json' and 'sub-*' folders.", "info")
-                return
-        
-        # Check for subject folders
+            self.console.log("Source folder doesn't contain BIDS data (missing dataset_description.json).", "warning")
+            self.console.log("   Point Source to a folder from a previous BIDS conversion.", "info")
+            return
+
         has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
         if not has_subjects:
-            self.console.log("No 'sub-*' folders found in the BIDS folder.", "warning")
-            self.console.log(f"   Checked: {bids_path}", "info")
-            self.console.log("   Make sure you're selecting the correct BIDS output folder.", "info")
+            self.console.log("No 'sub-*' folders found in the Source folder.", "warning")
             return
-        
-        # Update bids_folder to the actual path we're using
-        bids_folder = str(bids_path.resolve())
-        
+
+        bids_folder = str(bids_path)
+
         self._run_bids = False
         self._run_fmriprep = True
         self._fmriprep_only_mode = True
