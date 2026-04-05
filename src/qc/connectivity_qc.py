@@ -101,7 +101,8 @@ def analyze_all_subjects(
     # Load atlas once — avoids repeated failed download attempts per run
     try:
         atlas_img, atlas_labels = _load_atlas(atlas)
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"Connectivity QC skipped: could not load atlas — {e}")
         return []
 
     results: List[ConnectivityQCResult] = []
@@ -298,20 +299,72 @@ def _analyze_single_run(
         )
 
 
+_ATLAS_DATA_DIR = Path(__file__).parent / "atlas_data"
+
+_BUNDLED_SCHAEFER_LABELS = {
+    100: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order.txt",
+}
+
+
+def _read_schaefer_labels(n_rois: int) -> List[str]:
+    """Read ROI names from a bundled Schaefer order file (column 2 of each line)."""
+    label_file = _BUNDLED_SCHAEFER_LABELS.get(n_rois)
+    if label_file and label_file.exists():
+        labels = []
+        for line in label_file.read_text().splitlines():
+            parts = line.split()
+            if len(parts) >= 2:
+                labels.append(parts[1])
+        if labels:
+            return labels
+    return [f"ROI_{i + 1:03d}" for i in range(n_rois)]
+
+
+def _fetch_schaefer_with_fallback(n_rois: int):
+    """
+    Fetch Schaefer atlas, falling back to locally cached NIfTI + bundled labels
+    when the server has no internet access.
+    """
+    try:
+        atlas = datasets.fetch_atlas_schaefer_2018(n_rois=n_rois, resolution_mm=2)
+        return atlas['maps'], atlas['labels']
+    except Exception:
+        pass  # Network unavailable — try local nilearn cache
+
+    search_roots = [
+        Path.home() / "nilearn_data",
+        Path("/home/fmriprep/nilearn_data"),
+        Path("/tmp/nilearn_data"),
+    ]
+    nii_pattern = f"*Schaefer2018_{n_rois}Parcels*2mm*.nii*"
+    for root in search_roots:
+        if not root.exists():
+            continue
+        matches = sorted(root.rglob(nii_pattern))
+        if matches:
+            labels = _read_schaefer_labels(n_rois)
+            return str(matches[0]), labels
+
+    raise RuntimeError(
+        f"Schaefer {n_rois}-parcel atlas not found locally and network is unavailable. "
+        f"Run once on a machine with internet:\n"
+        f"  python -c \"from nilearn import datasets; "
+        f"datasets.fetch_atlas_schaefer_2018(n_rois={n_rois}, resolution_mm=2)\"\n"
+        f"Then copy ~/nilearn_data/schaefer_2018/ to the server."
+    )
+
+
 def _load_atlas(atlas_name: str):
-    """Load brain atlas using Nilearn datasets."""
+    """Load brain atlas using Nilearn datasets, with offline fallback."""
     atlas_name_lower = atlas_name.lower()
 
     if "schaefer" in atlas_name_lower:
-        # Extract number of parcels (default 100)
         n_rois = 100
         if "200" in atlas_name_lower:
             n_rois = 200
         elif "400" in atlas_name_lower:
             n_rois = 400
-
-        atlas = datasets.fetch_atlas_schaefer_2018(n_rois=n_rois, resolution_mm=2)
-        return atlas['maps'], atlas['labels']
+        return _fetch_schaefer_with_fallback(n_rois)
 
     elif "aal" in atlas_name_lower:
         atlas = datasets.fetch_atlas_aal()
@@ -322,9 +375,7 @@ def _load_atlas(atlas_name: str):
         return atlas['maps'], atlas['labels']
 
     else:
-        # Default to Schaefer 100
-        atlas = datasets.fetch_atlas_schaefer_2018(n_rois=100, resolution_mm=2)
-        return atlas['maps'], atlas['labels']
+        return _fetch_schaefer_with_fallback(100)
 
 
 def _select_confounds(confounds_df: pd.DataFrame) -> List[str]:
