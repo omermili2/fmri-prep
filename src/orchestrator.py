@@ -72,9 +72,9 @@ def _pick_mni_space(output_spaces):
 
 def process_bids_task(task, bids_dir, progress_tracker,
                       desc_created_event, report, anonymize=False,
-                      qc_checker=None, run_mriqc=False, mriqc_dir=None):
+                      qc_checker=None):
     """
-    Run BIDS conversion + QC + MRIQC for a single subject-session.
+    Run BIDS conversion + QC for a single subject-session.
 
     This function is designed to run in parallel across multiple threads
     (Phase 1 of the pipeline).
@@ -87,8 +87,6 @@ def process_bids_task(task, bids_dir, progress_tracker,
         report: ConversionReport instance
         anonymize: If True, anonymize DICOM metadata
         qc_checker: BIDSQualityChecker instance
-        run_mriqc: Whether to run MRIQC
-        mriqc_dir: MRIQC output directory
 
     Returns:
         Tuple of (error_string_or_None, missing_bold: bool)
@@ -139,27 +137,11 @@ def process_bids_task(task, bids_dir, progress_tracker,
                 for f in session_findings
             )
 
-        # Create dataset_description.json before MRIQC — pybids.BIDSLayout
+        # Create dataset_description.json — pybids.BIDSLayout
         # requires this file to exist at startup or it raises BIDSValidationError.
         if not desc_created_event.is_set():
             if create_dataset_description(bids_dir):
                 desc_created_event.set()
-
-        # Layer 2: MRIQC (optional, runs per-subject after BIDS conversion)
-        if run_mriqc and mriqc_dir is not None:
-            safe_print(f"[MRIQC] {task_label} - starting...", flush=True)
-            ok, err = mriqc_runner.run_mriqc_participant(
-                bids_dir, mriqc_dir, sub_id
-            )
-            if ok:
-                safe_print(f"[MRIQC] {task_label} - done", flush=True)
-            else:
-                safe_print(
-                    f"[MRIQC] {task_label} - warning: {err[:120]}", flush=True
-                )
-                report.add_warning(
-                    f"MRIQC failed for sub-{sub_id}: {err[:120]}"
-                )
     else:
         report.add_failure(sub_id, ses_id, error_msg, "BIDS Conversion")
         progress_tracker.increment()
@@ -317,7 +299,6 @@ def cleanup_temp_files(bids_dir, report):
     
     Removes:
     - tmp_dcm2niix/ folder
-    - .bidsignore file
     - Empty scans.tsv files
     
     Args:
@@ -346,16 +327,7 @@ def cleanup_temp_files(bids_dir, report):
             report.add_warning(warning)
             safe_print(f"  Warning: {warning}", flush=True)
     
-    # 2. Remove .bidsignore if it only contains default entries
-    bidsignore = bids_path / ".bidsignore"
-    if bidsignore.exists():
-        try:
-            bidsignore.unlink()
-            cleanup_count += 1
-        except Exception:
-            pass
-    
-    # 3. Remove empty scans.tsv files
+    # 2. Remove empty scans.tsv files
     for scans_file in bids_path.rglob("*_scans.tsv"):
         try:
             content = scans_file.read_text()
@@ -381,7 +353,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     Expects the folder to contain:
       - sub-*/ses-*/ BIDS structure  (for Layer 1 checks)
       - derivatives/                 (for Layer 3 motion analysis)
-      - mriqc/                       (for Layer 2 IQM parsing, if --run-mriqc)
+      - derivatives/mriqc/            (for Layer 2 IQM parsing, if --run-mriqc)
 
     Generates qc_report.html and prints a summary.
     """
@@ -500,7 +472,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     # Layer 2: MRIQC IQM parsing (if mriqc/ folder exists or --run-mriqc requested)
     iqm_results = []
     mriqc_reports = {}
-    mriqc_dir = output_folder / "mriqc"
+    mriqc_dir = output_folder / "derivatives" / "mriqc"
     if run_mriqc and mriqc_dir.exists():
         safe_print("\nParsing MRIQC IQM files...", flush=True)
         iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
@@ -837,7 +809,7 @@ Examples:
     
     qc_checker = BIDSQualityChecker()
     run_mriqc = getattr(args, 'run_mriqc', False)
-    mriqc_dir = output_folder / "mriqc" if run_mriqc else None
+    mriqc_dir = output_folder / "derivatives" / "mriqc" if run_mriqc else None
 
     if run_mriqc:
         safe_print("Checking MRIQC prerequisites...", flush=True)
@@ -852,7 +824,7 @@ Examples:
     subjects_with_bold = {sub_id: True for sub_id in subjects_tasks}
 
     # ------------------------------------------------------------------
-    # Phase 1: BIDS conversion + QC + MRIQC  (parallel per session)
+    # Phase 1: BIDS conversion + QC  (parallel per session)
     # ------------------------------------------------------------------
     if not args.skip_bids:
         safe_print("\n=== Phase 1: BIDS conversion ===", flush=True)
@@ -861,7 +833,7 @@ Examples:
                 executor.submit(
                     process_bids_task,
                     task, bids_dir, progress_tracker, desc_created_event,
-                    report, anonymize, qc_checker, run_mriqc, mriqc_dir
+                    report, anonymize, qc_checker
                 ): task for task in all_tasks
             }
 
@@ -882,6 +854,31 @@ Examples:
                         f"[FAIL] Unexpected error for sub-{task['sub_id']}/ses-{task['ses_id']}: {e}",
                         flush=True,
                     )
+
+    # ------------------------------------------------------------------
+    # Layer 2: MRIQC  (once per subject, sequential to avoid race conditions)
+    # ------------------------------------------------------------------
+    if run_mriqc and mriqc_dir is not None:
+        mriqc_subjects = list(subjects_tasks.keys())
+        safe_print(f"\n=== MRIQC ({len(mriqc_subjects)} subject(s)) ===", flush=True)
+        for sub_id in mriqc_subjects:
+            safe_print(f"[MRIQC] sub-{sub_id} - starting...", flush=True)
+            ok, err = mriqc_runner.run_mriqc_participant(bids_dir, mriqc_dir, sub_id)
+            if ok:
+                safe_print(f"[MRIQC] sub-{sub_id} - done", flush=True)
+            else:
+                safe_print(f"[MRIQC] sub-{sub_id} - warning: {err[:120]}", flush=True)
+                report.add_warning(f"MRIQC failed for sub-{sub_id}: {err[:120]}")
+
+    # ------------------------------------------------------------------
+    # Create .bidsignore before fMRIPrep (defense-in-depth for BIDS validator)
+    # ------------------------------------------------------------------
+    bidsignore_path = Path(bids_dir) / ".bidsignore"
+    if not bidsignore_path.exists():
+        try:
+            bidsignore_path.write_text("derivatives/\nmriqc/\n*.log\n")
+        except Exception as e:
+            safe_print(f"Warning: Could not create .bidsignore: {e}", flush=True)
 
     # ------------------------------------------------------------------
     # Phase 2: fMRIPrep  (once per subject, parallel across subjects)

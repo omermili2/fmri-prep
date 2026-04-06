@@ -477,6 +477,7 @@ def run_fmriprep(
         "participant",
         "--participant-label", participant_label,
         "--notrack",
+        "--skip-bids-validation",
     ])
     
     # Add output spaces
