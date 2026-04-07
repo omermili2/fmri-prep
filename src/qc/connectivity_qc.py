@@ -301,18 +301,18 @@ def _analyze_single_run(
 
 _ATLAS_DATA_DIR = Path(__file__).parent / "atlas_data"
 
-_BUNDLED_SCHAEFER_LABELS = {
-    100: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order.txt",
+_BUNDLED_ATLAS_LABELS = {
+    116: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_Tian_S1_order.txt",
 }
 
-_BUNDLED_SCHAEFER_NIFTI = {
-    100: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order_FSLMNI152_2mm.nii.gz",
+_BUNDLED_ATLAS_NIFTI = {
+    116: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order_Tian_Subcortex_S1_3T_MNI152NLin2009cAsym_2mm.nii.gz",
 }
 
 
-def _read_schaefer_labels(n_rois: int) -> List[str]:
-    """Read ROI names from a bundled Schaefer order file (column 2 of each line)."""
-    label_file = _BUNDLED_SCHAEFER_LABELS.get(n_rois)
+def _read_atlas_labels(n_rois: int) -> List[str]:
+    """Read ROI names from a bundled label file (column 2 of each line)."""
+    label_file = _BUNDLED_ATLAS_LABELS.get(n_rois)
     if label_file and label_file.exists():
         labels = []
         for line in label_file.read_text().splitlines():
@@ -324,9 +324,9 @@ def _read_schaefer_labels(n_rois: int) -> List[str]:
     return [f"ROI_{i + 1:03d}" for i in range(n_rois)]
 
 
-def _fetch_schaefer_with_fallback(n_rois: int):
+def _fetch_atlas_offline(n_rois: int):
     """
-    Load Schaefer atlas fully offline — no internet download.
+    Load Schaefer+Tian atlas fully offline — no internet download.
 
     Search order:
     1. Bundled NIfTI in src/qc/atlas_data/
@@ -334,9 +334,9 @@ def _fetch_schaefer_with_fallback(n_rois: int):
     3. Raise RuntimeError with instructions
     """
     # 1. Bundled atlas
-    bundled = _BUNDLED_SCHAEFER_NIFTI.get(n_rois)
+    bundled = _BUNDLED_ATLAS_NIFTI.get(n_rois)
     if bundled and bundled.exists():
-        labels = _read_schaefer_labels(n_rois)
+        labels = _read_atlas_labels(n_rois)
         return str(bundled), labels
 
     # 2. Local nilearn cache
@@ -345,17 +345,17 @@ def _fetch_schaefer_with_fallback(n_rois: int):
         Path("/home/fmriprep/nilearn_data"),
         Path("/tmp/nilearn_data"),
     ]
-    nii_pattern = f"*Schaefer2018_{n_rois}Parcels*2mm*.nii*"
+    nii_pattern = f"*Schaefer2018*Parcels*2mm*.nii*"
     for root in search_roots:
         if not root.exists():
             continue
         matches = sorted(root.rglob(nii_pattern))
         if matches:
-            labels = _read_schaefer_labels(n_rois)
+            labels = _read_atlas_labels(n_rois)
             return str(matches[0]), labels
 
     raise RuntimeError(
-        f"Schaefer {n_rois}-parcel atlas not available. "
+        f"Schaefer+Tian {n_rois}-parcel atlas not available. "
         f"Place the NIfTI in {_ATLAS_DATA_DIR} or ~/nilearn_data/schaefer_2018/."
     )
 
@@ -365,12 +365,13 @@ def _load_atlas(atlas_name: str):
     atlas_name_lower = atlas_name.lower()
 
     if "schaefer" in atlas_name_lower:
-        n_rois = 100
+        # Default: 100 Schaefer cortical + 16 Tian subcortical = 116
+        n_rois = 116
         if "200" in atlas_name_lower:
             n_rois = 200
         elif "400" in atlas_name_lower:
             n_rois = 400
-        return _fetch_schaefer_with_fallback(n_rois)
+        return _fetch_atlas_offline(n_rois)
 
     elif "aal" in atlas_name_lower:
         atlas = datasets.fetch_atlas_aal()
@@ -381,7 +382,7 @@ def _load_atlas(atlas_name: str):
         return atlas['maps'], atlas['labels']
 
     else:
-        return _fetch_schaefer_with_fallback(100)
+        return _fetch_atlas_offline(116)
 
 
 def _select_confounds(confounds_df: pd.DataFrame) -> List[str]:
