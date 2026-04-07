@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Use absolute imports for compatibility when run as script
 try:
     # When run as part of package
-    from .core.utils import setup_encoding, safe_print
+    from .core.utils import setup_encoding, safe_print, set_log_file, close_log_file
     from .core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
     from .core.progress import ProgressTracker
     from .bids.converter import run_bids_conversion, create_dataset_description
@@ -44,7 +44,7 @@ try:
     from .fmriprep import mriqc_runner
 except ImportError:
     # When run directly as script
-    from core.utils import setup_encoding, safe_print
+    from core.utils import setup_encoding, safe_print, set_log_file, close_log_file
     from core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
     from core.progress import ProgressTracker
     from bids.converter import run_bids_conversion, create_dataset_description
@@ -671,7 +671,12 @@ Examples:
         debug_log_file.unlink()  # Remove old log if exists
     debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
     safe_print(f"Debug log: {debug_log_file}", flush=True)
-    
+
+    # Start pipeline log — mirrors all safe_print() output to disk
+    pipeline_log = output_folder / "pipeline.log"
+    set_log_file(pipeline_log)
+    safe_print(f"Pipeline log: {pipeline_log}", flush=True)
+
     # Initialize report
     report = ConversionReport()
     report.input_folder = str(input_root)
@@ -1114,10 +1119,12 @@ Examples:
         for err in errors:
             safe_print(f"  [X] {err}", flush=True)
         safe_print("=" * 60, flush=True)
+        close_log_file()
         sys.exit(1)
     else:
         safe_print("[OK] All tasks completed successfully.", flush=True)
         safe_print("=" * 60, flush=True)
+        close_log_file()
         sys.exit(0)
 
 

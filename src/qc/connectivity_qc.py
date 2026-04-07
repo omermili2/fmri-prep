@@ -305,6 +305,10 @@ _BUNDLED_SCHAEFER_LABELS = {
     100: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order.txt",
 }
 
+_BUNDLED_SCHAEFER_NIFTI = {
+    100: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order_FSLMNI152_2mm.nii.gz",
+}
+
 
 def _read_schaefer_labels(n_rois: int) -> List[str]:
     """Read ROI names from a bundled Schaefer order file (column 2 of each line)."""
@@ -322,15 +326,20 @@ def _read_schaefer_labels(n_rois: int) -> List[str]:
 
 def _fetch_schaefer_with_fallback(n_rois: int):
     """
-    Fetch Schaefer atlas, falling back to locally cached NIfTI + bundled labels
-    when the server has no internet access.
-    """
-    try:
-        atlas = datasets.fetch_atlas_schaefer_2018(n_rois=n_rois, resolution_mm=2)
-        return atlas['maps'], atlas['labels']
-    except Exception:
-        pass  # Network unavailable — try local nilearn cache
+    Load Schaefer atlas fully offline — no internet download.
 
+    Search order:
+    1. Bundled NIfTI in src/qc/atlas_data/
+    2. Local nilearn cache directories
+    3. Raise RuntimeError with instructions
+    """
+    # 1. Bundled atlas
+    bundled = _BUNDLED_SCHAEFER_NIFTI.get(n_rois)
+    if bundled and bundled.exists():
+        labels = _read_schaefer_labels(n_rois)
+        return str(bundled), labels
+
+    # 2. Local nilearn cache
     search_roots = [
         Path.home() / "nilearn_data",
         Path("/home/fmriprep/nilearn_data"),
@@ -346,11 +355,8 @@ def _fetch_schaefer_with_fallback(n_rois: int):
             return str(matches[0]), labels
 
     raise RuntimeError(
-        f"Schaefer {n_rois}-parcel atlas not found locally and network is unavailable. "
-        f"Run once on a machine with internet:\n"
-        f"  python -c \"from nilearn import datasets; "
-        f"datasets.fetch_atlas_schaefer_2018(n_rois={n_rois}, resolution_mm=2)\"\n"
-        f"Then copy ~/nilearn_data/schaefer_2018/ to the server."
+        f"Schaefer {n_rois}-parcel atlas not available. "
+        f"Place the NIfTI in {_ATLAS_DATA_DIR} or ~/nilearn_data/schaefer_2018/."
     )
 
 
