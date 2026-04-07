@@ -75,16 +75,16 @@ class TestExtraArgsProcessing:
     
     def test_single_extra_arg(self):
         """Test with single extra argument."""
-        extra_args = "--use-aroma"
+        extra_args = "--use-syn-sdc"
         result = [arg.strip() for arg in extra_args.split(",") if arg.strip()]
-        assert result == ["--use-aroma"]
-    
+        assert result == ["--use-syn-sdc"]
+
     def test_multiple_extra_args(self):
         """Test with multiple extra arguments."""
-        extra_args = "--use-aroma,--output-spaces MNI152NLin2009cAsym,--fs-no-reconall"
+        extra_args = "--use-syn-sdc,--output-spaces MNI152NLin2009cAsym,--fs-no-reconall"
         result = [arg.strip() for arg in extra_args.split(",") if arg.strip()]
         assert len(result) == 3
-        assert "--use-aroma" in result
+        assert "--use-syn-sdc" in result
     
     def test_extra_args_with_spaces(self):
         """Test extra arguments with key-value pairs."""

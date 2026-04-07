@@ -387,7 +387,6 @@ def run_fmriprep(
     fs_reconall=False,
     skip_slice_timing=False,
     use_syn_sdc=False,
-    use_aroma=False,
     mem_mb=16000,
     nthreads=4
 ):
@@ -403,7 +402,6 @@ def run_fmriprep(
         fs_reconall: Whether to run FreeSurfer reconall (adds ~6 hours)
         skip_slice_timing: Whether to skip slice timing correction
         use_syn_sdc: Whether to use SyN-based distortion correction
-        use_aroma: Whether to use ICA-AROMA denoising
         mem_mb: Memory limit in MB (default: 16000)
         nthreads: Number of CPU threads (default: 4)
         
@@ -494,10 +492,6 @@ def run_fmriprep(
     # Add SDC option
     if use_syn_sdc:
         docker_cmd.append("--use-syn-sdc")
-    
-    # Add AROMA option
-    if use_aroma:
-        docker_cmd.append("--use-aroma")
     
     # Add resource limits
     docker_cmd.extend(["--mem_mb", str(mem_mb)])
@@ -684,7 +678,6 @@ def main():
     fs_reconall = opts.get("fs_reconall", False)
     skip_slice_timing = opts.get("skip_slice_timing", False)
     use_syn_sdc = opts.get("use_syn_sdc", False)
-    use_aroma = opts.get("use_aroma", False)
     mem_mb = opts.get("mem_mb", 16000)
 
     success, error = run_fmriprep(
@@ -696,7 +689,6 @@ def main():
         fs_reconall=fs_reconall,
         skip_slice_timing=skip_slice_timing,
         use_syn_sdc=use_syn_sdc,
-        use_aroma=use_aroma,
         mem_mb=mem_mb
     )
     

@@ -152,26 +152,6 @@ class App(ctk.CTk):
         self.frame_bids_options = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_bids_options.grid(row=2, column=0, padx=20, pady=(5, 0), sticky="ew")
         
-        self.check_anonymize = ctk.CTkCheckBox(
-            self.frame_bids_options,
-            text="Enable anonymization (remove patient info from metadata)",
-            font=ctk.CTkFont(size=12),
-            onvalue=True,
-            offvalue=False
-        )
-        self.check_anonymize.grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
-        
-        self.check_keep_temp = ctk.CTkCheckBox(
-            self.frame_bids_options,
-            text="Keep temporary files (for debugging)",
-            font=ctk.CTkFont(size=12),
-            onvalue=True,
-            offvalue=False
-        )
-        self.check_keep_temp.grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        self.check_keep_temp.deselect()  # Default: OFF (clean up temp files)
-
         self.check_mriqc_with_bids = ctk.CTkCheckBox(
             self.frame_bids_options,
             text="Include MRIQC image quality assessment",
@@ -179,8 +159,18 @@ class App(ctk.CTk):
             onvalue=True,
             offvalue=False
         )
-        self.check_mriqc_with_bids.grid(row=2, column=0, padx=10, pady=5, sticky="w")
+        self.check_mriqc_with_bids.grid(row=0, column=0, padx=10, pady=5, sticky="w")
         self.check_mriqc_with_bids.deselect()  # Default: OFF
+
+        self.check_anonymize = ctk.CTkCheckBox(
+            self.frame_bids_options,
+            text="Enable anonymization (remove patient info from metadata)",
+            font=ctk.CTkFont(size=12),
+            onvalue=True,
+            offvalue=False
+        )
+        self.check_anonymize.grid(row=1, column=0, padx=10, pady=5, sticky="w")
+        self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
 
         # --- fMRIPrep Options Frame (Collapsible) ---
         self.frame_fmriprep_container = ctk.CTkFrame(self.main_scroll)
@@ -234,32 +224,31 @@ class App(ctk.CTk):
         self.check_space_mni.grid(row=1, column=0, padx=30, pady=3, sticky="w")
         self.check_space_mni.select()  # Default: ON
 
-        self.check_space_mni6 = ctk.CTkCheckBox(
-            self.frame_fmriprep_options,
-            text="MNI152NLin6Asym @ 2mm (FSL standard — used by some pipelines)",
-            font=ctk.CTkFont(size=11),
-            command=self._validate_fmriprep_options
-        )
-        self.check_space_mni6.grid(row=2, column=0, padx=30, pady=3, sticky="w")
-        self.check_space_mni6.deselect()  # Default: OFF
-        
         self.check_space_t1w = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
             text="Native T1w space (subject's own brain)",
             font=ctk.CTkFont(size=11),
             command=self._validate_fmriprep_options
         )
-        self.check_space_t1w.grid(row=3, column=0, padx=30, pady=3, sticky="w")
+        self.check_space_t1w.grid(row=2, column=0, padx=30, pady=3, sticky="w")
         self.check_space_t1w.deselect()  # Default: OFF
-        
+
         # --- Processing Options Section ---
         self.label_processing = ctk.CTkLabel(
             self.frame_fmriprep_options,
             text="Processing Options:",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_processing.grid(row=4, column=0, columnspan=2, padx=15, pady=(15, 5), sticky="w")
-        
+        self.label_processing.grid(row=3, column=0, columnspan=2, padx=15, pady=(15, 5), sticky="w")
+
+        self.check_slice_timing = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="Slice timing correction",
+            font=ctk.CTkFont(size=11)
+        )
+        self.check_slice_timing.grid(row=4, column=0, padx=30, pady=3, sticky="w")
+        self.check_slice_timing.select()  # Default: ON
+
         self.check_freesurfer = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
             text="FreeSurfer surface reconstruction (adds approx. 6h per subject)",
@@ -267,31 +256,14 @@ class App(ctk.CTk):
         )
         self.check_freesurfer.grid(row=5, column=0, padx=30, pady=3, sticky="w")
         self.check_freesurfer.deselect()  # Default: OFF (skip FreeSurfer)
-        
-        self.check_slice_timing = ctk.CTkCheckBox(
-            self.frame_fmriprep_options,
-            text="Slice timing correction",
-            font=ctk.CTkFont(size=11)
-        )
-        self.check_slice_timing.grid(row=6, column=0, padx=30, pady=3, sticky="w")
-        self.check_slice_timing.select()  # Default: ON
-        
+
         self.check_syn_sdc = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
             text="Fieldmap-less distortion correction (SyN SDC)",
             font=ctk.CTkFont(size=11)
         )
-        self.check_syn_sdc.grid(row=7, column=0, padx=30, pady=3, sticky="w")
+        self.check_syn_sdc.grid(row=6, column=0, padx=30, pady=3, sticky="w")
         self.check_syn_sdc.deselect()  # Default: OFF
-        
-        self.check_aroma = ctk.CTkCheckBox(
-            self.frame_fmriprep_options,
-            text="ICA-AROMA denoising (requires MNI output)",
-            font=ctk.CTkFont(size=11),
-            command=self._validate_fmriprep_options
-        )
-        self.check_aroma.grid(row=8, column=0, padx=30, pady=(3, 10), sticky="w")
-        self.check_aroma.deselect()  # Default: OFF
         
         # Validation warning label
         self.label_fmriprep_warning = ctk.CTkLabel(
@@ -300,7 +272,7 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#FFC107"
         )
-        self.label_fmriprep_warning.grid(row=9, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
+        self.label_fmriprep_warning.grid(row=7, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
 
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
@@ -671,14 +643,8 @@ class App(ctk.CTk):
         warnings = []
         
         # Check that at least one output space is selected
-        if not self.check_space_mni.get() and not self.check_space_mni6.get() and not self.check_space_t1w.get():
+        if not self.check_space_mni.get() and not self.check_space_t1w.get():
             warnings.append("Select at least one output space")
-        
-        # ICA-AROMA requires an MNI output space
-        if self.check_aroma.get() and not self.check_space_mni.get() and not self.check_space_mni6.get():
-            warnings.append("ICA-AROMA requires an MNI output space")
-            # Auto-enable MNI2009c when AROMA is selected
-            self.check_space_mni.select()
         
         if warnings:
             self.label_fmriprep_warning.configure(text=" | ".join(warnings))
@@ -694,8 +660,6 @@ class App(ctk.CTk):
         spaces = []
         if self.check_space_mni.get():
             spaces.append("MNI152NLin2009cAsym:res-2")
-        if self.check_space_mni6.get():
-            spaces.append("MNI152NLin6Asym:res-2")
         if self.check_space_t1w.get():
             spaces.append("T1w")
         if spaces:
@@ -709,9 +673,6 @@ class App(ctk.CTk):
         
         # SyN SDC
         options["use_syn_sdc"] = self.check_syn_sdc.get()
-        
-        # ICA-AROMA
-        options["use_aroma"] = self.check_aroma.get()
         
         return options
     
@@ -1023,8 +984,6 @@ class App(ctk.CTk):
             cmd.append("--skip-fmriprep")
         if self.check_anonymize.get():
             cmd.append("--anonymize")
-        if self.check_keep_temp.get():
-            cmd.append("--keep-temp")
 
         # Add --run-mriqc if the MRIQC checkbox is ticked
         if self.check_mriqc_with_bids.get():
