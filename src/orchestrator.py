@@ -455,7 +455,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                 connectivity_results = connectivity_qc.analyze_all_subjects(
                     derivatives_dir,
                     output_folder,
-                    atlas='schaefer_100',
+                    atlas='schaefer_116_tian',
                     compute_qc_fc=True,
                     compute_dm_fc=True,
                     compute_modularity=False,
@@ -1029,7 +1029,7 @@ Examples:
             connectivity_results = connectivity_qc.analyze_all_subjects(
                 derivatives_dir,
                 bids_dir,
-                atlas='schaefer_100',
+                atlas='schaefer_116_tian',
                 compute_qc_fc=True,
                 compute_dm_fc=True,
                 compute_modularity=False,  # Too expensive for routine QC

@@ -65,7 +65,7 @@ class ConnectivityQCResult:
     action: str = ""
 
     # Atlas used
-    atlas_name: str = "schaefer_100"
+    atlas_name: str = "schaefer_116_tian"
     n_rois: int = 0
 
     # Error tracking
@@ -75,7 +75,7 @@ class ConnectivityQCResult:
 def analyze_all_subjects(
     derivatives_dir,
     bids_dir=None,
-    atlas='schaefer_100',
+    atlas='schaefer_116_tian',
     compute_qc_fc=True,
     compute_dm_fc=True,
     compute_modularity=False,  # Expensive, off by default
@@ -87,7 +87,7 @@ def analyze_all_subjects(
     Args:
         derivatives_dir: fMRIPrep derivatives directory
         bids_dir: BIDS directory (optional, for participant demographics)
-        atlas: Atlas name ('schaefer_100', 'schaefer_200', 'aal', etc.)
+        atlas: Atlas name ('schaefer_116_tian', 'schaefer_200', 'aal', etc.)
         compute_qc_fc: Calculate QC-FC metric
         compute_dm_fc: Calculate DM-FC metric
         compute_modularity: Calculate network modularity (slow)

@@ -262,7 +262,7 @@ class App(ctk.CTk):
         
         self.check_freesurfer = ctk.CTkCheckBox(
             self.frame_fmriprep_options,
-            text="FreeSurfer surface reconstruction (adds ~6+ hours per subject)",
+            text="FreeSurfer surface reconstruction (adds approx. 6h per subject)",
             font=ctk.CTkFont(size=11)
         )
         self.check_freesurfer.grid(row=5, column=0, padx=30, pady=3, sticky="w")
@@ -480,7 +480,7 @@ class App(ctk.CTk):
         if output_dir:
             output_path = Path(output_dir) / "output_<timestamp>"
             self.label_output_info.configure(
-                text=f"→ BIDS data will be saved to: {output_path}"
+                text=f"→ All the results will be saved to: {output_path}"
             )
             self.label_output_info.grid()  # Show the label
         else:
@@ -488,9 +488,9 @@ class App(ctk.CTk):
 
     # --- Time-estimate constants (minutes) ---
     _BIDS_MIN_PER_SESSION = 2        # BIDS conversion + QC per session
-    _FMRIPREP_MIN_PER_SUBJECT = 180  # ~3 hours per subject (all sessions)
-    _MRIQC_MIN_PER_SUBJECT = 40      # ~40 min per subject
-    _CONNECTIVITY_MIN_PER_SUBJECT = 5
+    _FMRIPREP_MIN_PER_SUBJECT = 300  # ~5 hours per subject (all sessions)
+    _MRIQC_MIN_PER_SUBJECT = 20      # ~20 min per subject
+    _CONNECTIVITY_MIN_PER_SUBJECT = 8
 
     def _update_button_states(self):
         """Enable/disable buttons based on what the source folder contains.
