@@ -664,7 +664,7 @@ Solution:
 ```
 Solution:
   1. Get a free license from https://surfer.nmr.mgh.harvard.edu/registration.html
-  2. Save as .freesurfer_license.txt in project root
+  2. Save as .freesurfer_license.txt in the tools/ folder
 ```
 
 #### "Out of memory"

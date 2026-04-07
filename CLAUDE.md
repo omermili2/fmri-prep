@@ -67,5 +67,4 @@ pyright                        # Uses pyrightconfig.json (basic mode, Python 3.9
 ## Configuration
 - `pyproject.toml` — Package metadata, pytest config (`testpaths = ["test"]`, `pythonpath = ["src"]`), Pyright settings
 - `pyrightconfig.json` — Type checking (basic mode, Python 3.9, includes `src` and `test`)
-- `.freesurfer_license.txt` — FreeSurfer license file used by fMRIPrep (not committed)
-- `tools/` — Bundled `dcm2niix` binary for BIDS conversion
+- `tools/` — Bundled `dcm2niix` binary for BIDS conversion; also holds `.freesurfer_license.txt` (not committed)

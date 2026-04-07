@@ -106,17 +106,20 @@ def to_docker_path(path):
 def find_freesurfer_license():
     """
     Search for FreeSurfer license file in common locations.
-    
+
     Checks:
-    1. Project root directory
-    2. Current working directory
-    3. Home directory
-    
+    1. tools/ directory (preferred location)
+    2. Project root directory (legacy)
+    3. Current working directory
+    4. Home directory
+
     Returns:
         Path to license file, or None if not found
     """
     project_root = Path(__file__).parent.parent.parent.resolve()
     license_candidates = [
+        project_root / "tools" / ".freesurfer_license.txt",
+        project_root / "tools" / "freesurfer_license.txt",
         project_root / ".freesurfer_license.txt",
         project_root / "freesurfer_license.txt",
         Path.cwd() / ".freesurfer_license.txt",
@@ -369,7 +372,7 @@ def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True)
             "To get a free license:\n"
             "1. Register at https://surfer.nmr.mgh.harvard.edu/registration.html\n"
             "2. You'll receive an email with the license\n"
-            "3. Save it as '.freesurfer_license.txt' in the project folder"
+            "3. Save it as '.freesurfer_license.txt' in the tools/ folder"
         )
     
     if callback:
@@ -423,7 +426,7 @@ def run_fmriprep(
     else:
         license_path = find_freesurfer_license()
         if not license_path:
-            return False, "FreeSurfer license file not found. Create .freesurfer_license.txt in the project root."
+            return False, "FreeSurfer license file not found. Place .freesurfer_license.txt in the tools/ folder."
     
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)

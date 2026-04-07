@@ -10,7 +10,17 @@ __pycache__/
 dummy_data/
 tmp_dcm2bids/
 *.log
+debug/
+
+# FreeSurfer license (private, any location)
 .freesurfer_license.txt
 freesurfer_license.txt
+tools/.freesurfer_license.txt
+tools/freesurfer_license.txt
 license.txt
+
+# Output artifacts that may land in root
+*.html
+Conversion Report.txt
+
 thesis/
