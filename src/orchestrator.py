@@ -70,6 +70,251 @@ def _pick_mni_space(output_spaces):
     return "MNI152NLin2009cAsym"
 
 
+def _write_structured_summary(
+    summary_path,
+    report,
+    subjects_tasks,
+    sessions_missing_bold,
+    motion_results,
+    censoring_results,
+    connectivity_results,
+    errors,
+    pipeline_start_time,
+):
+    """
+    Write a human-readable, structured summary to its own file.
+
+    Organised by subject > session so a reader can quickly find the outcome
+    for any scan without wading through interleaved parallel output.
+
+    Wrapped in try/except so a formatting bug can never crash the pipeline.
+    """
+    try:
+        lines = _build_structured_summary(
+            report, subjects_tasks, sessions_missing_bold,
+            motion_results, censoring_results, connectivity_results,
+            errors, pipeline_start_time,
+        )
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        safe_print(f"Structured summary: {summary_path}", flush=True)
+    except Exception as e:
+        safe_print(
+            f"(Could not generate structured summary: {e})",
+            flush=True,
+        )
+
+
+def _build_structured_summary(
+    report, subjects_tasks, sessions_missing_bold,
+    motion_results, censoring_results, connectivity_results,
+    errors, pipeline_start_time,
+):
+    """Build the structured summary as a list of lines. May raise; caller catches."""
+
+    W = 70  # output width
+    elapsed = datetime.now() - pipeline_start_time
+    elapsed_min = elapsed.total_seconds() / 60
+    lines = []
+
+    def out(text=""):
+        lines.append(text)
+
+    # Index helper data by (sub, ses) for fast lookup
+    success_map = {}
+    for s in report.successful:
+        success_map[(s['sub_id'], s['ses_id'])] = s
+    fail_map = {}
+    for f in report.failed:
+        key = (f['sub_id'], f['ses_id'])
+        fail_map.setdefault(key, []).append(f)
+
+    motion_map = {}
+    for m in (motion_results or []):
+        motion_map.setdefault((m.sub_id, m.ses_id), []).append(m)
+    censor_map = {}
+    for c in (censoring_results or []):
+        censor_map.setdefault((c.sub_id, c.ses_id), []).append(c)
+    conn_map = {}
+    for c in (connectivity_results or []):
+        conn_map.setdefault((c.sub_id, c.ses_id), []).append(c)
+
+    # ---- header ----
+    out("=" * W)
+    out("STRUCTURED EXECUTION SUMMARY".center(W))
+    out("(ordered by subject and session for easy reading)".center(W))
+    out("=" * W)
+    out()
+    out(f"  Generated        : {datetime.now().strftime('%B %d, %Y at %I:%M %p')}")
+    out()
+
+    total_sessions = sum(len(ts) for ts in subjects_tasks.values())
+    n_success = len(report.successful)
+    n_fail = len(report.failed)
+    out(f"  Subjects processed : {len(subjects_tasks)}")
+    out(f"  Sessions processed : {total_sessions}")
+    out(f"  Successful         : {n_success}")
+    if n_fail:
+        out(f"  Failed / skipped   : {n_fail}")
+    out(f"  Total time         : {elapsed_min:.1f} min")
+    out()
+
+    # ---- per-subject / per-session breakdown ----
+    for sub_id in sorted(subjects_tasks.keys()):
+        sub_tasks = subjects_tasks[sub_id]
+        session_ids = sorted(set(t['ses_id'] for t in sub_tasks))
+
+        out("-" * W)
+        out(f"  Subject {sub_id}  ({len(session_ids)} session(s))")
+        out("-" * W)
+
+        for ses_id in session_ids:
+            key = (sub_id, ses_id)
+            out()
+            out(f"    Session {ses_id}")
+            out(f"    {'~' * 40}")
+
+            # -- BIDS conversion --
+            if key in success_map:
+                dur = success_map[key].get('duration', 0)
+                out(f"      BIDS conversion : Done ({dur:.0f}s)")
+            elif key in fail_map:
+                stages = [f['stage'] for f in fail_map[key]]
+                if "BIDS Conversion" in stages:
+                    err = next(
+                        f['error'] for f in fail_map[key]
+                        if f['stage'] == "BIDS Conversion"
+                    )
+                    out(f"      BIDS conversion : FAILED -- {err[:80]}")
+            else:
+                out("      BIDS conversion : (not attempted)")
+
+            # -- BOLD availability --
+            if key in sessions_missing_bold:
+                out("      BOLD data       : Not found -- session has no functional scans")
+            else:
+                out("      BOLD data       : Present")
+
+            # -- fMRIPrep --
+            fmriprep_fails = [
+                f for f in fail_map.get(key, []) if f['stage'] == "fMRIPrep"
+            ]
+            if fmriprep_fails:
+                for f in fmriprep_fails:
+                    out(f"      fMRIPrep        : FAILED -- {f['error'][:80]}")
+            elif key in sessions_missing_bold:
+                out("      fMRIPrep        : Skipped (no BOLD)")
+            elif key in success_map:
+                if motion_map.get(key):
+                    out("      fMRIPrep        : Done")
+                else:
+                    out("      fMRIPrep        : Done (no confounds found)")
+
+            # -- Motion QC --
+            for m in motion_map.get(key, []):
+                label = m.run_label or ""
+                if m.flag == "OK":
+                    out(
+                        f"      Motion [{label:20s}] : OK  "
+                        f"(mean FD {m.mean_fd:.2f} mm)"
+                    )
+                elif m.flag == "WARNING":
+                    out(
+                        f"      Motion [{label:20s}] : WARNING  "
+                        f"(mean FD {m.mean_fd:.2f} mm, "
+                        f"{m.pct_high_motion:.0f}% high-motion)"
+                    )
+                else:
+                    out(
+                        f"      Motion [{label:20s}] : RE-SCAN  "
+                        f"(mean FD {m.mean_fd:.2f} mm, "
+                        f"{m.pct_high_motion:.0f}% high-motion)"
+                    )
+
+            # -- Volume censoring --
+            for c in censor_map.get(key, []):
+                label = c.run_label or ""
+                if c.severity == "OK":
+                    out(
+                        f"      Censoring [{label:17s}] : OK  "
+                        f"({c.pct_censored_02mm:.0f}% censored, "
+                        f"{c.usable_minutes_02mm:.1f} min usable)"
+                    )
+                else:
+                    out(
+                        f"      Censoring [{label:17s}] : {c.severity}  "
+                        f"({c.pct_censored_02mm:.0f}% censored, "
+                        f"{c.usable_minutes_02mm:.1f} min usable)"
+                    )
+
+            # -- Connectivity --
+            for c in conn_map.get(key, []):
+                label = c.run_label or ""
+                out(
+                    f"      Connectivity [{label:14s}] : {c.worst_severity}  "
+                    f"({c.plain_message[:60]})"
+                )
+
+    out()
+
+    # ---- QC findings ----
+    qc_all = report.qc_findings
+    qc_errors = [f for f in qc_all if f.severity.value == "ERROR"]
+    qc_warnings = [f for f in qc_all if f.severity.value == "WARNING"]
+    if qc_errors or qc_warnings:
+        out("-" * W)
+        out("  Quality control findings")
+        out("-" * W)
+        for f in sorted(qc_errors, key=lambda x: (x.sub_id, x.ses_id)):
+            out(f"    [ERROR]   sub-{f.sub_id}/ses-{f.ses_id}: {f.plain_message}")
+        for f in sorted(qc_warnings, key=lambda x: (x.sub_id, x.ses_id)):
+            out(f"    [WARNING] sub-{f.sub_id}/ses-{f.ses_id}: {f.plain_message}")
+        out()
+
+    # ---- errors summary ----
+    if errors:
+        out("-" * W)
+        out("  Pipeline errors")
+        out("-" * W)
+        for err in errors:
+            out(f"    [X] {err}")
+        out()
+
+    # ---- reading guide ----
+    out("-" * W)
+    out("  How to read this file")
+    out("-" * W)
+    out()
+    out("  Each subject section shows every session and what happened at each")
+    out("  pipeline stage. Here is what the stages mean:")
+    out()
+    out("    BIDS conversion  - Converts raw scanner files (DICOM) into the")
+    out("                       standard BIDS format used by analysis tools.")
+    out("    BOLD data        - Whether functional brain-activity scans were")
+    out("                       found. Sessions without BOLD cannot be")
+    out("                       preprocessed by fMRIPrep.")
+    out("    fMRIPrep         - Preprocessing: motion correction, spatial")
+    out("                       normalisation, confound estimation.")
+    out("    Motion           - Head-motion quality check. 'OK' is good;")
+    out("                       'WARNING' means elevated motion; 'RE-SCAN'")
+    out("                       means the data may be unusable.")
+    out("    Censoring        - How many volumes were removed due to motion.")
+    out("                       More usable minutes = better.")
+    out("    Connectivity     - Checks whether motion corrupts brain-network")
+    out("                       estimates (QC-FC and DM-FC metrics).")
+    out()
+    out("  For the full visual report, open qc_report.html in your browser.")
+    out()
+
+    # ---- footer ----
+    out("=" * W)
+    out("END OF STRUCTURED SUMMARY".center(W))
+    out("=" * W)
+    out()
+
+    return lines
+
+
 def process_bids_task(task, bids_dir, progress_tracker,
                       desc_created_event, report, anonymize=False,
                       qc_checker=None):
@@ -672,10 +917,14 @@ Examples:
     debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
     safe_print(f"Debug log: {debug_log_file}", flush=True)
 
-    # Start pipeline log — mirrors all safe_print() output to disk
-    pipeline_log = output_folder / "pipeline.log"
-    set_log_file(pipeline_log)
-    safe_print(f"Pipeline log: {pipeline_log}", flush=True)
+    # Execution logs folder — keeps both the raw and structured logs together
+    logs_folder = output_folder / "execution_logs"
+    logs_folder.mkdir(parents=True, exist_ok=True)
+
+    # Start raw execution log — mirrors all safe_print() output to disk
+    execution_log = logs_folder / "raw_execution_log.log"
+    set_log_file(execution_log)
+    safe_print(f"Execution logs: {logs_folder}", flush=True)
 
     # Initialize report
     report = ConversionReport()
@@ -825,8 +1074,9 @@ Examples:
             run_mriqc = False
             mriqc_dir = None
 
-    # Track which subjects have BOLD data (needed for Phase 2)
-    subjects_with_bold = {sub_id: True for sub_id in subjects_tasks}
+    # Track which sessions are missing BOLD data (needed for Phase 2).
+    # Keyed by (sub_id, ses_id) — only sessions explicitly flagged are missing.
+    sessions_missing_bold: set = set()
 
     # ------------------------------------------------------------------
     # Phase 1: BIDS conversion + QC  (parallel per session)
@@ -850,7 +1100,7 @@ Examples:
                     if error:
                         errors.append(error)
                     if missing_bold:
-                        subjects_with_bold[sub_id] = False
+                        sessions_missing_bold.add((sub_id, task['ses_id']))
                 except Exception as e:
                     error_msg = f"sub-{task['sub_id']}/ses-{task['ses_id']} (Unexpected error: {e})"
                     errors.append(error_msg)
@@ -881,7 +1131,7 @@ Examples:
     bidsignore_path = Path(bids_dir) / ".bidsignore"
     if not bidsignore_path.exists():
         try:
-            bidsignore_path.write_text("derivatives/\nmriqc/\n*.log\n")
+            bidsignore_path.write_text("derivatives/\nmriqc/\nexecution_logs/\n*.log\n")
         except Exception as e:
             safe_print(f"Warning: Could not create .bidsignore: {e}", flush=True)
 
@@ -892,30 +1142,37 @@ Examples:
         # When skip_bids is set, determine BOLD availability from existing BIDS data
         if args.skip_bids:
             for sub_id, sub_tasks in subjects_tasks.items():
-                has_bold = False
                 for t in sub_tasks:
-                    ses_path = Path(bids_dir) / f"sub-{sub_id}" / f"ses-{t['ses_id']}" / "func"
-                    if ses_path.exists() and list(ses_path.glob("*bold.nii.gz")):
-                        has_bold = True
-                        break
-                subjects_with_bold[sub_id] = has_bold
+                    ses_id = t['ses_id']
+                    ses_path = Path(bids_dir) / f"sub-{sub_id}" / f"ses-{ses_id}" / "func"
+                    if not ses_path.exists() or not list(ses_path.glob("*bold.nii.gz")):
+                        sessions_missing_bold.add((sub_id, ses_id))
 
-        # Build per-subject work items
+        # Build per-subject work items, filtering out sessions without BOLD
         fmriprep_subjects = []
         for sub_id, sub_tasks in subjects_tasks.items():
-            session_ids = [t['ses_id'] for t in sub_tasks]
-            if subjects_with_bold.get(sub_id, False):
-                fmriprep_subjects.append((sub_id, session_ids))
-            else:
-                for ses_id in session_ids:
-                    safe_print(
-                        f"[SKIP] sub-{sub_id}/ses-{ses_id} - Skipping fMRIPrep (no BOLD images found)",
-                        flush=True,
-                    )
-                    report.add_failure(
-                        sub_id, ses_id,
-                        "No BOLD images \u2014 fMRIPrep requires BOLD data", "fMRIPrep"
-                    )
+            all_session_ids = [t['ses_id'] for t in sub_tasks]
+            bold_session_ids = [
+                ses_id for ses_id in all_session_ids
+                if (sub_id, ses_id) not in sessions_missing_bold
+            ]
+            skipped_session_ids = [
+                ses_id for ses_id in all_session_ids
+                if (sub_id, ses_id) in sessions_missing_bold
+            ]
+
+            for ses_id in skipped_session_ids:
+                safe_print(
+                    f"[SKIP] sub-{sub_id}/ses-{ses_id} - Skipping fMRIPrep (no BOLD images found)",
+                    flush=True,
+                )
+                report.add_failure(
+                    sub_id, ses_id,
+                    "No BOLD images \u2014 fMRIPrep requires BOLD data", "fMRIPrep"
+                )
+
+            if bold_session_ids:
+                fmriprep_subjects.append((sub_id, bold_session_ids))
 
         if fmriprep_subjects:
             safe_print(f"\n=== Phase 2: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
@@ -1111,6 +1368,19 @@ Examples:
     except Exception as e:
         safe_print(f"Warning: Could not save report: {e}", flush=True)
     
+    # Structured summary — separate file alongside the raw log
+    _write_structured_summary(
+        summary_path=logs_folder / "execution_logs_summary.txt",
+        report=report,
+        subjects_tasks=subjects_tasks,
+        sessions_missing_bold=sessions_missing_bold,
+        motion_results=motion_results,
+        censoring_results=censoring_results,
+        connectivity_results=connectivity_results,
+        errors=errors,
+        pipeline_start_time=report.start_time,
+    )
+
     # Summary
     safe_print("\n" + "=" * 60, flush=True)
     safe_print(f"Output saved to: {output_folder}", flush=True)

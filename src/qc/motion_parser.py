@@ -46,7 +46,6 @@ def parse_all_subjects(derivatives_dir) -> List[MotionResult]:
 
     Returns one MotionResult per BOLD run found.
     """
-    results: List[MotionResult] = []
     deriv_path = Path(derivatives_dir)
 
     search_roots = [
@@ -54,16 +53,23 @@ def parse_all_subjects(derivatives_dir) -> List[MotionResult]:
         deriv_path,
     ]
 
+    # Collect files from all search roots, deduplicating by resolved path
+    seen_paths: set = set()
+    tsv_files = []
     for root in search_roots:
         if not root.exists():
             continue
-        tsv_files = sorted(root.rglob("*_desc-confounds_timeseries.tsv"))
-        for tsv in tsv_files:
-            result = _parse_confounds_file(tsv)
-            if result is not None:
-                results.append(result)
-        if results:
-            break
+        for tsv in sorted(root.rglob("*_desc-confounds_timeseries.tsv")):
+            resolved = tsv.resolve()
+            if resolved not in seen_paths:
+                seen_paths.add(resolved)
+                tsv_files.append(tsv)
+
+    results: List[MotionResult] = []
+    for tsv in tsv_files:
+        result = _parse_confounds_file(tsv)
+        if result is not None:
+            results.append(result)
 
     return results
 

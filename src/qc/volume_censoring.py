@@ -60,7 +60,6 @@ def analyze_all_subjects(derivatives_dir, bids_dir=None) -> List[CensoringResult
     Returns:
         List of CensoringResult objects
     """
-    results: List[CensoringResult] = []
     deriv_path = Path(derivatives_dir)
 
     # Search for confounds files
@@ -69,18 +68,23 @@ def analyze_all_subjects(derivatives_dir, bids_dir=None) -> List[CensoringResult
         deriv_path,
     ]
 
+    # Collect files from all search roots, deduplicating by resolved path
+    seen_paths: set = set()
+    tsv_files = []
     for root in search_roots:
         if not root.exists():
             continue
+        for tsv_path in sorted(root.rglob("*_desc-confounds_timeseries.tsv")):
+            resolved = tsv_path.resolve()
+            if resolved not in seen_paths:
+                seen_paths.add(resolved)
+                tsv_files.append(tsv_path)
 
-        tsv_files = sorted(root.rglob("*_desc-confounds_timeseries.tsv"))
-        for tsv_path in tsv_files:
-            result = _analyze_single_run(tsv_path, bids_dir)
-            if result is not None:
-                results.append(result)
-
-        if results:
-            break
+    results: List[CensoringResult] = []
+    for tsv_path in tsv_files:
+        result = _analyze_single_run(tsv_path, bids_dir)
+        if result is not None:
+            results.append(result)
 
     return results
 

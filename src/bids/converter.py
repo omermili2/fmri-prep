@@ -166,7 +166,11 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
         _infer_phase_encoding_direction(metadata, series_desc, json_file.name)
         
         modality_info = _classify_scan(metadata, series_desc)
-        
+
+        # Fallback: detect BOLD by NIfTI volume count when keywords fail
+        if modality_info is None:
+            modality_info = _classify_bold_by_volume(nii_file, metadata)
+
         if modality_info is None:
             skipped_count += 1
             safe_print(f"  Unrecognized: {metadata.get('SeriesDescription', 'NO_DESC')} ({json_file.name})", flush=True)
@@ -322,6 +326,120 @@ def _classify_scan(metadata, series_desc):
             return ("func", "bold", "task-unknown")
     
     return None
+
+
+# Minimum number of timepoints required to consider a 4-D NIfTI as BOLD.
+# Typical BOLD runs have 100-1500 volumes.  Diffusion scans have 60-130.
+# Multi-echo anatomicals have < 10.  A threshold of 50 avoids all non-BOLD
+# 4-D data while catching even short BOLD runs.
+_MIN_BOLD_VOLUMES = 50
+
+
+def _classify_bold_by_volume(nii_path, metadata):
+    """
+    Fallback BOLD classification using NIfTI header properties.
+
+    Called only when keyword-based ``_classify_scan`` returned ``None``.
+    Detects BOLD scans whose SeriesDescription is non-standard (e.g.
+    "10m", "24m") by checking:
+
+    1. The NIfTI is 4-D with >= 50 timepoints.
+    2. RepetitionTime (if present) is in the typical BOLD range (0.2-5.0 s).
+    3. No diffusion gradient metadata (to exclude DTI/DWI).
+    4. Not a known non-functional modality (localiser, scout, SBRef, etc.).
+
+    Returns:
+        Tuple ``(datatype, suffix, entities)`` or ``None``.
+    """
+    try:
+        import nibabel as nib
+        img = nib.load(str(nii_path))
+        shape = img.shape
+
+        # Must be 4-D with enough timepoints
+        if len(shape) < 4 or shape[3] < _MIN_BOLD_VOLUMES:
+            return None
+
+        n_volumes = shape[3]
+
+        # ---- Exclusion checks ----
+
+        # Diffusion scans are also 4-D but carry gradient metadata
+        _DIFFUSION_KEYS = (
+            "bValue", "bValues", "bval",
+            "DiffusionGradientOrientation",
+            "DiffusionBValue", "DiffusionDirection",
+        )
+        if any(k in metadata for k in _DIFFUSION_KEYS):
+            return None
+
+        # RepetitionTime sanity (only reject if present AND out of range)
+        tr = metadata.get("RepetitionTime")
+        if tr is not None and (tr < 0.2 or tr > 5.0):
+            return None
+
+        # Skip derived / secondary images (SBRef, phase maps, scout composites)
+        series_desc = metadata.get("SeriesDescription", "").lower()
+        _NON_BOLD_HINTS = (
+            "sbref", "phase", "scout", "localizer", "localiser",
+            "setter", "noise", "phoenix", "moco", "adc",
+        )
+        if any(h in series_desc for h in _NON_BOLD_HINTS):
+            return None
+
+        image_type = metadata.get("ImageType", [])
+        if isinstance(image_type, list):
+            if "DERIVED" in image_type or "SECONDARY" in image_type:
+                return None
+
+        # ---- Looks like BOLD: extract task name ----
+        task = _extract_task_from_description(series_desc)
+
+        tr_str = f"TR={tr:.2f}s" if tr is not None else "TR=unknown"
+        safe_print(
+            f"  Detected BOLD by volume count "
+            f"({n_volumes} vols, {tr_str}): "
+            f"{metadata.get('SeriesDescription', 'N/A')}",
+            flush=True,
+        )
+
+        return ("func", "bold", f"task-{task}")
+
+    except ImportError:
+        # nibabel not installed — cannot inspect NIfTI header
+        return None
+    except Exception:
+        # Never let a fallback heuristic crash the pipeline
+        return None
+
+
+def _extract_task_from_description(series_desc):
+    """
+    Best-effort task-name extraction from a (lowered) SeriesDescription.
+
+    Re-uses the same heuristics as the main classifier but returns
+    ``"unknown"`` instead of ``None`` when nothing matches.
+    """
+    # Explicit task-<name>
+    m = re.search(r'task[_-]([a-zA-Z]+)', series_desc)
+    if m:
+        return m.group(1).lower()
+
+    _KNOWN_TASKS = [
+        "rest", "memory", "movie", "music", "story",
+        "sound", "faces", "motor", "nf", "neurofeedback",
+        "word", "wordpairs",
+    ]
+    for t in _KNOWN_TASKS:
+        if t in series_desc:
+            return t
+
+    # Trailing word after a separator (e.g. "bold-rest")
+    m = re.search(r'[-_]([a-zA-Z]+)\d*$', series_desc)
+    if m and m.group(1).lower() not in ("m",):  # exclude bare "m" from e.g. "10m"
+        return m.group(1).lower()
+
+    return "unknown"
 
 
 def _infer_phase_encoding_direction(metadata, series_desc, json_name=""):

@@ -105,7 +105,6 @@ def analyze_all_subjects(
         warnings.warn(f"Connectivity QC skipped: could not load atlas — {e}")
         return []
 
-    results: List[ConnectivityQCResult] = []
     deriv_path = Path(derivatives_dir)
 
     # Search for preprocessed BOLD files
@@ -114,30 +113,33 @@ def analyze_all_subjects(
         deriv_path,
     ]
 
+    # Collect files from all search roots, deduplicating by resolved path
+    seen_paths: set = set()
+    bold_files = []
     for root in search_roots:
         if not root.exists():
             continue
-
-        # Find preprocessed BOLD files in the configured MNI space
-        bold_files = sorted(
+        for bold_path in sorted(
             root.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")
+        ):
+            resolved = bold_path.resolve()
+            if resolved not in seen_paths:
+                seen_paths.add(resolved)
+                bold_files.append(bold_path)
+
+    results: List[ConnectivityQCResult] = []
+    for bold_path in bold_files:
+        result = _analyze_single_run(
+            bold_path,
+            atlas_img=atlas_img,
+            atlas_labels=atlas_labels,
+            atlas_name=atlas,
+            compute_qc_fc=compute_qc_fc,
+            compute_dm_fc=compute_dm_fc,
+            compute_modularity=compute_modularity
         )
-
-        for bold_path in bold_files:
-            result = _analyze_single_run(
-                bold_path,
-                atlas_img=atlas_img,
-                atlas_labels=atlas_labels,
-                atlas_name=atlas,
-                compute_qc_fc=compute_qc_fc,
-                compute_dm_fc=compute_dm_fc,
-                compute_modularity=compute_modularity
-            )
-            if result is not None:
-                results.append(result)
-
-        if results:
-            break
+        if result is not None:
+            results.append(result)
 
     return results
 
