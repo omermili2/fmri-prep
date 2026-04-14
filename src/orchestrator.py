@@ -301,7 +301,7 @@ def _build_structured_summary(
     out("    Censoring        - How many volumes were removed due to motion.")
     out("                       More usable minutes = better.")
     out("    Connectivity     - Checks whether motion corrupts brain-network")
-    out("                       estimates (QC-FC and DM-FC metrics).")
+    out("                       estimates (DM-FC split-based metric).")
     out()
     out("  For the full visual report, open qc_report.html in your browser.")
     out()
@@ -701,7 +701,6 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                     derivatives_dir,
                     output_folder,
                     atlas='schaefer_116_tian',
-                    compute_qc_fc=True,
                     compute_dm_fc=True,
                     compute_modularity=False,
                     mni_space=_pick_mni_space([])
@@ -1281,13 +1280,12 @@ Examples:
                         flush=True,
                     )
 
-            # 5b: QC-FC, DM-FC analysis (computationally expensive)
-            safe_print("  Computing connectivity metrics (QC-FC, DM-FC)...", flush=True)
+            # 5b: DM-FC analysis (computationally expensive)
+            safe_print("  Computing connectivity metrics (DM-FC)...", flush=True)
             connectivity_results = connectivity_qc.analyze_all_subjects(
                 derivatives_dir,
                 bids_dir,
                 atlas='schaefer_116_tian',
-                compute_qc_fc=True,
                 compute_dm_fc=True,
                 compute_modularity=False,  # Too expensive for routine QC
                 mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", []))

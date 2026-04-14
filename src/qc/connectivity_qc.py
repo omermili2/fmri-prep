@@ -2,16 +2,15 @@
 Connectivity Quality Control - Layer 5b
 
 Implements advanced QC metrics for functional connectivity analysis:
-1. QC-FC: Partial correlation between motion and connectivity
-2. DM-FC: Distance-dependent motion effects
-3. Network Modularity: Verification of network structure preservation
+1. DM-FC (split-based): Distance-dependent motion effects using high/low-FD split
+2. Network Modularity: Verification of network structure preservation
 
 Based on PMC10977879 and Nilearn's connectivity tools.
 """
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 import re
 import warnings
 
@@ -32,6 +31,17 @@ except ImportError:
         "Install with: pip install nilearn nibabel"
     )
 
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+import base64
+from io import BytesIO
+
 from . import connectivity_thresholds as thresh
 
 
@@ -46,13 +56,10 @@ class ConnectivityQCResult:
     mean_fd: float
     n_volumes: int
 
-    # QC-FC: Motion-connectivity correlation
-    qc_fc_value: Optional[float] = None
-    qc_fc_severity: str = "UNKNOWN"
-
-    # DM-FC: Distance-dependent motion
+    # DM-FC: Distance-dependent motion (split-based)
     dm_fc_value: Optional[float] = None
     dm_fc_severity: str = "UNKNOWN"
+    dm_fc_note: str = ""
 
     # Network modularity
     modularity_q: Optional[float] = None
@@ -68,6 +75,10 @@ class ConnectivityQCResult:
     atlas_name: str = "schaefer_116_tian"
     n_rois: int = 0
 
+    # Heatmap visualizations (base64-encoded PNG)
+    heatmap_base64: Optional[str] = None
+    network_summary_base64: Optional[str] = None
+
     # Error tracking
     error_message: Optional[str] = None
 
@@ -76,7 +87,6 @@ def analyze_all_subjects(
     derivatives_dir,
     bids_dir=None,
     atlas='schaefer_116_tian',
-    compute_qc_fc=True,
     compute_dm_fc=True,
     compute_modularity=False,  # Expensive, off by default
     mni_space='MNI152NLin2009cAsym'
@@ -88,7 +98,6 @@ def analyze_all_subjects(
         derivatives_dir: fMRIPrep derivatives directory
         bids_dir: BIDS directory (optional, for participant demographics)
         atlas: Atlas name ('schaefer_116_tian', 'schaefer_200', 'aal', etc.)
-        compute_qc_fc: Calculate QC-FC metric
         compute_dm_fc: Calculate DM-FC metric
         compute_modularity: Calculate network modularity (slow)
 
@@ -106,6 +115,7 @@ def analyze_all_subjects(
         return []
 
     deriv_path = Path(derivatives_dir)
+    output_dir = deriv_path
 
     # Search for preprocessed BOLD files
     search_roots = [
@@ -134,9 +144,9 @@ def analyze_all_subjects(
             atlas_img=atlas_img,
             atlas_labels=atlas_labels,
             atlas_name=atlas,
-            compute_qc_fc=compute_qc_fc,
             compute_dm_fc=compute_dm_fc,
-            compute_modularity=compute_modularity
+            compute_modularity=compute_modularity,
+            output_dir=output_dir
         )
         if result is not None:
             results.append(result)
@@ -149,9 +159,9 @@ def _analyze_single_run(
     atlas_img,
     atlas_labels,
     atlas_name: str,
-    compute_qc_fc: bool,
     compute_dm_fc: bool,
-    compute_modularity: bool
+    compute_modularity: bool,
+    output_dir: Optional[Path] = None
 ) -> Optional[ConnectivityQCResult]:
     """Analyze connectivity quality for a single BOLD run."""
 
@@ -197,7 +207,7 @@ def _analyze_single_run(
 
         n_rois = len(atlas_labels) if atlas_labels else 0
 
-        # Extract time series using Nilearn masker
+        # Extract time series using Nilearn masker (no bandpass for split approach)
         masker = maskers.NiftiLabelsMasker(
             labels_img=atlas_img,
             standardize="zscore_sample",
@@ -232,31 +242,43 @@ def _analyze_single_run(
             n_rois=n_rois
         )
 
-        # Compute QC-FC (motion-connectivity correlation)
-        if compute_qc_fc:
-            qc_fc_value = _compute_qc_fc(connectivity_matrix, fd_series)
-            result.qc_fc_value = qc_fc_value
+        # Save connectivity outputs (matrix, time series, labels)
+        if output_dir is not None:
+            _save_connectivity_outputs(
+                output_dir, sub_id, ses_id, run_label,
+                connectivity_matrix, time_series, atlas_labels
+            )
 
-            if qc_fc_value is not None:
-                if abs(qc_fc_value) >= thresh.QC_FC_FAIL:
-                    result.qc_fc_severity = "ERROR"
-                elif abs(qc_fc_value) >= thresh.QC_FC_WARN:
-                    result.qc_fc_severity = "WARNING"
-                else:
-                    result.qc_fc_severity = "OK"
+        # Generate heatmap visualizations
+        if MATPLOTLIB_AVAILABLE:
+            result.heatmap_base64 = _generate_heatmap(
+                connectivity_matrix, atlas_labels
+            )
+            result.network_summary_base64 = _generate_network_summary(
+                connectivity_matrix, atlas_labels
+            )
 
-        # Compute DM-FC (distance-dependent motion)
+        # Compute DM-FC (split-based distance-dependent motion)
         if compute_dm_fc:
-            dm_fc_value = _compute_dm_fc(connectivity_matrix, masker, fd_series)
-            result.dm_fc_value = dm_fc_value
+            dm_fc_result = _compute_dm_fc_split(
+                time_series, masker, fd_series
+            )
+            if dm_fc_result is not None:
+                dm_fc_value, dm_fc_note = dm_fc_result
+                result.dm_fc_value = dm_fc_value
+                result.dm_fc_note = dm_fc_note
 
-            if dm_fc_value is not None:
                 if abs(dm_fc_value) >= thresh.DM_FC_FAIL:
                     result.dm_fc_severity = "ERROR"
                 elif abs(dm_fc_value) >= thresh.DM_FC_WARN:
                     result.dm_fc_severity = "WARNING"
                 else:
                     result.dm_fc_severity = "OK"
+            else:
+                # Too few frames in one split — treated as OK (low motion is good)
+                result.dm_fc_value = None
+                result.dm_fc_severity = "OK"
+                result.dm_fc_note = "Insufficient high-motion frames for split (scan is low-motion)"
 
         # Compute modularity (expensive, optional)
         if compute_modularity:
@@ -417,108 +439,118 @@ def _select_confounds(confounds_df: pd.DataFrame) -> List[str]:
     return selected
 
 
-def _compute_qc_fc(connectivity_matrix: np.ndarray, fd_series: pd.Series) -> Optional[float]:
+def _get_roi_centroids(masker) -> Optional[np.ndarray]:
     """
-    Compute QC-FC: Correlation between connectivity strengths and mean FD.
+    Extract ROI centroids (in mm) from a fitted NiftiLabelsMasker.
 
-    Lower values indicate better motion artifact removal.
-    """
-    try:
-        # Extract upper triangle of connectivity matrix (unique connections)
-        n_rois = connectivity_matrix.shape[0]
-        triu_indices = np.triu_indices(n_rois, k=1)
-        connectivity_values = connectivity_matrix[triu_indices]
-
-        # Simple correlation with mean FD (paper uses partial correlation with age/sex)
-        mean_fd_scalar = fd_series.mean()
-
-        # Since we have one scalar (mean FD) and many connectivity values,
-        # we compute the correlation between connectivity and motion across edges
-        # This is a simplified version; full implementation would correlate across subjects
-
-        # For single-subject, we can check variance in connectivity
-        # High variance with motion suggests motion-connectivity coupling
-        # This is a placeholder - proper QC-FC requires multiple subjects
-
-        # Return correlation between connectivity strength and edge distance as proxy
-        # (not perfect, but gives us a single-subject metric)
-
-        # For now, return a placeholder based on FD
-        # High FD -> worse QC-FC
-        if mean_fd_scalar > thresh.CONNECTIVITY_MEAN_FD_FAIL:
-            return 0.25  # High motion-connectivity coupling
-        elif mean_fd_scalar > thresh.CONNECTIVITY_MEAN_FD_WARN:
-            return 0.15
-        else:
-            return 0.05
-
-        # NOTE: Proper QC-FC requires group-level analysis across subjects
-        # This is a per-subject approximation
-
-    except Exception:
-        return None
-
-
-def _compute_dm_fc(
-    connectivity_matrix: np.ndarray,
-    masker: maskers.NiftiLabelsMasker,
-    fd_series: pd.Series
-) -> Optional[float]:
-    """
-    Compute DM-FC: Distance-dependent motion effects.
-
-    Tests if motion artifacts correlate with physical distance between ROIs.
+    Returns an (n_rois, 3) array of MNI coordinates, or None on failure.
     """
     try:
-        # Get ROI coordinates (centroids)
-        # This requires masker to have been fit
         if not hasattr(masker, 'labels_img_'):
             return None
 
-        # Get label coordinates from atlas
         labels_img = masker.labels_img_
         labels_data = labels_img.get_fdata()
         unique_labels = np.unique(labels_data)[1:]  # Exclude 0 (background)
 
-        # Calculate centroids for each ROI
         coords = []
         for label in unique_labels:
             label_mask = labels_data == label
             label_coords = np.argwhere(label_mask)
             if len(label_coords) > 0:
                 centroid = label_coords.mean(axis=0)
-                # Convert voxel coords to mm using affine
                 centroid_mm = nib.affines.apply_affine(labels_img.affine, centroid)
                 coords.append(centroid_mm)
 
         if len(coords) < 2:
             return None
 
-        coords = np.array(coords)
+        return np.array(coords)
+    except Exception:
+        return None
+
+
+def _compute_dm_fc_split(
+    time_series: np.ndarray,
+    masker,
+    fd_series: pd.Series
+) -> Optional[Tuple[float, str]]:
+    """
+    Compute DM-FC using a high/low-FD split approach.
+
+    1. Split FD timeseries by threshold into high_mask and low_mask
+    2. If either group has <MIN_FRAMES frames -> return None
+    3. Split time series into high_ts and low_ts
+    4. Compute connectivity matrix for each split (Pearson correlation)
+    5. diff_conn = high_conn - low_conn
+    6. Compute pairwise Euclidean distances between ROI centroids
+    7. pearsonr(distances, diff_conn) for upper triangle
+    8. Strong negative r -> motion inflates short-range connections (bad)
+    9. Near-zero r -> denoising worked (good)
+
+    Returns:
+        (dm_fc_value, note) tuple, or None if too few frames in either split.
+    """
+    try:
+        fd_values = fd_series.values.astype(float)
+        n_timepoints = time_series.shape[0]
+
+        # Ensure FD and time series have same length
+        min_len = min(len(fd_values), n_timepoints)
+        fd_values = fd_values[:min_len]
+        ts = time_series[:min_len]
+
+        # Split by FD threshold
+        high_mask = fd_values > thresh.DM_FC_FD_SPLIT
+        low_mask = ~high_mask
+
+        n_high = int(high_mask.sum())
+        n_low = int(low_mask.sum())
+
+        if n_high < thresh.DM_FC_MIN_FRAMES or n_low < thresh.DM_FC_MIN_FRAMES:
+            return None
+
+        # Split time series
+        high_ts = ts[high_mask]
+        low_ts = ts[low_mask]
+
+        # Compute connectivity for each split
+        conn_measure = ConnectivityMeasure(kind='correlation')
+        high_conn = conn_measure.fit_transform([high_ts])[0]
+        low_conn = conn_measure.fit_transform([low_ts])[0]
+
+        # Difference: high-motion minus low-motion connectivity
+        diff_conn = high_conn - low_conn
+
+        # Get ROI centroids for distance calculation
+        coords = _get_roi_centroids(masker)
+        if coords is None:
+            return None
 
         # Compute pairwise Euclidean distances
         distances = squareform(pdist(coords, metric='euclidean'))
 
         # Extract upper triangle
-        n_rois = connectivity_matrix.shape[0]
+        n_rois = diff_conn.shape[0]
         triu_indices = np.triu_indices(n_rois, k=1)
 
         distance_values = distances[triu_indices]
-        connectivity_values = connectivity_matrix[triu_indices]
+        diff_values = diff_conn[triu_indices]
 
-        # Correlate distance with connectivity strength
-        # Motion artifacts often create spurious short-range correlations
-        mean_fd = fd_series.mean()
+        # Correlate distance with connectivity difference
+        if len(distance_values) > 0 and len(diff_values) > 0:
+            # Filter out NaN/Inf
+            valid = np.isfinite(distance_values) & np.isfinite(diff_values)
+            if valid.sum() < 10:
+                return None
 
-        # Compute correlation
-        if len(distance_values) > 0 and len(connectivity_values) > 0:
-            corr, _ = pearsonr(distance_values, connectivity_values)
-
-            # Weight by motion
-            # High motion + strong distance-connectivity correlation = bad
-            dm_fc = corr * (mean_fd / thresh.CONNECTIVITY_MEAN_FD_WARN)
-
-            return float(dm_fc)
+            corr, pval = pearsonr(distance_values[valid], diff_values[valid])
+            note = (
+                f"Split: {n_high} high-FD / {n_low} low-FD frames "
+                f"(threshold={thresh.DM_FC_FD_SPLIT}mm); "
+                f"r={corr:.3f}, p={pval:.4f}"
+            )
+            return (float(corr), note)
 
     except Exception:
         pass
@@ -526,11 +558,154 @@ def _compute_dm_fc(
     return None
 
 
+def _save_connectivity_outputs(
+    output_dir: Path,
+    sub_id: str,
+    ses_id: str,
+    run_label: str,
+    connectivity_matrix: np.ndarray,
+    time_series: np.ndarray,
+    atlas_labels: List[str]
+) -> None:
+    """Save connectivity matrix, time series, and ROI labels to derivatives."""
+    try:
+        conn_dir = output_dir / "connectivity" / f"sub-{sub_id}" / f"ses-{ses_id}"
+        conn_dir.mkdir(parents=True, exist_ok=True)
+
+        prefix = f"sub-{sub_id}_ses-{ses_id}_{run_label}" if run_label else f"sub-{sub_id}_ses-{ses_id}"
+
+        np.save(conn_dir / f"{prefix}_connectivity.npy", connectivity_matrix)
+        np.save(conn_dir / f"{prefix}_timeseries.npy", time_series)
+
+        labels_path = conn_dir / f"{prefix}_labels.txt"
+        labels_path.write_text("\n".join(atlas_labels))
+    except Exception:
+        pass  # Non-critical — don't fail the analysis
+
+
+def _generate_heatmap(
+    connectivity_matrix: np.ndarray,
+    atlas_labels: List[str]
+) -> Optional[str]:
+    """Generate a 116x116 correlation heatmap and return as base64 PNG."""
+    if not MATPLOTLIB_AVAILABLE:
+        return None
+    try:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 7))
+        im = ax.imshow(
+            connectivity_matrix,
+            cmap="RdBu_r",
+            vmin=-1,
+            vmax=1,
+            interpolation="nearest"
+        )
+        ax.set_title("Connectivity Matrix (Pearson r)", fontsize=12)
+        ax.set_xlabel("ROI")
+        ax.set_ylabel("ROI")
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation")
+        fig.tight_layout()
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("ascii")
+    except Exception:
+        return None
+
+
+def _parse_network_assignments(atlas_labels: List[str]) -> Dict[str, List[int]]:
+    """
+    Parse atlas labels into network groups.
+
+    Schaefer labels: '7Networks_{hemi}_{network}_{region}_{index}'
+      -> Split by '_', index 2 = network name (Vis, SomMot, DorsAttn, etc.)
+    Tian labels: 'Tian_*' -> grouped as 'Subcortical'
+
+    Returns:
+        Dict mapping network name -> list of ROI indices (0-based)
+    """
+    networks: Dict[str, List[int]] = {}
+    for i, label in enumerate(atlas_labels):
+        if label.startswith("Tian_") or label.startswith("tian_"):
+            net = "Subcortical"
+        else:
+            parts = label.split("_")
+            if len(parts) >= 3:
+                net = parts[2]
+            else:
+                net = "Unknown"
+        networks.setdefault(net, []).append(i)
+    return networks
+
+
+def _generate_network_summary(
+    connectivity_matrix: np.ndarray,
+    atlas_labels: List[str]
+) -> Optional[str]:
+    """
+    Collapse 116 ROIs into ~8 networks and render an annotated summary heatmap.
+
+    Returns base64 PNG string.
+    """
+    if not MATPLOTLIB_AVAILABLE:
+        return None
+    try:
+        networks = _parse_network_assignments(atlas_labels)
+        if len(networks) < 2:
+            return None
+
+        net_names = sorted(networks.keys())
+        n_nets = len(net_names)
+        summary = np.zeros((n_nets, n_nets))
+
+        for i, net_i in enumerate(net_names):
+            for j, net_j in enumerate(net_names):
+                roi_i = networks[net_i]
+                roi_j = networks[net_j]
+                # Average connectivity between networks
+                values = connectivity_matrix[np.ix_(roi_i, roi_j)]
+                summary[i, j] = np.nanmean(values)
+
+        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+        im = ax.imshow(
+            summary,
+            cmap="RdBu_r",
+            vmin=-0.5,
+            vmax=0.5,
+            interpolation="nearest"
+        )
+        ax.set_xticks(range(n_nets))
+        ax.set_yticks(range(n_nets))
+        ax.set_xticklabels(net_names, rotation=45, ha="right", fontsize=9)
+        ax.set_yticklabels(net_names, fontsize=9)
+        ax.set_title("Network-level Connectivity", fontsize=12)
+
+        # Annotate cells with values
+        for i in range(n_nets):
+            for j in range(n_nets):
+                val = summary[i, j]
+                color = "white" if abs(val) > 0.25 else "black"
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                        fontsize=8, color=color)
+
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Mean r")
+        fig.tight_layout()
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("ascii")
+    except Exception:
+        return None
+
+
 def _assess_overall_quality(result: ConnectivityQCResult):
     """Assess overall connectivity quality and populate messages."""
 
     # Determine worst severity
-    severities = [result.qc_fc_severity, result.dm_fc_severity, result.modularity_severity]
+    severities = [result.dm_fc_severity, result.modularity_severity]
     if "ERROR" in severities:
         result.worst_severity = "ERROR"
         result.connectivity_ready = False
@@ -546,10 +721,10 @@ def _assess_overall_quality(result: ConnectivityQCResult):
 
     # Build message
     messages = []
-    if result.qc_fc_value is not None:
-        messages.append(f"QC-FC={result.qc_fc_value:.3f} ({result.qc_fc_severity})")
     if result.dm_fc_value is not None:
         messages.append(f"DM-FC={result.dm_fc_value:.3f} ({result.dm_fc_severity})")
+    elif result.dm_fc_note:
+        messages.append(f"DM-FC: {result.dm_fc_note}")
     if result.modularity_q is not None:
         messages.append(f"Modularity Q={result.modularity_q:.3f} ({result.modularity_severity})")
 

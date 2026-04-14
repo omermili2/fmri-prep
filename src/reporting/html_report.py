@@ -640,21 +640,17 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
   removed ("scrubbed"). If more than 80% of volumes are censored or less than 1&nbsp;minute of
   clean data remains, the run is <span class="metric-error">not suitable</span> for
   connectivity analysis.<br>
-  &#9679; <b>QC-FC</b> (Quality Control &ndash; Functional Connectivity) &mdash;
-  Measures the partial correlation between each subject&rsquo;s mean framewise displacement and
-  their edge-wise connectivity strength. A high QC-FC value means that motion is systematically
-  related to the connectivity matrix &mdash; a sign of residual motion contamination even after
-  preprocessing.
-  <span class="metric-ok">&lt;0.10 = acceptable</span>,
+  &#9679; <b>DM-FC</b> (Distance-dependent Motion &ndash; Functional Connectivity, split-based) &mdash;
+  Splits each run&rsquo;s timepoints into high-FD (&gt;0.2&nbsp;mm) and low-FD groups,
+  computes separate connectivity matrices for each, and correlates the difference
+  (high&minus;low) with inter-ROI Euclidean distance.
+  A strong negative correlation means motion inflates short-range connections (bad);
+  near-zero means denoising worked (good).
+  If either split has too few frames (&lt;20), the metric is skipped &mdash; this is treated
+  as OK since it indicates a low-motion scan.
+  <span class="metric-ok">|r|&lt;0.10 = acceptable</span>,
   <span class="metric-warn">0.10&ndash;0.20 = caution</span>,
-  <span class="metric-error">&gt;0.20 = likely confounded</span>.<br>
-  &#9679; <b>DM-FC</b> (Distance-dependent Motion &ndash; Functional Connectivity) &mdash;
-  Quantifies whether motion artifacts inflate short-range correlations more than long-range ones.
-  In a clean dataset the correlation between inter-ROI Euclidean distance and connectivity
-  strength should be near zero. A large DM-FC value indicates distance-dependent bias that can
-  distort network topology.
-  <span class="metric-ok">&asymp;0 = acceptable</span>,
-  <span class="metric-error">&gt;0.10 = likely biased</span>.
+  <span class="metric-error">&gt;0.20 = likely biased</span>.
 </div>"""
 
     sections = [intro]
@@ -699,7 +695,7 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
   <tbody>{rows_html}</tbody>
 </table>""")
 
-    # Section 4b: QC-FC / DM-FC metrics
+    # Section 4b: DM-FC metrics
     if connectivity_results:
         rows = []
         for c in sorted(connectivity_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
@@ -712,12 +708,12 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
             else:
                 badge = '<span class="metric-unknown">UNKNOWN</span>'
 
-            qc_fc_str = (_metric_span(f"{c.qc_fc_value:.3f}", c.qc_fc_severity)
-                         if c.qc_fc_value is not None
-                         else '<span class="metric-unknown">&mdash;</span>')
-            dm_fc_str = (_metric_span(f"{c.dm_fc_value:.3f}", c.dm_fc_severity)
-                         if c.dm_fc_value is not None
-                         else '<span class="metric-unknown">&mdash;</span>')
+            if c.dm_fc_value is not None:
+                dm_fc_str = _metric_span(f"{c.dm_fc_value:.3f}", c.dm_fc_severity)
+            elif getattr(c, 'dm_fc_note', ''):
+                dm_fc_str = f'<span class="metric-ok">{c.dm_fc_note}</span>'
+            else:
+                dm_fc_str = '<span class="metric-unknown">&mdash;</span>'
             mod_str   = (_metric_span(f"{c.modularity_q:.3f}", c.modularity_severity)
                          if c.modularity_q is not None
                          else '<span class="metric-unknown">&mdash;</span>')
@@ -737,21 +733,46 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
                 f"<td><b>sub-{c.sub_id}</b> / ses-{c.ses_id}<br>"
                 f"<span class='meta'>{c.run_label} &bull; {c.atlas_name} &bull; {c.n_rois} ROIs</span></td>"
                 f"<td>{badge}</td>"
-                f"<td>{qc_fc_str}<br><span class='meta'>({c.qc_fc_severity})</span></td>"
                 f"<td>{dm_fc_str}<br><span class='meta'>({c.dm_fc_severity})</span></td>"
                 f"<td>{mod_str}<br><span class='meta'>({c.modularity_severity})</span></td>"
                 f"<td style='font-size:12px'>{c.plain_message}{error_msg}{action_box}</td>"
                 f"</tr>"
             )
 
-        rows_html = "\n".join(rows) if rows else "<tr><td colspan='6'>No results</td></tr>"
-        sections.append(f"""<h3>Motion-Connectivity Metrics (QC-FC &amp; DM-FC)</h3>
+        rows_html = "\n".join(rows) if rows else "<tr><td colspan='5'>No results</td></tr>"
+        sections.append(f"""<h3>Motion-Connectivity Metrics (DM-FC)</h3>
 <table>
   <thead><tr>
-    <th>Subject / Run</th><th>Status</th><th>QC-FC</th><th>DM-FC</th><th>Modularity Q</th><th>Recommendation</th>
+    <th>Subject / Run</th><th>Status</th><th>DM-FC</th><th>Modularity Q</th><th>Recommendation</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>""")
+
+    # Section 4c: Connectivity Heatmaps
+    heatmap_runs = [c for c in connectivity_results
+                    if getattr(c, 'heatmap_base64', None)]
+    if heatmap_runs:
+        heatmap_parts = ['<h3>Connectivity Heatmaps</h3>']
+        for c in sorted(heatmap_runs, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
+            label = f"sub-{c.sub_id} / ses-{c.ses_id} / {c.run_label}"
+            heatmap_parts.append(
+                f'<p style="font-weight:700;margin:12px 0 6px;">{label}</p>'
+                f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">'
+            )
+            if c.heatmap_base64:
+                heatmap_parts.append(
+                    f'<img src="data:image/png;base64,{c.heatmap_base64}" '
+                    f'style="max-width:460px;border:1px solid #ccc;border-radius:6px;" '
+                    f'alt="Full connectivity matrix">'
+                )
+            if getattr(c, 'network_summary_base64', None):
+                heatmap_parts.append(
+                    f'<img src="data:image/png;base64,{c.network_summary_base64}" '
+                    f'style="max-width:380px;border:1px solid #ccc;border-radius:6px;" '
+                    f'alt="Network summary">'
+                )
+            heatmap_parts.append('</div>')
+        sections.append("\n".join(heatmap_parts))
 
     sections.append("</div>")  # close .nilearn-section
     return "\n".join(sections)

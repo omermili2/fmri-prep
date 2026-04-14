@@ -6,7 +6,7 @@ Layer 2: iqm_parser          - MRIQC Image Quality Metrics parser & flagging
 Layer 3: motion_parser       - post-fMRIPrep FD/DVARS motion analysis
 Layer 4: connectivity_qc     - Nilearn-based connectivity quality assessment
          - volume_censoring  - Volume scrubbing analysis
-         - connectivity_qc   - QC-FC, DM-FC, modularity metrics
+         - connectivity_qc   - DM-FC (split-based), modularity metrics
 Layer 5: html_report         - visual HTML QC report (final output)
 """
 

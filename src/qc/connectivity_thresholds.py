@@ -23,13 +23,11 @@ MAX_CENSORED_PCT_FAIL = 80.0  # % - Fail if >80% volumes censored (paper thresho
 MIN_USABLE_MINUTES_WARN = 2.0  # minutes - Warning threshold
 MIN_USABLE_MINUTES_FAIL = 1.0  # minutes - Paper threshold (absolute minimum)
 
-# QC-FC thresholds (motion-connectivity correlation)
-QC_FC_WARN = 0.10  # Partial correlation threshold
-QC_FC_FAIL = 0.20  # Strong motion-connectivity contamination
-
-# DM-FC thresholds (distance-dependent motion effects)
-DM_FC_WARN = 0.05  # Distance-motion correlation threshold
-DM_FC_FAIL = 0.10  # Strong distance-dependent artifacts
+# DM-FC thresholds (split-based distance-dependent motion effects)
+DM_FC_WARN = 0.10  # Distance-motion correlation threshold
+DM_FC_FAIL = 0.20  # Strong distance-dependent artifacts
+DM_FC_FD_SPLIT = 0.2  # FD threshold (mm) for splitting high/low-motion frames
+DM_FC_MIN_FRAMES = 20  # Minimum frames required per split to compute DM-FC
 
 # Network modularity thresholds
 MIN_MODULARITY_WARN = 0.30  # Q statistic
