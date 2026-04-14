@@ -51,6 +51,10 @@ class ConversionReport:
         # Statistics
         self.output_stats = {}   # Scan type counts
         self.cleanup_info = {}   # Info about cleanup
+
+        # QC results (Layer 1 + Layer 3)
+        self.qc_findings = []    # List of QCFinding objects
+        self.motion_results = [] # List of MotionResult objects
     
     def add_success(self, sub_id, ses_id, duration, details="", output_files=None):
         """
@@ -113,6 +117,12 @@ class ConversionReport:
         """Set information about cleanup."""
         with self._lock:
             self.cleanup_info = {'count': count, 'size': size_bytes}
+
+    def set_qc_results(self, qc_findings, motion_results):
+        """Store QC findings and motion results for inclusion in the report."""
+        with self._lock:
+            self.qc_findings = list(qc_findings)
+            self.motion_results = list(motion_results)
     
     def finalize(self):
         """Mark the report as complete with end time."""
@@ -339,6 +349,57 @@ class ConversionReport:
             lines.append("    - .json: metadata about the scan")
             lines.append("")
         
+        # ===== QC FINDINGS =====
+        qc_errors = [f for f in self.qc_findings if f.severity.value == "ERROR"]
+        qc_warnings = [f for f in self.qc_findings if f.severity.value == "WARNING"]
+        motion_rescans = [m for m in self.motion_results if m.flag == "RESCAN"]
+        motion_warns = [m for m in self.motion_results if m.flag == "WARNING"]
+
+        if qc_errors or qc_warnings or motion_rescans or motion_warns:
+            lines.append("-" * 70)
+            lines.append("  QUALITY CONTROL FINDINGS")
+            lines.append("-" * 70)
+            lines.append("")
+
+            if qc_errors:
+                lines.append(f"  [!] SCAN ERRORS — action required ({len(qc_errors)}):")
+                lines.append("")
+                for f in sorted(qc_errors, key=lambda x: (x.sub_id, x.ses_id)):
+                    lines.append(f"    Subject {f.sub_id}, Session {f.ses_id}")
+                    lines.append(f"      Problem:  {f.plain_message}")
+                    lines.append(f"      Action:   {f.action}")
+                    lines.append("")
+
+            if motion_rescans:
+                lines.append(f"  [!] HIGH MOTION — re-scan recommended ({len(motion_rescans)} run(s)):")
+                lines.append("")
+                for m in sorted(motion_rescans, key=lambda x: (x.sub_id, x.ses_id)):
+                    lines.append(f"    Subject {m.sub_id}, Session {m.ses_id} [{m.run_label}]")
+                    lines.append(f"      Problem:  {m.plain_message}")
+                    lines.append(f"      Action:   {m.action}")
+                    lines.append("")
+
+            if qc_warnings:
+                lines.append(f"  [~] SCAN WARNINGS ({len(qc_warnings)}):")
+                lines.append("")
+                for f in sorted(qc_warnings, key=lambda x: (x.sub_id, x.ses_id)):
+                    lines.append(f"    Subject {f.sub_id}, Session {f.ses_id}: {f.plain_message}")
+                lines.append("")
+
+            if motion_warns:
+                lines.append(f"  [~] MOTION WARNINGS ({len(motion_warns)} run(s)):")
+                lines.append("")
+                for m in sorted(motion_warns, key=lambda x: (x.sub_id, x.ses_id)):
+                    lines.append(
+                        f"    Subject {m.sub_id}, Session {m.ses_id} [{m.run_label}]: "
+                        f"mean FD {m.mean_fd:.2f} mm, "
+                        f"{m.pct_high_motion:.0f}% high-motion frames"
+                    )
+                lines.append("")
+
+            lines.append("  See qc_report.html for the full visual report.")
+            lines.append("")
+
         # ===== NEXT STEPS =====
         lines.append("-" * 70)
         lines.append("  WHAT TO DO NEXT")

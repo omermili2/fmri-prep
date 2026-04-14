@@ -32,183 +32,509 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Use absolute imports for compatibility when run as script
 try:
     # When run as part of package
-    from .core.utils import setup_encoding, safe_print
+    from .core.utils import setup_encoding, safe_print, set_log_file, close_log_file
     from .core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
     from .core.progress import ProgressTracker
     from .bids.converter import run_bids_conversion, create_dataset_description
     from .bids.analyzer import count_output_files
     from .reporting.report import ConversionReport
+    from .reporting.html_report import generate as generate_html_report
+    from .qc.checker import BIDSQualityChecker
+    from .qc import motion_parser, iqm_parser
+    from .fmriprep import mriqc_runner
 except ImportError:
     # When run directly as script
-    from core.utils import setup_encoding, safe_print
+    from core.utils import setup_encoding, safe_print, set_log_file, close_log_file
     from core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
     from core.progress import ProgressTracker
     from bids.converter import run_bids_conversion, create_dataset_description
     from bids.analyzer import count_output_files
     from reporting.report import ConversionReport
+    from reporting.html_report import generate as generate_html_report
+    from qc.checker import BIDSQualityChecker
+    from qc import motion_parser, iqm_parser
+    from fmriprep import mriqc_runner
 
 setup_encoding()
 
 
-def process_single_task(task, bids_dir, derivatives_dir, fmriprep_script, 
-                        skip_bids, skip_fmriprep, fmriprep_opts, progress_tracker, 
-                        desc_created_event, report, anonymize=False, debug_log_file=None):
+def _pick_mni_space(output_spaces):
+    """Return the first MNI space from output_spaces, or the default.
+
+    Strips any TemplateFlow resolution suffix (e.g. ``":res-2"``) so the
+    returned name can be used in BIDS filename glob patterns.
     """
-    Process a single subject-session task.
-    
-    This function is designed to run in parallel across multiple threads.
-    
+    for space in (output_spaces or []):
+        if space.startswith("MNI"):
+            return space.split(":")[0]
+    return "MNI152NLin2009cAsym"
+
+
+def _write_structured_summary(
+    summary_path,
+    report,
+    subjects_tasks,
+    sessions_missing_bold,
+    motion_results,
+    censoring_results,
+    connectivity_results,
+    errors,
+    pipeline_start_time,
+):
+    """
+    Write a human-readable, structured summary to its own file.
+
+    Organised by subject > session so a reader can quickly find the outcome
+    for any scan without wading through interleaved parallel output.
+
+    Wrapped in try/except so a formatting bug can never crash the pipeline.
+    """
+    try:
+        lines = _build_structured_summary(
+            report, subjects_tasks, sessions_missing_bold,
+            motion_results, censoring_results, connectivity_results,
+            errors, pipeline_start_time,
+        )
+        with open(summary_path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines))
+        safe_print(f"Structured summary: {summary_path}", flush=True)
+    except Exception as e:
+        safe_print(
+            f"(Could not generate structured summary: {e})",
+            flush=True,
+        )
+
+
+def _build_structured_summary(
+    report, subjects_tasks, sessions_missing_bold,
+    motion_results, censoring_results, connectivity_results,
+    errors, pipeline_start_time,
+):
+    """Build the structured summary as a list of lines. May raise; caller catches."""
+
+    W = 70  # output width
+    elapsed = datetime.now() - pipeline_start_time
+    elapsed_min = elapsed.total_seconds() / 60
+    lines = []
+
+    def out(text=""):
+        lines.append(text)
+
+    # Index helper data by (sub, ses) for fast lookup
+    success_map = {}
+    for s in report.successful:
+        success_map[(s['sub_id'], s['ses_id'])] = s
+    fail_map = {}
+    for f in report.failed:
+        key = (f['sub_id'], f['ses_id'])
+        fail_map.setdefault(key, []).append(f)
+
+    motion_map = {}
+    for m in (motion_results or []):
+        motion_map.setdefault((m.sub_id, m.ses_id), []).append(m)
+    censor_map = {}
+    for c in (censoring_results or []):
+        censor_map.setdefault((c.sub_id, c.ses_id), []).append(c)
+    conn_map = {}
+    for c in (connectivity_results or []):
+        conn_map.setdefault((c.sub_id, c.ses_id), []).append(c)
+
+    # ---- header ----
+    out("=" * W)
+    out("STRUCTURED EXECUTION SUMMARY".center(W))
+    out("(ordered by subject and session for easy reading)".center(W))
+    out("=" * W)
+    out()
+    out(f"  Generated        : {datetime.now().strftime('%B %d, %Y at %I:%M %p')}")
+    out()
+
+    total_sessions = sum(len(ts) for ts in subjects_tasks.values())
+    n_success = len(report.successful)
+    n_fail = len(report.failed)
+    out(f"  Subjects processed : {len(subjects_tasks)}")
+    out(f"  Sessions processed : {total_sessions}")
+    out(f"  Successful         : {n_success}")
+    if n_fail:
+        out(f"  Failed / skipped   : {n_fail}")
+    out(f"  Total time         : {elapsed_min:.1f} min")
+    out()
+
+    # ---- per-subject / per-session breakdown ----
+    for sub_id in sorted(subjects_tasks.keys()):
+        sub_tasks = subjects_tasks[sub_id]
+        session_ids = sorted(set(t['ses_id'] for t in sub_tasks))
+
+        out("-" * W)
+        out(f"  Subject {sub_id}  ({len(session_ids)} session(s))")
+        out("-" * W)
+
+        for ses_id in session_ids:
+            key = (sub_id, ses_id)
+            out()
+            out(f"    Session {ses_id}")
+            out(f"    {'~' * 40}")
+
+            # -- BIDS conversion --
+            if key in success_map:
+                dur = success_map[key].get('duration', 0)
+                out(f"      BIDS conversion : Done ({dur:.0f}s)")
+            elif key in fail_map:
+                stages = [f['stage'] for f in fail_map[key]]
+                if "BIDS Conversion" in stages:
+                    err = next(
+                        f['error'] for f in fail_map[key]
+                        if f['stage'] == "BIDS Conversion"
+                    )
+                    out(f"      BIDS conversion : FAILED -- {err[:80]}")
+            else:
+                out("      BIDS conversion : (not attempted)")
+
+            # -- BOLD availability --
+            if key in sessions_missing_bold:
+                out("      BOLD data       : Not found -- session has no functional scans")
+            else:
+                out("      BOLD data       : Present")
+
+            # -- fMRIPrep --
+            fmriprep_fails = [
+                f for f in fail_map.get(key, []) if f['stage'] == "fMRIPrep"
+            ]
+            if fmriprep_fails:
+                for f in fmriprep_fails:
+                    out(f"      fMRIPrep        : FAILED -- {f['error'][:80]}")
+            elif key in sessions_missing_bold:
+                out("      fMRIPrep        : Skipped (no BOLD)")
+            elif key in success_map:
+                if motion_map.get(key):
+                    out("      fMRIPrep        : Done")
+                else:
+                    out("      fMRIPrep        : Done (no confounds found)")
+
+            # -- Motion QC --
+            for m in motion_map.get(key, []):
+                label = m.run_label or ""
+                if m.flag == "OK":
+                    out(
+                        f"      Motion [{label:20s}] : OK  "
+                        f"(mean FD {m.mean_fd:.2f} mm)"
+                    )
+                elif m.flag == "WARNING":
+                    out(
+                        f"      Motion [{label:20s}] : WARNING  "
+                        f"(mean FD {m.mean_fd:.2f} mm, "
+                        f"{m.pct_high_motion:.0f}% high-motion)"
+                    )
+                else:
+                    out(
+                        f"      Motion [{label:20s}] : RE-SCAN  "
+                        f"(mean FD {m.mean_fd:.2f} mm, "
+                        f"{m.pct_high_motion:.0f}% high-motion)"
+                    )
+
+            # -- Volume censoring --
+            for c in censor_map.get(key, []):
+                label = c.run_label or ""
+                if c.severity == "OK":
+                    out(
+                        f"      Censoring [{label:17s}] : OK  "
+                        f"({c.pct_censored_02mm:.0f}% censored, "
+                        f"{c.usable_minutes_02mm:.1f} min usable)"
+                    )
+                else:
+                    out(
+                        f"      Censoring [{label:17s}] : {c.severity}  "
+                        f"({c.pct_censored_02mm:.0f}% censored, "
+                        f"{c.usable_minutes_02mm:.1f} min usable)"
+                    )
+
+            # -- Connectivity --
+            for c in conn_map.get(key, []):
+                label = c.run_label or ""
+                out(
+                    f"      Connectivity [{label:14s}] : {c.worst_severity}  "
+                    f"({c.plain_message[:60]})"
+                )
+
+    out()
+
+    # ---- QC findings ----
+    qc_all = report.qc_findings
+    qc_errors = [f for f in qc_all if f.severity.value == "ERROR"]
+    qc_warnings = [f for f in qc_all if f.severity.value == "WARNING"]
+    if qc_errors or qc_warnings:
+        out("-" * W)
+        out("  Quality control findings")
+        out("-" * W)
+        for f in sorted(qc_errors, key=lambda x: (x.sub_id, x.ses_id)):
+            out(f"    [ERROR]   sub-{f.sub_id}/ses-{f.ses_id}: {f.plain_message}")
+        for f in sorted(qc_warnings, key=lambda x: (x.sub_id, x.ses_id)):
+            out(f"    [WARNING] sub-{f.sub_id}/ses-{f.ses_id}: {f.plain_message}")
+        out()
+
+    # ---- errors summary ----
+    if errors:
+        out("-" * W)
+        out("  Pipeline errors")
+        out("-" * W)
+        for err in errors:
+            out(f"    [X] {err}")
+        out()
+
+    # ---- reading guide ----
+    out("-" * W)
+    out("  How to read this file")
+    out("-" * W)
+    out()
+    out("  Each subject section shows every session and what happened at each")
+    out("  pipeline stage. Here is what the stages mean:")
+    out()
+    out("    BIDS conversion  - Converts raw scanner files (DICOM) into the")
+    out("                       standard BIDS format used by analysis tools.")
+    out("    BOLD data        - Whether functional brain-activity scans were")
+    out("                       found. Sessions without BOLD cannot be")
+    out("                       preprocessed by fMRIPrep.")
+    out("    fMRIPrep         - Preprocessing: motion correction, spatial")
+    out("                       normalisation, confound estimation.")
+    out("    Motion           - Head-motion quality check. 'OK' is good;")
+    out("                       'WARNING' means elevated motion; 'RE-SCAN'")
+    out("                       means the data may be unusable.")
+    out("    Censoring        - How many volumes were removed due to motion.")
+    out("                       More usable minutes = better.")
+    out("    Connectivity     - Checks whether motion corrupts brain-network")
+    out("                       estimates (QC-FC and DM-FC metrics).")
+    out()
+    out("  For the full visual report, open qc_report.html in your browser.")
+    out()
+
+    # ---- footer ----
+    out("=" * W)
+    out("END OF STRUCTURED SUMMARY".center(W))
+    out("=" * W)
+    out()
+
+    return lines
+
+
+def process_bids_task(task, bids_dir, progress_tracker,
+                      desc_created_event, report, anonymize=False,
+                      qc_checker=None):
+    """
+    Run BIDS conversion + QC for a single subject-session.
+
+    This function is designed to run in parallel across multiple threads
+    (Phase 1 of the pipeline).
+
     Args:
         task: Dictionary with sub_id, ses_id, dicom_path, task_num
         bids_dir: BIDS output directory
-        derivatives_dir: fMRIPrep derivatives directory
-        fmriprep_script: Path to fMRIPrep runner script
-        skip_bids: Skip BIDS conversion
-        skip_fmriprep: Skip fMRIPrep
-        fmriprep_opts: Dictionary of fMRIPrep options
         progress_tracker: ProgressTracker instance
         desc_created_event: Threading event for dataset_description.json
         report: ConversionReport instance
         anonymize: If True, anonymize DICOM metadata
-        
+        qc_checker: BIDSQualityChecker instance
+
     Returns:
-        Error string if failed, None if successful
+        Tuple of (error_string_or_None, missing_bold: bool)
     """
     sub_id = task['sub_id']
     ses_id = task['ses_id']
     dicom_path = task.get('dicom_path')
     task_num = task['task_num']
     task_label = f"sub-{sub_id}/ses-{ses_id}"
-    
-    if skip_bids:
-        safe_print(f"[{task_label}] Starting fMRIPrep processing...", flush=True)
-    else:
-        safe_print(f"[{task_label}] Starting conversion...", flush=True)
-    
+
+    safe_print(f"[{task_label}] Starting conversion...", flush=True)
+
     # Signal task start for progress tracking
     progress_tracker.task_start(task_num)
-    
-    error = None
-    
-    # 1. BIDS Conversion (using dcm2niix)
-    if not skip_bids:
-        success, duration, error_msg = run_bids_conversion(
-            dicom_path, sub_id, ses_id, bids_dir, task_label, anonymize=anonymize
-        )
-        
-        if success:
-            report.add_success(sub_id, ses_id, duration)
-            
-            # Create dataset_description.json if missing (thread-safe)
-            if not desc_created_event.is_set():
-                if create_dataset_description(bids_dir):
-                    desc_created_event.set()
-        else:
-            report.add_failure(sub_id, ses_id, error_msg, "BIDS Conversion")
-            progress_tracker.increment()
-            safe_print(f"[FAIL] {task_label} - BIDS conversion failed", flush=True)
-            return f"{task_label} (BIDS failed)"
-        
-        progress_tracker.increment()
 
-    # 2. fMRIPrep (if enabled)
-    if not skip_fmriprep:
-        fmriprep_start_time = datetime.now()
-        safe_print(f"[{task_label}] Running fMRIPrep...", flush=True)
-        
-        cmd_fmriprep = [
-            sys.executable,
-            str(fmriprep_script),
-            str(bids_dir),
-            str(derivatives_dir),
-            sub_id
-        ]
-        
-        # Add fMRIPrep options if provided (as base64 JSON for platform-agnostic passing)
-        if fmriprep_opts:
-            opts_json = json.dumps(fmriprep_opts)
-            opts_encoded = base64.b64encode(opts_json.encode('utf-8')).decode('ascii')
-            cmd_fmriprep.extend(["--opts", opts_encoded])
-        
-        try:
-            result = subprocess.run(
-                cmd_fmriprep, 
-                capture_output=True, 
-                text=True, 
-                encoding='utf-8', 
-                errors='replace'
-            )
-            fmriprep_elapsed = (datetime.now() - fmriprep_start_time).total_seconds()
-            
-            if result.returncode != 0:
-                safe_print(f"[FAIL] {task_label} - fMRIPrep failed", flush=True)
-                
-                # Write detailed error output to debug log file
-                if debug_log_file:
-                    try:
-                        with open(debug_log_file, 'a', encoding='utf-8') as f:
-                            f.write(f"\n{'='*80}\n")
-                            f.write(f"fMRIPrep FAILURE: {task_label}\n")
-                            f.write(f"Timestamp: {datetime.now().isoformat()}\n")
-                            f.write(f"Return code: {result.returncode}\n")
-                            f.write(f"{'='*80}\n\n")
-                            
-                            if result.stdout:
-                                f.write("--- STDOUT ---\n")
-                                f.write(result.stdout)
-                                f.write("\n\n")
-                            
-                            if result.stderr:
-                                f.write("--- STDERR ---\n")
-                                f.write(result.stderr)
-                                f.write("\n\n")
-                    except Exception as e:
-                        safe_print(f"Warning: Could not write to debug log: {e}", flush=True)
-                
-                # Print detailed error output for debugging
-                if result.stdout:
-                    safe_print("\n--- fMRIPrep stdout ---", flush=True)
-                    safe_print(result.stdout, flush=True)
-                
-                if result.stderr:
-                    safe_print("\n--- fMRIPrep stderr ---", flush=True)
-                    safe_print(result.stderr, flush=True)
-                
-                # Extract key error message from stderr
-                error_detail = "fMRIPrep processing failed"
-                if result.stderr:
-                    stderr_lines = result.stderr.split('\n')
-                    # Look for the last meaningful error line
-                    for line in reversed(stderr_lines):
-                        line = line.strip()
-                        if line and not line.startswith('[') and len(line) > 10:
-                            error_detail = line[:200]  # Limit length
-                            break
-                
-                # Also check stdout for error messages
-                if result.stdout and error_detail == "fMRIPrep processing failed":
-                    stdout_lines = result.stdout.split('\n')
-                    for line in reversed(stdout_lines):
-                        line = line.strip()
-                        if line and any(keyword in line.lower() for keyword in ['error', 'failed', 'exception']):
-                            error_detail = line[:200]
-                            break
-                
-                report.add_failure(sub_id, ses_id, error_detail, "fMRIPrep")
-                error = f"{task_label} (fMRIPrep failed: {error_detail[:100]})"
-                
-                # Show debug log location if available
-                if debug_log_file:
-                    safe_print(f"\n💾 Full error details saved to: {debug_log_file}", flush=True)
+    missing_bold = False
+
+    success, duration, error_msg = run_bids_conversion(
+        dicom_path, sub_id, ses_id, bids_dir, task_label, anonymize=anonymize
+    )
+
+    if success:
+        report.add_success(sub_id, ses_id, duration)
+
+        # Layer 1: Run BIDS quality checks immediately after conversion
+        if qc_checker is not None:
+            session_findings = qc_checker.check_session(bids_dir, sub_id, ses_id)
+            n_errors = sum(1 for f in session_findings if f.severity.value == "ERROR")
+            n_warnings = sum(1 for f in session_findings if f.severity.value == "WARNING")
+            if n_errors > 0:
+                safe_print(
+                    f"[QC] {task_label} - {n_errors} error(s), {n_warnings} warning(s) found",
+                    flush=True,
+                )
+                for finding in session_findings:
+                    if finding.severity.value == "ERROR":
+                        safe_print(f"  [QC-ERROR] {finding.message}", flush=True)
+            elif n_warnings > 0:
+                safe_print(
+                    f"[QC] {task_label} - {n_warnings} warning(s) found", flush=True
+                )
             else:
-                safe_print(f"[OK] {task_label} - fMRIPrep completed ({fmriprep_elapsed:.1f}s)", flush=True)
-        except Exception as e:
-            error = f"{task_label} (fMRIPrep error: {e})"
+                safe_print(f"[QC] {task_label} - OK", flush=True)
+
+            # Check if BOLD is missing — fMRIPrep cannot run without it
+            missing_bold = any(
+                f.category == "missing_scan" and "BOLD" in f.message
+                for f in session_findings
+            )
+
+        # Create dataset_description.json — pybids.BIDSLayout
+        # requires this file to exist at startup or it raises BIDSValidationError.
+        if not desc_created_event.is_set():
+            if create_dataset_description(bids_dir):
+                desc_created_event.set()
+    else:
+        report.add_failure(sub_id, ses_id, error_msg, "BIDS Conversion")
+        progress_tracker.increment()
+        safe_print(f"[FAIL] {task_label} - BIDS conversion failed", flush=True)
+        return f"{task_label} (BIDS failed)", missing_bold
+
+    progress_tracker.increment()
+    return None, missing_bold
+
+
+def run_fmriprep_for_subject(sub_id, session_ids, bids_dir, derivatives_dir,
+                             fmriprep_script, fmriprep_opts, report,
+                             debug_log_file=None):
+    """
+    Run fMRIPrep once for a subject, processing all of its sessions.
+
+    fMRIPrep is invoked with ``--participant-label`` only (no session filter),
+    so it processes every session present in the BIDS directory for this
+    subject.  Running it once per subject is both faster and produces a
+    consistent anatomical reference across sessions.
+
+    Memory is scaled based on the number of sessions:
+        base = 16 000 MB; +4 000 MB for each session beyond 2.
+
+    Args:
+        sub_id: Subject identifier (without ``sub-`` prefix)
+        session_ids: List of session identifiers for this subject
+        bids_dir: BIDS dataset directory
+        derivatives_dir: fMRIPrep derivatives directory
+        fmriprep_script: Path to fMRIPrep runner script
+        fmriprep_opts: Dictionary of fMRIPrep options
+        report: ConversionReport instance
+        debug_log_file: Optional path to a debug log file
+
+    Returns:
+        Error string if failed, None if successful.
+    """
+    sub_label = f"sub-{sub_id}"
+    n_sessions = len(session_ids)
+
+    # Scale memory for multi-session processing
+    base_mem = 16000
+    mem_mb = base_mem if n_sessions <= 2 else base_mem + (n_sessions - 2) * 4000
+
+    safe_print(
+        f"[{sub_label}] Running fMRIPrep ({n_sessions} session(s), mem={mem_mb}MB)...",
+        flush=True,
+    )
+
+    # Build the fMRIPrep subprocess command
+    cmd_fmriprep = [
+        sys.executable,
+        str(fmriprep_script),
+        str(bids_dir),
+        str(derivatives_dir),
+        sub_id,
+    ]
+
+    # Inject mem_mb into opts so the runner subprocess receives it
+    opts = dict(fmriprep_opts) if fmriprep_opts else {}
+    opts["mem_mb"] = mem_mb
+
+    opts_json = json.dumps(opts)
+    opts_encoded = base64.b64encode(opts_json.encode("utf-8")).decode("ascii")
+    cmd_fmriprep.extend(["--opts", opts_encoded])
+
+    fmriprep_start_time = datetime.now()
+    error = None
+
+    try:
+        result = subprocess.run(
+            cmd_fmriprep,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+        fmriprep_elapsed = (datetime.now() - fmriprep_start_time).total_seconds()
+
+        if result.returncode != 0:
+            safe_print(f"[FAIL] {sub_label} - fMRIPrep failed", flush=True)
+
+            # Write detailed error output to debug log file
+            if debug_log_file:
+                try:
+                    with open(debug_log_file, "a", encoding="utf-8") as f:
+                        f.write(f"\n{'='*80}\n")
+                        f.write(f"fMRIPrep FAILURE: {sub_label}\n")
+                        f.write(f"Timestamp: {datetime.now().isoformat()}\n")
+                        f.write(f"Return code: {result.returncode}\n")
+                        f.write(f"{'='*80}\n\n")
+                        if result.stdout:
+                            f.write("--- STDOUT ---\n")
+                            f.write(result.stdout)
+                            f.write("\n\n")
+                        if result.stderr:
+                            f.write("--- STDERR ---\n")
+                            f.write(result.stderr)
+                            f.write("\n\n")
+                except Exception as e:
+                    safe_print(f"Warning: Could not write to debug log: {e}", flush=True)
+
+            # Print detailed error output for debugging
+            if result.stdout:
+                safe_print("\n--- fMRIPrep stdout ---", flush=True)
+                safe_print(result.stdout, flush=True)
+            if result.stderr:
+                safe_print("\n--- fMRIPrep stderr ---", flush=True)
+                safe_print(result.stderr, flush=True)
+
+            # Extract key error message from stderr
+            error_detail = "fMRIPrep processing failed"
+            if result.stderr:
+                stderr_lines = result.stderr.split("\n")
+                for line in reversed(stderr_lines):
+                    line = line.strip()
+                    if line and not line.startswith("[") and len(line) > 10:
+                        error_detail = line[:200]
+                        break
+            if result.stdout and error_detail == "fMRIPrep processing failed":
+                stdout_lines = result.stdout.split("\n")
+                for line in reversed(stdout_lines):
+                    line = line.strip()
+                    if line and any(kw in line.lower() for kw in ["error", "failed", "exception"]):
+                        error_detail = line[:200]
+                        break
+
+            # Report failure for every session of this subject
+            for ses_id in session_ids:
+                report.add_failure(sub_id, ses_id, error_detail, "fMRIPrep")
+
+            error = f"{sub_label} (fMRIPrep failed: {error_detail[:100]})"
+
+            if debug_log_file:
+                safe_print(f"\n Full error details saved to: {debug_log_file}", flush=True)
+        else:
+            safe_print(
+                f"[OK] {sub_label} - fMRIPrep completed ({fmriprep_elapsed:.1f}s)",
+                flush=True,
+            )
+    except Exception as e:
+        error = f"{sub_label} (fMRIPrep error: {e})"
+        for ses_id in session_ids:
             report.add_failure(sub_id, ses_id, str(e), "fMRIPrep")
-            safe_print(f"[FAIL] {task_label} - fMRIPrep failed: {e}", flush=True)
-            import traceback
-            safe_print(f"Traceback:\n{traceback.format_exc()}", flush=True)
-    
+        safe_print(f"[FAIL] {sub_label} - fMRIPrep failed: {e}", flush=True)
+        import traceback
+        safe_print(f"Traceback:\n{traceback.format_exc()}", flush=True)
+
     return error
 
 
@@ -218,7 +544,6 @@ def cleanup_temp_files(bids_dir, report):
     
     Removes:
     - tmp_dcm2niix/ folder
-    - .bidsignore file
     - Empty scans.tsv files
     
     Args:
@@ -247,16 +572,7 @@ def cleanup_temp_files(bids_dir, report):
             report.add_warning(warning)
             safe_print(f"  Warning: {warning}", flush=True)
     
-    # 2. Remove .bidsignore if it only contains default entries
-    bidsignore = bids_path / ".bidsignore"
-    if bidsignore.exists():
-        try:
-            bidsignore.unlink()
-            cleanup_count += 1
-        except Exception:
-            pass
-    
-    # 3. Remove empty scans.tsv files
+    # 2. Remove empty scans.tsv files
     for scans_file in bids_path.rglob("*_scans.tsv"):
         try:
             content = scans_file.read_text()
@@ -275,6 +591,186 @@ def cleanup_temp_files(bids_dir, report):
         report.set_cleanup_info(0, 0)
 
 
+def run_qc_only(output_folder: Path, run_mriqc: bool = False):
+    """
+    Run QC analysis only on an existing pipeline output folder.
+
+    Expects the folder to contain:
+      - sub-*/ses-*/ BIDS structure  (for Layer 1 checks)
+      - derivatives/                 (for Layer 3 motion analysis)
+      - derivatives/mriqc/            (for Layer 2 IQM parsing, if --run-mriqc)
+
+    Generates qc_report.html and prints a summary.
+    """
+    safe_print(f"\nRunning QC-only analysis on: {output_folder}", flush=True)
+    safe_print("=" * 60, flush=True)
+
+    if not output_folder.exists():
+        safe_print(f"Error: folder does not exist: {output_folder}", flush=True)
+        sys.exit(1)
+
+    derivatives_dir = output_folder / "derivatives"
+
+    # Discover subjects/sessions from BIDS structure
+    sessions = []
+    for sub_dir in sorted(output_folder.iterdir()):
+        if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
+            continue
+        sub_id = sub_dir.name.replace("sub-", "")
+        ses_dirs = sorted(d for d in sub_dir.iterdir() if d.is_dir() and d.name.startswith("ses-"))
+        if ses_dirs:
+            for ses_dir in ses_dirs:
+                sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
+        else:
+            sessions.append((sub_id, "01"))
+
+    if not sessions:
+        safe_print("No sub-*/ses-* structure found. Is this a valid BIDS output folder?", flush=True)
+        sys.exit(1)
+
+    safe_print(f"Found {len(sessions)} session(s) across {len({s[0] for s in sessions})} subject(s)", flush=True)
+
+    # Layer 1: BIDS quality checks
+    safe_print("\nRunning BIDS quality checks...", flush=True)
+    qc_checker = BIDSQualityChecker()
+    for sub_id, ses_id in sessions:
+        findings = qc_checker.check_session(output_folder, sub_id, ses_id)
+        n_err = sum(1 for f in findings if f.severity.value == "ERROR")
+        n_warn = sum(1 for f in findings if f.severity.value == "WARNING")
+        if n_err:
+            safe_print(f"  [QC-ERROR] sub-{sub_id}/ses-{ses_id}: {n_err} error(s), {n_warn} warning(s)", flush=True)
+            for f in findings:
+                if f.severity.value == "ERROR":
+                    safe_print(f"    - {f.message}", flush=True)
+        elif n_warn:
+            safe_print(f"  [QC-WARN]  sub-{sub_id}/ses-{ses_id}: {n_warn} warning(s)", flush=True)
+        else:
+            safe_print(f"  [QC-OK]    sub-{sub_id}/ses-{ses_id}", flush=True)
+
+    # Layer 3: Motion analysis
+    motion_results = []
+    if derivatives_dir.exists():
+        safe_print("\nAnalyzing motion from fMRIPrep confounds...", flush=True)
+        motion_results = motion_parser.parse_all_subjects(derivatives_dir)
+        if motion_results:
+            rescans = [m for m in motion_results if m.flag == "RESCAN"]
+            warns   = [m for m in motion_results if m.flag == "WARNING"]
+            ok      = [m for m in motion_results if m.flag == "OK"]
+            safe_print(
+                f"  Motion: {len(ok)} OK, {len(warns)} warning(s), {len(rescans)} re-scan flag(s)",
+                flush=True,
+            )
+            for m in rescans:
+                safe_print(
+                    f"  [MOTION-RESCAN] sub-{m.sub_id}/ses-{m.ses_id} [{m.run_label}]: "
+                    f"mean FD={m.mean_fd:.2f}mm, {m.pct_high_motion:.0f}% high-motion frames",
+                    flush=True,
+                )
+        else:
+            safe_print("  No confounds files found in derivatives/.", flush=True)
+    else:
+        safe_print("\nNo derivatives/ folder found — skipping motion analysis.", flush=True)
+
+    # Layer 4: Connectivity QC (optional)
+    censoring_results = []
+    connectivity_results = []
+    # Check if --connectivity-qc was requested (it's in run_qc_only args via run_mriqc for now)
+    # For qc-only mode, we'll add a separate check
+    try:
+        import sys
+        if '--connectivity-qc' in sys.argv and derivatives_dir.exists():
+            try:
+                from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            except ImportError:
+                from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+
+            if CONNECTIVITY_QC_AVAILABLE:
+                safe_print("\nRunning connectivity quality assessment...", flush=True)
+
+                safe_print("  Analyzing volume censoring...", flush=True)
+                censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, output_folder)
+                if censoring_results:
+                    unsuitable = [c for c in censoring_results if not c.connectivity_ready]
+                    safe_print(
+                        f"    {len(censoring_results)} runs analyzed, {len(unsuitable)} unsuitable for connectivity",
+                        flush=True,
+                    )
+
+                safe_print("  Computing connectivity metrics (may take several minutes)...", flush=True)
+                connectivity_results = connectivity_qc.analyze_all_subjects(
+                    derivatives_dir,
+                    output_folder,
+                    atlas='schaefer_116_tian',
+                    compute_qc_fc=True,
+                    compute_dm_fc=True,
+                    compute_modularity=False,
+                    mni_space=_pick_mni_space([])
+                )
+                if connectivity_results:
+                    failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
+                    safe_print(f"    {len(connectivity_results)} runs analyzed, {len(failed)} failed QC", flush=True)
+            else:
+                safe_print("\nConnectivity QC skipped (Nilearn not installed)", flush=True)
+    except Exception as e:
+        safe_print(f"\nConnectivity QC skipped (error: {e})", flush=True)
+
+    # Layer 2: MRIQC IQM parsing (if mriqc/ folder exists or --run-mriqc requested)
+    iqm_results = []
+    mriqc_reports = {}
+    mriqc_dir = output_folder / "derivatives" / "mriqc"
+    if run_mriqc and mriqc_dir.exists():
+        safe_print("\nParsing MRIQC IQM files...", flush=True)
+        iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
+        mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+        if iqm_results:
+            flagged = [r for r in iqm_results if r.worst_severity != "OK"]
+            safe_print(
+                f"  IQM: {len(iqm_results)} scan(s) parsed, {len(flagged)} with flag(s)",
+                flush=True,
+            )
+            for r in flagged:
+                for flag in r.flags:
+                    safe_print(
+                        f"  [IQM-{flag.severity}] sub-{flag.sub_id} "
+                        f"{flag.modality}: {flag.metric_label} = {flag.value:.3f}",
+                        flush=True,
+                    )
+        else:
+            safe_print("  No IQM JSON files found in mriqc/.", flush=True)
+    elif run_mriqc:
+        safe_print(f"\nNo mriqc/ folder found at {mriqc_dir} — skipping IQM parsing.", flush=True)
+
+    # Layer 5: HTML report
+    html_path = generate_html_report(
+        str(output_folder),
+        qc_checker.get_all(),
+        motion_results,
+        [],
+        [],
+        iqm_results=iqm_results,
+        mriqc_reports=mriqc_reports,
+        censoring_results=censoring_results,
+        connectivity_results=connectivity_results,
+    )
+    safe_print(f"\nQC report saved to: {html_path}", flush=True)
+
+    # Summary
+    all_errors = qc_checker.get_errors()
+    all_rescans = [m for m in motion_results if m.flag == "RESCAN"]
+    safe_print("\n" + "=" * 60, flush=True)
+    if all_errors or all_rescans:
+        safe_print(
+            f"QC COMPLETE — {len(all_errors)} scan error(s), {len(all_rescans)} motion re-scan flag(s)",
+            flush=True,
+        )
+        safe_print("Open qc_report.html for full details.", flush=True)
+        sys.exit(1)
+    else:
+        safe_print("QC COMPLETE — No critical issues found.", flush=True)
+        safe_print("Open qc_report.html for full details.", flush=True)
+        sys.exit(0)
+
+
 def main():
     """Main entry point for the pipeline."""
     parser = argparse.ArgumentParser(
@@ -290,6 +786,9 @@ Examples:
 
   # Run fMRIPrep only on existing BIDS folder
   python -m src.pipeline --bids-folder /data/processed/output_20250101_120000
+
+  # Run QC analysis only on an existing output folder (no re-processing)
+  python -m src.orchestrator --qc-only --bids-folder /data/processed/output_20250101_120000
         """
     )
     
@@ -319,8 +818,22 @@ Examples:
                         help="Keep temporary files for debugging (don't cleanup)")
     parser.add_argument("--fmriprep-opts", type=str, default="",
                         help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
+    parser.add_argument("--run-mriqc", action="store_true",
+                        help="Run MRIQC image quality assessment after BIDS conversion (requires docker pull nipreps/mriqc:latest)")
+    parser.add_argument("--connectivity-qc", action="store_true",
+                        help="Run connectivity quality assessment (requires nilearn, analyzes motion-connectivity coupling)")
+    parser.add_argument("--qc-only", action="store_true",
+                        help="Run QC analysis only on an existing output folder (use with --bids-folder)")
 
     args = parser.parse_args()
+
+    # QC-only mode: analyse an existing output folder, no re-processing
+    if args.qc_only:
+        if not args.bids_folder:
+            safe_print("Error: --qc-only requires --bids-folder <path/to/output_folder>", flush=True)
+            sys.exit(1)
+        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=getattr(args, 'run_mriqc', False))
+        return  # run_qc_only calls sys.exit(), but return as safety
 
     # Validate arguments
     fmriprep_only_mode = bool(args.bids_folder)
@@ -374,11 +887,11 @@ Examples:
         if not (bids_dir / "dataset_description.json").exists():
             safe_print(f"Creating dataset_description.json in {bids_dir}...", flush=True)
             if create_dataset_description(bids_dir):
-                safe_print(f"✓ Created dataset_description.json", flush=True)
+                safe_print("Created dataset_description.json", flush=True)
             else:
                 # Check if it exists now (might have been created by another process)
                 if (bids_dir / "dataset_description.json").exists():
-                    safe_print(f"✓ dataset_description.json now exists", flush=True)
+                    safe_print("dataset_description.json now exists", flush=True)
                 else:
                     safe_print(f"Warning: Could not create dataset_description.json", flush=True)
     else:
@@ -395,13 +908,24 @@ Examples:
     
     fmriprep_script = project_root / "src" / "fmriprep" / "runner.py"
     
-    # Create debug log file for detailed error tracking
-    debug_log_file = output_folder / "fmriprep_debug.log"
+    # Create debug log file for detailed error tracking (in derivatives/, not the BIDS root,
+    # so the BIDS validator does not flag it as an unrecognised file)
+    derivatives_dir.mkdir(parents=True, exist_ok=True)
+    debug_log_file = derivatives_dir / "fmriprep_debug.log"
     if debug_log_file.exists():
         debug_log_file.unlink()  # Remove old log if exists
     debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
-    safe_print(f"💾 Debug log: {debug_log_file}", flush=True)
-    
+    safe_print(f"Debug log: {debug_log_file}", flush=True)
+
+    # Execution logs folder — keeps both the raw and structured logs together
+    logs_folder = output_folder / "execution_logs"
+    logs_folder.mkdir(parents=True, exist_ok=True)
+
+    # Start raw execution log — mirrors all safe_print() output to disk
+    execution_log = logs_folder / "raw_execution_log.log"
+    set_log_file(execution_log)
+    safe_print(f"Execution logs: {logs_folder}", flush=True)
+
     # Initialize report
     report = ConversionReport()
     report.input_folder = str(input_root)
@@ -537,27 +1061,148 @@ Examples:
 
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
-    with ThreadPoolExecutor(max_workers=num_workers) as executor:
-        futures = {
-            executor.submit(
-                process_single_task,
-                task, bids_dir, derivatives_dir, fmriprep_script,
-                args.skip_bids, args.skip_fmriprep, fmriprep_opts, 
-                progress_tracker, desc_created_event, report, anonymize, debug_log_file
-            ): task for task in all_tasks
-        }
-        
-        for future in as_completed(futures):
-            task = futures[future]
-            try:
-                error = future.result()
-                if error:
-                    errors.append(error)
-            except Exception as e:
-                error_msg = f"sub-{task['sub_id']}/ses-{task['ses_id']} (Unexpected error: {e})"
-                errors.append(error_msg)
-                report.add_failure(task['sub_id'], task['ses_id'], str(e), "Unknown")
-                safe_print(f"[FAIL] Unexpected error for sub-{task['sub_id']}/ses-{task['ses_id']}: {e}", flush=True)
+    qc_checker = BIDSQualityChecker()
+    run_mriqc = getattr(args, 'run_mriqc', False)
+    mriqc_dir = output_folder / "derivatives" / "mriqc" if run_mriqc else None
+
+    if run_mriqc:
+        safe_print("Checking MRIQC prerequisites...", flush=True)
+        ok, err = mriqc_runner.mriqc_preflight(callback=lambda m: safe_print(f"  {m}", flush=True))
+        if not ok:
+            safe_print(f"  MRIQC pre-flight failed: {err}", flush=True)
+            safe_print("  Continuing without MRIQC.", flush=True)
+            run_mriqc = False
+            mriqc_dir = None
+
+    # Track which sessions are missing BOLD data (needed for Phase 2).
+    # Keyed by (sub_id, ses_id) — only sessions explicitly flagged are missing.
+    sessions_missing_bold: set = set()
+
+    # ------------------------------------------------------------------
+    # Phase 1: BIDS conversion + QC  (parallel per session)
+    # ------------------------------------------------------------------
+    if not args.skip_bids:
+        safe_print("\n=== Phase 1: BIDS conversion ===", flush=True)
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {
+                executor.submit(
+                    process_bids_task,
+                    task, bids_dir, progress_tracker, desc_created_event,
+                    report, anonymize, qc_checker
+                ): task for task in all_tasks
+            }
+
+            for future in as_completed(futures):
+                task = futures[future]
+                sub_id = task['sub_id']
+                try:
+                    error, missing_bold = future.result()
+                    if error:
+                        errors.append(error)
+                    if missing_bold:
+                        sessions_missing_bold.add((sub_id, task['ses_id']))
+                except Exception as e:
+                    error_msg = f"sub-{task['sub_id']}/ses-{task['ses_id']} (Unexpected error: {e})"
+                    errors.append(error_msg)
+                    report.add_failure(task['sub_id'], task['ses_id'], str(e), "Unknown")
+                    safe_print(
+                        f"[FAIL] Unexpected error for sub-{task['sub_id']}/ses-{task['ses_id']}: {e}",
+                        flush=True,
+                    )
+
+    # ------------------------------------------------------------------
+    # Layer 2: MRIQC  (once per subject, sequential to avoid race conditions)
+    # ------------------------------------------------------------------
+    if run_mriqc and mriqc_dir is not None:
+        mriqc_subjects = list(subjects_tasks.keys())
+        safe_print(f"\n=== MRIQC ({len(mriqc_subjects)} subject(s)) ===", flush=True)
+        for sub_id in mriqc_subjects:
+            safe_print(f"[MRIQC] sub-{sub_id} - starting...", flush=True)
+            ok, err = mriqc_runner.run_mriqc_participant(bids_dir, mriqc_dir, sub_id)
+            if ok:
+                safe_print(f"[MRIQC] sub-{sub_id} - done", flush=True)
+            else:
+                safe_print(f"[MRIQC] sub-{sub_id} - warning: {err[:120]}", flush=True)
+                report.add_warning(f"MRIQC failed for sub-{sub_id}: {err[:120]}")
+
+    # ------------------------------------------------------------------
+    # Create .bidsignore before fMRIPrep (defense-in-depth for BIDS validator)
+    # ------------------------------------------------------------------
+    bidsignore_path = Path(bids_dir) / ".bidsignore"
+    if not bidsignore_path.exists():
+        try:
+            bidsignore_path.write_text("derivatives/\nmriqc/\nexecution_logs/\n*.log\n")
+        except Exception as e:
+            safe_print(f"Warning: Could not create .bidsignore: {e}", flush=True)
+
+    # ------------------------------------------------------------------
+    # Phase 2: fMRIPrep  (once per subject, parallel across subjects)
+    # ------------------------------------------------------------------
+    if not args.skip_fmriprep:
+        # When skip_bids is set, determine BOLD availability from existing BIDS data
+        if args.skip_bids:
+            for sub_id, sub_tasks in subjects_tasks.items():
+                for t in sub_tasks:
+                    ses_id = t['ses_id']
+                    ses_path = Path(bids_dir) / f"sub-{sub_id}" / f"ses-{ses_id}" / "func"
+                    if not ses_path.exists() or not list(ses_path.glob("*bold.nii.gz")):
+                        sessions_missing_bold.add((sub_id, ses_id))
+
+        # Build per-subject work items, filtering out sessions without BOLD
+        fmriprep_subjects = []
+        for sub_id, sub_tasks in subjects_tasks.items():
+            all_session_ids = [t['ses_id'] for t in sub_tasks]
+            bold_session_ids = [
+                ses_id for ses_id in all_session_ids
+                if (sub_id, ses_id) not in sessions_missing_bold
+            ]
+            skipped_session_ids = [
+                ses_id for ses_id in all_session_ids
+                if (sub_id, ses_id) in sessions_missing_bold
+            ]
+
+            for ses_id in skipped_session_ids:
+                safe_print(
+                    f"[SKIP] sub-{sub_id}/ses-{ses_id} - Skipping fMRIPrep (no BOLD images found)",
+                    flush=True,
+                )
+                report.add_failure(
+                    sub_id, ses_id,
+                    "No BOLD images \u2014 fMRIPrep requires BOLD data", "fMRIPrep"
+                )
+
+            if bold_session_ids:
+                fmriprep_subjects.append((sub_id, bold_session_ids))
+
+        if fmriprep_subjects:
+            safe_print(f"\n=== Phase 2: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
+            safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
+
+            fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
+            with ThreadPoolExecutor(max_workers=fmriprep_workers) as executor:
+                futures = {
+                    executor.submit(
+                        run_fmriprep_for_subject,
+                        sub_id, session_ids, bids_dir, derivatives_dir,
+                        fmriprep_script, fmriprep_opts, report, debug_log_file
+                    ): sub_id for sub_id, session_ids in fmriprep_subjects
+                }
+
+                for future in as_completed(futures):
+                    sub_id = futures[future]
+                    try:
+                        error = future.result()
+                        if error:
+                            errors.append(error)
+                    except Exception as e:
+                        error_msg = f"sub-{sub_id} (Unexpected fMRIPrep error: {e})"
+                        errors.append(error_msg)
+                        for t in subjects_tasks[sub_id]:
+                            report.add_failure(sub_id, t['ses_id'], str(e), "fMRIPrep")
+                        safe_print(
+                            f"[FAIL] Unexpected error for sub-{sub_id}: {e}",
+                            flush=True,
+                        )
 
     safe_print(f"[PROGRESS:COMPLETE]", flush=True)
     
@@ -584,6 +1229,135 @@ Examples:
         if output_stats['fmap'] > 0:
             safe_print(f"    - Fieldmaps (fmap): {output_stats['fmap']}", flush=True)
     
+    # Layer 3: Parse fMRIPrep confounds for motion analysis
+    motion_results = []
+    if not args.skip_fmriprep:
+        safe_print("Analyzing motion from fMRIPrep confounds...", flush=True)
+        motion_results = motion_parser.parse_all_subjects(derivatives_dir)
+        if motion_results:
+            rescans = [m for m in motion_results if m.flag == "RESCAN"]
+            warns = [m for m in motion_results if m.flag == "WARNING"]
+            ok = [m for m in motion_results if m.flag == "OK"]
+            safe_print(
+                f"  Motion: {len(ok)} OK, {len(warns)} warning(s), {len(rescans)} re-scan flag(s)",
+                flush=True,
+            )
+            for m in rescans:
+                safe_print(
+                    f"  [MOTION-RESCAN] sub-{m.sub_id}/ses-{m.ses_id} [{m.run_label}]: "
+                    f"mean FD={m.mean_fd:.2f}mm, {m.pct_high_motion:.0f}% high-motion frames",
+                    flush=True,
+                )
+        else:
+            safe_print("  No confounds files found (fMRIPrep may not have completed).", flush=True)
+
+    # Layer 4: Connectivity QC (runs automatically when fMRIPrep output exists)
+    censoring_results = []
+    connectivity_results = []
+    if not args.skip_fmriprep:
+        try:
+            from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+        except ImportError:
+            from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+
+        if CONNECTIVITY_QC_AVAILABLE:
+            safe_print("Running connectivity quality assessment...", flush=True)
+
+            # 5a: Volume censoring analysis
+            safe_print("  Analyzing volume censoring...", flush=True)
+            censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, bids_dir)
+            if censoring_results:
+                unsuitable = [c for c in censoring_results if not c.connectivity_ready]
+                marginal = [c for c in censoring_results if c.connectivity_ready and c.severity == "WARNING"]
+                good = [c for c in censoring_results if c.connectivity_ready and c.severity == "OK"]
+                safe_print(
+                    f"    Volume censoring: {len(good)} OK, {len(marginal)} marginal, {len(unsuitable)} unsuitable",
+                    flush=True,
+                )
+                for c in unsuitable:
+                    safe_print(
+                        f"    [CONN-FAIL] sub-{c.sub_id}/ses-{c.ses_id} [{c.run_label}]: "
+                        f"{c.pct_censored_02mm:.0f}% censored, {c.usable_minutes_02mm:.1f}min usable",
+                        flush=True,
+                    )
+
+            # 5b: QC-FC, DM-FC analysis (computationally expensive)
+            safe_print("  Computing connectivity metrics (QC-FC, DM-FC)...", flush=True)
+            connectivity_results = connectivity_qc.analyze_all_subjects(
+                derivatives_dir,
+                bids_dir,
+                atlas='schaefer_116_tian',
+                compute_qc_fc=True,
+                compute_dm_fc=True,
+                compute_modularity=False,  # Too expensive for routine QC
+                mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", []))
+            )
+            if connectivity_results:
+                failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
+                warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
+                ok_conn = [r for r in connectivity_results if r.worst_severity == "OK"]
+                safe_print(
+                    f"    Connectivity metrics: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
+                    flush=True,
+                )
+                for r in failed:
+                    safe_print(
+                        f"    [CONN-ERROR] sub-{r.sub_id}/ses-{r.ses_id} [{r.run_label}]: "
+                        f"{r.plain_message}",
+                        flush=True,
+                    )
+        else:
+            safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
+            safe_print("  Install with: pip install nilearn nibabel", flush=True)
+
+    # Layer 2: MRIQC group-level report + IQM parsing
+    iqm_results = []
+    mriqc_reports = {}
+    if run_mriqc and mriqc_dir is not None:
+        safe_print("Running MRIQC group-level report...", flush=True)
+        grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
+        if grp_ok:
+            safe_print(
+                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
+                flush=True,
+            )
+        else:
+            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
+
+        iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
+        mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+        if iqm_results:
+            flagged = [r for r in iqm_results if r.worst_severity != "OK"]
+            safe_print(
+                f"  IQM: {len(iqm_results)} scan(s) analysed, "
+                f"{len(flagged)} with flag(s)",
+                flush=True,
+            )
+            for r in flagged:
+                for flag in r.flags:
+                    safe_print(
+                        f"  [IQM-{flag.severity}] sub-{flag.sub_id} "
+                        f"{flag.modality}: {flag.metric_label} = {flag.value:.3f}",
+                        flush=True,
+                    )
+
+    # Attach QC + motion to the report
+    report.set_qc_results(qc_checker.get_all(), motion_results)
+
+    # Layer 5: Generate HTML QC report
+    html_path = generate_html_report(
+        str(output_folder),
+        qc_checker.get_all(),
+        motion_results,
+        report.successful,
+        report.failed,
+        iqm_results=iqm_results,
+        mriqc_reports=mriqc_reports,
+        censoring_results=censoring_results,
+        connectivity_results=connectivity_results,
+    )
+    safe_print(f"QC report: {html_path}", flush=True)
+
     # Save report
     report_text = report.generate_report()
     report_path = output_folder / "conversion_report.txt"
@@ -594,6 +1368,19 @@ Examples:
     except Exception as e:
         safe_print(f"Warning: Could not save report: {e}", flush=True)
     
+    # Structured summary — separate file alongside the raw log
+    _write_structured_summary(
+        summary_path=logs_folder / "execution_logs_summary.txt",
+        report=report,
+        subjects_tasks=subjects_tasks,
+        sessions_missing_bold=sessions_missing_bold,
+        motion_results=motion_results,
+        censoring_results=censoring_results,
+        connectivity_results=connectivity_results,
+        errors=errors,
+        pipeline_start_time=report.start_time,
+    )
+
     # Summary
     safe_print("\n" + "=" * 60, flush=True)
     safe_print(f"Output saved to: {output_folder}", flush=True)
@@ -602,10 +1389,12 @@ Examples:
         for err in errors:
             safe_print(f"  [X] {err}", flush=True)
         safe_print("=" * 60, flush=True)
+        close_log_file()
         sys.exit(1)
     else:
         safe_print("[OK] All tasks completed successfully.", flush=True)
         safe_print("=" * 60, flush=True)
+        close_log_file()
         sys.exit(0)
 
 

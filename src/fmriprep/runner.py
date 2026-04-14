@@ -17,6 +17,48 @@ from pathlib import Path
 # Default fMRIPrep Docker image
 FMRIPREP_IMAGE = "nipreps/fmriprep:latest"
 
+_PROJECT_PARENT = Path(__file__).parent.parent.parent.parent  # dir containing the project folder
+_FMRIPREP_TAR_CANDIDATES = [
+    "fmriprep_latest", "fmriprep_latest.tar", "fmriprep-latest", "fmriprep-latest.tar",
+    "fmriprep.tar", "fmriprep",
+]
+
+
+def _find_fmriprep_tar():
+    """Search the project's parent directory for a fMRIPrep Docker image archive."""
+    for name in _FMRIPREP_TAR_CANDIDATES:
+        p = _PROJECT_PARENT / name
+        if p.exists():
+            return p
+    return None
+
+
+def load_fmriprep_from_tar(callback=None):
+    """
+    Load the fMRIPrep Docker image from a local tar archive in the project parent directory.
+
+    Returns: (success: bool, error: str or None)
+    """
+    tar_path = _find_fmriprep_tar()
+    if tar_path is None:
+        return False, f"No fMRIPrep tar found in {_PROJECT_PARENT}"
+    if callback:
+        callback(f"Loading fMRIPrep image from {tar_path.name}...")
+    try:
+        result = subprocess.run(
+            ["docker", "load", "-i", str(tar_path)],
+            capture_output=True, text=True, timeout=600,
+        )
+        if result.returncode == 0:
+            if callback:
+                callback("fMRIPrep image loaded successfully!")
+            return True, None
+        return False, f"docker load failed: {result.stderr.strip()[-500:]}"
+    except subprocess.TimeoutExpired:
+        return False, "docker load timed out (>10 min)"
+    except Exception as e:
+        return False, f"Error loading fMRIPrep image: {e}"
+
 
 def safe_print_error(msg):
     """
@@ -64,17 +106,20 @@ def to_docker_path(path):
 def find_freesurfer_license():
     """
     Search for FreeSurfer license file in common locations.
-    
+
     Checks:
-    1. Project root directory
-    2. Current working directory
-    3. Home directory
-    
+    1. tools/ directory (preferred location)
+    2. Project root directory (legacy)
+    3. Current working directory
+    4. Home directory
+
     Returns:
         Path to license file, or None if not found
     """
     project_root = Path(__file__).parent.parent.parent.resolve()
     license_candidates = [
+        project_root / "tools" / ".freesurfer_license.txt",
+        project_root / "tools" / "freesurfer_license.txt",
         project_root / ".freesurfer_license.txt",
         project_root / "freesurfer_license.txt",
         Path.cwd() / ".freesurfer_license.txt",
@@ -287,12 +332,28 @@ def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True)
     # Check if fMRIPrep image is available
     if callback:
         callback("Checking fMRIPrep Docker image...")
-    
+
     if not is_fmriprep_image_available():
         if auto_pull_image:
-            success, error = pull_fmriprep_image(callback=callback)
+            tar_path = _find_fmriprep_tar()
+            if tar_path is not None:
+                if callback:
+                    callback(f"fMRIPrep image not found \u2014 loading from {tar_path.name}...")
+                success, error = load_fmriprep_from_tar(callback=callback)
+            else:
+                success, error = False, "No local tar found"
             if not success:
-                return False, error
+                if callback:
+                    callback(f"Tar load unavailable ({error}) \u2014 trying docker pull...")
+                success, error = pull_fmriprep_image(callback=callback)
+            if not success:
+                return False, (
+                    f"fMRIPrep image not found and could not be loaded.\n\n"
+                    f"Options:\n"
+                    f"  1. Place a fMRIPrep tar in {_PROJECT_PARENT}\n"
+                    f"  2. Run: docker pull {FMRIPREP_IMAGE}\n\n"
+                    f"Error: {error}"
+                )
         else:
             return False, (
                 f"fMRIPrep Docker image not found.\n\n"
@@ -311,13 +372,13 @@ def preflight_check(callback=None, auto_start_docker=True, auto_pull_image=True)
             "To get a free license:\n"
             "1. Register at https://surfer.nmr.mgh.harvard.edu/registration.html\n"
             "2. You'll receive an email with the license\n"
-            "3. Save it as '.freesurfer_license.txt' in the project folder"
+            "3. Save it as '.freesurfer_license.txt' in the tools/ folder"
         )
     
     if callback:
         callback("All pre-flight checks passed!")
-    
-        return True, None
+
+    return True, None
 
 
 def run_fmriprep(
@@ -329,7 +390,6 @@ def run_fmriprep(
     fs_reconall=False,
     skip_slice_timing=False,
     use_syn_sdc=False,
-    use_aroma=False,
     mem_mb=16000,
     nthreads=4
 ):
@@ -341,11 +401,10 @@ def run_fmriprep(
         output_dir: Path to output directory
         participant_label: Participant label (without 'sub-' prefix)
         license_path: Path to FreeSurfer license file (auto-detected if None)
-        output_spaces: List of output spaces (default: ['MNI152NLin2009cAsym'])
+        output_spaces: List of output spaces (default: ['MNI152NLin2009cAsym:res-2'])
         fs_reconall: Whether to run FreeSurfer reconall (adds ~6 hours)
         skip_slice_timing: Whether to skip slice timing correction
         use_syn_sdc: Whether to use SyN-based distortion correction
-        use_aroma: Whether to use ICA-AROMA denoising
         mem_mb: Memory limit in MB (default: 16000)
         nthreads: Number of CPU threads (default: 4)
         
@@ -367,14 +426,14 @@ def run_fmriprep(
     else:
         license_path = find_freesurfer_license()
         if not license_path:
-            return False, "FreeSurfer license file not found. Create .freesurfer_license.txt in the project root."
+            return False, "FreeSurfer license file not found. Place .freesurfer_license.txt in the tools/ folder."
     
     # Create output directory
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Set default output spaces
     if output_spaces is None:
-        output_spaces = ['MNI152NLin2009cAsym']
+        output_spaces = ['MNI152NLin2009cAsym:res-2']
     
     # Build Docker command
     bids_mount = to_docker_path(bids_dir)
@@ -418,6 +477,7 @@ def run_fmriprep(
         "/data", "/out",
         "participant",
         "--participant-label", participant_label,
+        "--notrack",
         "--skip-bids-validation",
     ])
     
@@ -435,10 +495,6 @@ def run_fmriprep(
     # Add SDC option
     if use_syn_sdc:
         docker_cmd.append("--use-syn-sdc")
-    
-    # Add AROMA option
-    if use_aroma:
-        docker_cmd.append("--use-aroma")
     
     # Add resource limits
     docker_cmd.extend(["--mem_mb", str(mem_mb)])
@@ -625,8 +681,8 @@ def main():
     fs_reconall = opts.get("fs_reconall", False)
     skip_slice_timing = opts.get("skip_slice_timing", False)
     use_syn_sdc = opts.get("use_syn_sdc", False)
-    use_aroma = opts.get("use_aroma", False)
-    
+    mem_mb = opts.get("mem_mb", 16000)
+
     success, error = run_fmriprep(
         args.bids_dir,
         args.output_dir,
@@ -636,7 +692,7 @@ def main():
         fs_reconall=fs_reconall,
         skip_slice_timing=skip_slice_timing,
         use_syn_sdc=use_syn_sdc,
-        use_aroma=use_aroma
+        mem_mb=mem_mb
     )
     
     if not success:

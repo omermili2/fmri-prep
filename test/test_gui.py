@@ -17,37 +17,12 @@ class TestFmriprepOptionsValidation:
             't1w_output': False,
             'fs_reconall': False,
             'stc': True,
-            'fieldmapless_sdc': False,
-            'aroma': False
+            'fieldmapless_sdc': False
         }
-        
+
         # Validation: at least one of mni_output or t1w_output must be True
         assert not (options['mni_output'] or options['t1w_output'])
-    
-    def test_aroma_requires_mni(self):
-        """Test that ICA-AROMA requires MNI output space."""
-        options = {
-            'mni_output': False,
-            't1w_output': True,
-            'aroma': True
-        }
-        
-        # AROMA should not be valid without MNI
-        is_valid = not (options['aroma'] and not options['mni_output'])
-        assert not is_valid
-    
-    def test_aroma_valid_with_mni(self):
-        """Test that ICA-AROMA is valid with MNI output space."""
-        options = {
-            'mni_output': True,
-            't1w_output': False,
-            'aroma': True
-        }
-        
-        # AROMA should be valid with MNI
-        is_valid = not (options['aroma'] and not options['mni_output'])
-        assert is_valid
-    
+
     def test_default_options_are_valid(self):
         """Test that default options are valid."""
         options = {
@@ -55,16 +30,11 @@ class TestFmriprepOptionsValidation:
             't1w_output': False,
             'fs_reconall': False,
             'stc': True,
-            'fieldmapless_sdc': False,
-            'aroma': False
+            'fieldmapless_sdc': False
         }
-        
+
         # Default should have at least one output space
         assert options['mni_output'] or options['t1w_output']
-        
-        # Default should not have AROMA enabled without MNI
-        if options['aroma']:
-            assert options['mni_output']
 
 
 class TestGetFmriprepOptions:
