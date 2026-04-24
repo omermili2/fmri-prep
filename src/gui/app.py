@@ -148,30 +148,6 @@ class App(ctk.CTk):
         self.label_output_info.grid(row=2, column=1, padx=10, pady=0, sticky="w")
         self.label_output_info.grid_remove()  # Hide initially since it's empty
 
-        # --- BIDS Options Frame ---
-        self.frame_bids_options = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
-        self.frame_bids_options.grid(row=2, column=0, padx=20, pady=(5, 0), sticky="ew")
-        
-        self.check_mriqc_with_bids = ctk.CTkCheckBox(
-            self.frame_bids_options,
-            text="Include MRIQC image quality assessment",
-            font=ctk.CTkFont(size=12),
-            onvalue=True,
-            offvalue=False
-        )
-        self.check_mriqc_with_bids.grid(row=0, column=0, padx=10, pady=5, sticky="w")
-        self.check_mriqc_with_bids.deselect()  # Default: OFF
-
-        self.check_anonymize = ctk.CTkCheckBox(
-            self.frame_bids_options,
-            text="Enable anonymization (remove patient info from metadata)",
-            font=ctk.CTkFont(size=12),
-            onvalue=True,
-            offvalue=False
-        )
-        self.check_anonymize.grid(row=1, column=0, padx=10, pady=5, sticky="w")
-        self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
-
         # --- fMRIPrep Options Frame (Collapsible) ---
         self.frame_fmriprep_container = ctk.CTkFrame(self.main_scroll)
         self.frame_fmriprep_container.grid(row=3, column=0, padx=20, pady=(10, 0), sticky="ew")
@@ -264,7 +240,15 @@ class App(ctk.CTk):
         )
         self.check_syn_sdc.grid(row=6, column=0, padx=30, pady=3, sticky="w")
         self.check_syn_sdc.deselect()  # Default: OFF
-        
+
+        self.check_anonymize = ctk.CTkCheckBox(
+            self.frame_fmriprep_options,
+            text="Anonymize DICOM metadata (remove patient info)",
+            font=ctk.CTkFont(size=11)
+        )
+        self.check_anonymize.grid(row=7, column=0, padx=30, pady=3, sticky="w")
+        self.check_anonymize.deselect()  # Default: OFF (preserve full metadata)
+
         # Validation warning label
         self.label_fmriprep_warning = ctk.CTkLabel(
             self.frame_fmriprep_options,
@@ -272,12 +256,12 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=11),
             text_color="#FFC107"
         )
-        self.label_fmriprep_warning.grid(row=7, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
+        self.label_fmriprep_warning.grid(row=8, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
 
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
         self.frame_actions.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
-        self.frame_actions.grid_columnconfigure((0, 1, 2, 3), weight=1)
+        self.frame_actions.grid_columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="btn")
 
         # Dataset summary label (above buttons, hidden until a folder is selected)
         self.label_dataset_summary = ctk.CTkLabel(
@@ -286,12 +270,12 @@ class App(ctk.CTk):
             font=ctk.CTkFont(size=13, weight="bold"),
             text_color="#888888"
         )
-        self.label_dataset_summary.grid(row=0, column=0, columnspan=4, pady=(0, 4))
+        self.label_dataset_summary.grid(row=0, column=0, columnspan=5, pady=(0, 4))
         self.label_dataset_summary.grid_remove()
 
         self.btn_bids_only = ctk.CTkButton(
             self.frame_actions,
-            text="Run BIDS Conversion",
+            text="BIDS Only",
             height=50,
             fg_color="#2E7D32",  # Green
             hover_color="#1B5E20",
@@ -300,76 +284,97 @@ class App(ctk.CTk):
         )
         self.btn_bids_only.grid(row=1, column=0, padx=10, pady=(10, 2), sticky="ew")
 
+        self.btn_mriqc_only = ctk.CTkButton(
+            self.frame_actions,
+            text="BIDS + MRIQC",
+            height=50,
+            fg_color="#F57F17",  # Amber/dark yellow
+            hover_color="#E65100",
+            font=ctk.CTkFont(size=15, weight="bold"),
+            command=self.run_mriqc_only
+        )
+        self.btn_mriqc_only.grid(row=1, column=1, padx=10, pady=(10, 2), sticky="ew")
+
         self.btn_fmriprep_only = ctk.CTkButton(
             self.frame_actions,
-            text="Run fMRIPrep Only",
+            text="fMRIPrep Only",
             height=50,
             fg_color="#7B1FA2",  # Purple
             hover_color="#4A148C",
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_fmriprep_only
         )
-        self.btn_fmriprep_only.grid(row=1, column=1, padx=10, pady=(10, 2), sticky="ew")
+        self.btn_fmriprep_only.grid(row=1, column=2, padx=10, pady=(10, 2), sticky="ew")
 
         self.btn_connectivity_qc = ctk.CTkButton(
             self.frame_actions,
-            text="Run Connectivity QC",
+            text="Connectivity QC Only",
             height=50,
             fg_color="#00796B",  # Teal
             hover_color="#004D40",
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_connectivity_qc_only
         )
-        self.btn_connectivity_qc.grid(row=1, column=2, padx=10, pady=(10, 2), sticky="ew")
+        self.btn_connectivity_qc.grid(row=1, column=3, padx=10, pady=(10, 2), sticky="ew")
 
         self.btn_full_pipeline = ctk.CTkButton(
             self.frame_actions,
-            text="Run Full Pipeline",
+            text="Full Pipeline",
             height=50,
             fg_color="#1565C0",  # Blue
             hover_color="#0D47A1",
             font=ctk.CTkFont(size=15, weight="bold"),
             command=self.run_full_pipeline
         )
-        self.btn_full_pipeline.grid(row=1, column=3, padx=10, pady=(10, 2), sticky="ew")
+        self.btn_full_pipeline.grid(row=1, column=4, padx=10, pady=(10, 2), sticky="ew")
 
         # Time estimate / requirement labels (below each button)
         est_font = ctk.CTkFont(size=11)
         est_color = "#888888"
-        est_wrap = 160  # wrap text to fit within the button column width
+        est_wrap = 140  # wrap text to fit within the button column width
+        est_grid = dict(row=2, pady=(0, 6), sticky="ew")
+
         self.label_est_bids = ctk.CTkLabel(
             self.frame_actions, text="", font=est_font,
             text_color=est_color, wraplength=est_wrap)
-        self.label_est_bids.grid(row=2, column=0, pady=(0, 6))
+        self.label_est_bids.grid(column=0, **est_grid)
         self.label_est_bids.grid_remove()
+
+        self.label_est_mriqc = ctk.CTkLabel(
+            self.frame_actions, text="", font=est_font,
+            text_color=est_color, wraplength=est_wrap)
+        self.label_est_mriqc.grid(column=1, **est_grid)
+        self.label_est_mriqc.grid_remove()
 
         self.label_est_fmriprep = ctk.CTkLabel(
             self.frame_actions, text="", font=est_font,
             text_color=est_color, wraplength=est_wrap)
-        self.label_est_fmriprep.grid(row=2, column=1, pady=(0, 6))
+        self.label_est_fmriprep.grid(column=2, **est_grid)
         self.label_est_fmriprep.grid_remove()
 
         self.label_est_conn = ctk.CTkLabel(
             self.frame_actions, text="", font=est_font,
             text_color=est_color, wraplength=est_wrap)
-        self.label_est_conn.grid(row=2, column=2, pady=(0, 6))
+        self.label_est_conn.grid(column=3, **est_grid)
         self.label_est_conn.grid_remove()
 
         self.label_est_full = ctk.CTkLabel(
             self.frame_actions, text="", font=est_font,
             text_color=est_color, wraplength=est_wrap)
-        self.label_est_full.grid(row=2, column=3, pady=(0, 6))
+        self.label_est_full.grid(column=4, **est_grid)
         self.label_est_full.grid_remove()
-        
+
         # Internal state for pipeline steps (not shown in UI)
         self._run_bids = True
         self._run_fmriprep = False
+        self._run_mriqc = True
         self._fmriprep_only_mode = False
         self._connectivity_only_mode = False
 
         # Store original button colors for enable/disable toggling
         self._btn_colors = {
             "bids":      ("#2E7D32", "#1B5E20"),
+            "mriqc":     ("#F57F17", "#E65100"),
             "fmriprep":  ("#7B1FA2", "#4A148C"),
             "conn":      ("#00796B", "#004D40"),
             "full":      ("#1565C0", "#0D47A1"),
@@ -511,6 +516,13 @@ class App(ctk.CTk):
             reason="Select a Source DICOM Folder"
         )
 
+        # BIDS + MRIQC: same as BIDS Conversion
+        self._set_button_enabled(
+            self.btn_mriqc_only, self.label_est_mriqc, "mriqc",
+            enabled=has_subjects,
+            reason="Select a Source DICOM Folder"
+        )
+
         # Full Pipeline: same as BIDS Conversion
         self._set_button_enabled(
             self.btn_full_pipeline, self.label_est_full, "full",
@@ -566,9 +578,6 @@ class App(ctk.CTk):
 
         if not input_dir or not Path(input_dir).is_dir():
             self.label_dataset_summary.grid_remove()
-            self.check_mriqc_with_bids.configure(
-                text="Include MRIQC image quality assessment"
-            )
             return
 
         # Count subjects and sessions
@@ -586,9 +595,6 @@ class App(ctk.CTk):
 
         if n_subjects == 0:
             self.label_dataset_summary.grid_remove()
-            self.check_mriqc_with_bids.configure(
-                text="Include MRIQC image quality assessment"
-            )
             return
 
         # Show dataset summary above buttons
@@ -599,14 +605,16 @@ class App(ctk.CTk):
 
         # Compute estimates
         bids_min = n_sessions * self._BIDS_MIN_PER_SESSION
+        mriqc_min = n_subjects * self._MRIQC_MIN_PER_SUBJECT
         fmriprep_min = n_subjects * self._FMRIPREP_MIN_PER_SUBJECT
         conn_min = n_subjects * self._CONNECTIVITY_MIN_PER_SUBJECT
-        full_min = bids_min + fmriprep_min + conn_min
+        full_min = bids_min + mriqc_min + fmriprep_min + conn_min
 
         # Update time labels below enabled buttons only
         # (disabled buttons keep their requirement text from _update_button_states)
         btn_label_pairs = [
             (self.btn_bids_only, self.label_est_bids, bids_min),
+            (self.btn_mriqc_only, self.label_est_mriqc, bids_min + mriqc_min),
             (self.btn_fmriprep_only, self.label_est_fmriprep, fmriprep_min),
             (self.btn_connectivity_qc, self.label_est_conn, conn_min),
             (self.btn_full_pipeline, self.label_est_full, full_min),
@@ -618,12 +626,6 @@ class App(ctk.CTk):
                     text_color="#888888"
                 )
                 lbl.grid()
-
-        # Update MRIQC checkbox with total estimate
-        mriqc_min = n_subjects * self._MRIQC_MIN_PER_SUBJECT
-        self.check_mriqc_with_bids.configure(
-            text=f"Include MRIQC image quality assessment (approx. {self._fmt_time(mriqc_min)})"
-        )
 
     def _toggle_fmriprep_options(self):
         """Toggle the visibility of fMRIPrep options panel."""
@@ -718,23 +720,29 @@ class App(ctk.CTk):
         return True
 
     def run_bids_only(self):
-        """Run BIDS conversion only, with optional MRIQC."""
+        """Run BIDS conversion only (no MRIQC, no fMRIPrep)."""
         self._run_bids = True
         self._run_fmriprep = False
+        self._run_mriqc = False
         self._fmriprep_only_mode = False
-        if self.check_mriqc_with_bids.get():
-            import importlib
-            import sys
-            src_dir = str(Path(__file__).parent.parent)
-            if src_dir not in sys.path:
-                sys.path.insert(0, src_dir)
-            mriqc_module = importlib.import_module("fmriprep.mriqc_runner")
-            self._run_with_docker_preflight(
-                "BIDS Conversion + MRIQC",
-                preflight_fn=mriqc_module.mriqc_preflight,
-            )
-        else:
-            self._start_pipeline_internal("BIDS Conversion")
+        self._start_pipeline_internal("BIDS Conversion")
+
+    def run_mriqc_only(self):
+        """Run BIDS conversion + MRIQC (no fMRIPrep)."""
+        self._run_bids = True
+        self._run_fmriprep = False
+        self._run_mriqc = True
+        self._fmriprep_only_mode = False
+        import importlib
+        import sys
+        src_dir = str(Path(__file__).parent.parent)
+        if src_dir not in sys.path:
+            sys.path.insert(0, src_dir)
+        mriqc_module = importlib.import_module("fmriprep.mriqc_runner")
+        self._run_with_docker_preflight(
+            "BIDS Conversion + MRIQC",
+            preflight_fn=mriqc_module.mriqc_preflight,
+        )
 
     def run_full_pipeline(self):
         """Run both BIDS conversion and fMRIPrep."""
@@ -749,8 +757,9 @@ class App(ctk.CTk):
         # Run Docker preflight check before starting
         self._run_bids = True
         self._run_fmriprep = True
+        self._run_mriqc = True
         self._fmriprep_only_mode = False
-        self._run_with_docker_preflight("BIDS Conversion + fMRIPrep")
+        self._run_with_docker_preflight("Full Pipeline (BIDS + MRIQC + fMRIPrep)")
 
     def run_connectivity_qc_only(self):
         """Run connectivity QC (Nilearn) on an existing fMRIPrep output folder."""
@@ -834,6 +843,7 @@ class App(ctk.CTk):
 
         self._run_bids = False
         self._run_fmriprep = True
+        self._run_mriqc = False
         self._fmriprep_only_mode = True
         self._bids_folder_for_fmriprep = bids_folder
         self._run_with_docker_preflight("fMRIPrep Only")
@@ -948,6 +958,7 @@ class App(ctk.CTk):
     def _set_buttons_state(self, state):
         """Enable/disable all action buttons."""
         self.btn_bids_only.configure(state=state)
+        self.btn_mriqc_only.configure(state=state)
         self.btn_fmriprep_only.configure(state=state)
         self.btn_connectivity_qc.configure(state=state)
         self.btn_full_pipeline.configure(state=state)
@@ -985,9 +996,9 @@ class App(ctk.CTk):
         if self.check_anonymize.get():
             cmd.append("--anonymize")
 
-        # Add --run-mriqc if the MRIQC checkbox is ticked
-        if self.check_mriqc_with_bids.get():
-            cmd.append("--run-mriqc")
+        # Add --skip-mriqc when MRIQC is not requested (MRIQC runs by default)
+        if not getattr(self, '_run_mriqc', True):
+            cmd.append("--skip-mriqc")
 
         # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
         if self._run_fmriprep:

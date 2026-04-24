@@ -418,15 +418,16 @@ class ConversionReport:
             lines.append("")
             step += 1
             
-            lines.append(f"  {step}. QUALITY CHECK")
-            lines.append("     Run MRIQC on your data to check image quality before preprocessing.")
-            lines.append("     Website: https://mriqc.readthedocs.io/")
+            lines.append(f"  {step}. RUN IMAGE QUALITY CHECK (MRIQC)")
+            lines.append("     Use the 'BIDS + MRIQC' button to run MRIQC on your data.")
+            lines.append("     MRIQC checks image quality (SNR, motion, ghosting) before")
+            lines.append("     preprocessing. Review the MRIQC report in derivatives/mriqc/.")
             lines.append("")
             step += 1
-            
+
             lines.append(f"  {step}. PREPROCESS YOUR DATA")
-            lines.append("     Use the 'Run Full Pipeline' button in the fMRI Preprocessing")
-            lines.append("     Assistant to run fMRIPrep on your converted data.")
+            lines.append("     Use the 'Full Pipeline' button in the fMRI Preprocessing")
+            lines.append("     Assistant to run BIDS conversion, MRIQC, and fMRIPrep.")
             lines.append("")
         
         # ===== TECHNICAL DETAILS =====

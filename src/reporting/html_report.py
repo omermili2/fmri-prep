@@ -62,6 +62,74 @@ def generate(
     return str(out_path)
 
 
+def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports) -> str:
+    """
+    Write a standalone MRIQC-only HTML report to mriqc_dir/mriqc_report.html.
+
+    Designed for early feedback — the supervisor can open this as soon as
+    MRIQC finishes, without waiting for the full pipeline to complete.
+    """
+    iqm_results = iqm_results or []
+    mriqc_reports = mriqc_reports or {}
+
+    iqm_errors = [r for r in iqm_results if r.worst_severity == "ERROR"]
+    iqm_warns  = [r for r in iqm_results if r.worst_severity == "WARNING"]
+
+    n_critical = len(iqm_errors)
+    n_warnings = len(iqm_warns)
+
+    if n_critical > 0:
+        banner_color, banner_bg = "#c0392b", "#fdf0ef"
+        banner_icon = "&#x26A0;"
+        banner_title = f"{n_critical} critical issue(s) detected"
+        banner_sub = "One or more scans have metrics outside acceptable ranges. Review details below."
+    elif n_warnings > 0:
+        banner_color, banner_bg = "#d68910", "#fef9e7"
+        banner_icon = "&#x26A0;"
+        banner_title = f"{n_warnings} warning(s) detected"
+        banner_sub = "Some metrics are borderline. Review the MRIQC visual reports."
+    else:
+        banner_color, banner_bg = "#1e8449", "#eafaf1"
+        banner_icon = "&#x2714;"
+        banner_title = "ALL SCANS PASSED"
+        banner_sub = "No image quality issues detected across all scans."
+
+    now = datetime.now().strftime("%B %d, %Y at %I:%M %p")
+
+    parts = [
+        _html_head(banner_color),
+        "<body>",
+        _section_header_mriqc(now, mriqc_dir),
+        _banner(banner_color, banner_bg, banner_icon, banner_title, banner_sub),
+        _section_mriqc(iqm_results, mriqc_reports),
+        _html_footer(),
+        "</body></html>",
+    ]
+
+    html = "\n".join(parts)
+    out_path = Path(mriqc_dir) / "mriqc_report.html"
+    try:
+        with open(out_path, "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception:
+        pass
+    return str(out_path)
+
+
+def _section_header_mriqc(now: str, mriqc_dir: str) -> str:
+    return f"""<div class="container">
+<div style="margin-bottom:24px;">
+  <div style="font-size:1.5rem;font-weight:800;color:#2c3e50;">
+    MRIQC &#x2014; Early Image Quality Report
+  </div>
+  <div class="meta">Generated: {now} &nbsp;|&nbsp; MRIQC output: {mriqc_dir}</div>
+  <div class="meta" style="margin-top:4px;">
+    This report was generated immediately after MRIQC completed, before fMRIPrep.
+    A comprehensive QC report will be available after the full pipeline finishes.
+  </div>
+</div>"""
+
+
 # ---------------------------------------------------------------------------
 # HTML construction
 # ---------------------------------------------------------------------------

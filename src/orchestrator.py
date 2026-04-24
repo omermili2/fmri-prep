@@ -38,7 +38,7 @@ try:
     from .bids.converter import run_bids_conversion, create_dataset_description
     from .bids.analyzer import count_output_files
     from .reporting.report import ConversionReport
-    from .reporting.html_report import generate as generate_html_report
+    from .reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from .qc.checker import BIDSQualityChecker
     from .qc import motion_parser, iqm_parser
     from .fmriprep import mriqc_runner
@@ -50,7 +50,7 @@ except ImportError:
     from bids.converter import run_bids_conversion, create_dataset_description
     from bids.analyzer import count_output_files
     from reporting.report import ConversionReport
-    from reporting.html_report import generate as generate_html_report
+    from reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from qc.checker import BIDSQualityChecker
     from qc import motion_parser, iqm_parser
     from fmriprep import mriqc_runner
@@ -80,6 +80,7 @@ def _write_structured_summary(
     connectivity_results,
     errors,
     pipeline_start_time,
+    iqm_results=None,
 ):
     """
     Write a human-readable, structured summary to its own file.
@@ -93,7 +94,7 @@ def _write_structured_summary(
         lines = _build_structured_summary(
             report, subjects_tasks, sessions_missing_bold,
             motion_results, censoring_results, connectivity_results,
-            errors, pipeline_start_time,
+            errors, pipeline_start_time, iqm_results,
         )
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
@@ -108,7 +109,7 @@ def _write_structured_summary(
 def _build_structured_summary(
     report, subjects_tasks, sessions_missing_bold,
     motion_results, censoring_results, connectivity_results,
-    errors, pipeline_start_time,
+    errors, pipeline_start_time, iqm_results=None,
 ):
     """Build the structured summary as a list of lines. May raise; caller catches."""
 
@@ -138,6 +139,9 @@ def _build_structured_summary(
     conn_map = {}
     for c in (connectivity_results or []):
         conn_map.setdefault((c.sub_id, c.ses_id), []).append(c)
+    iqm_map = {}
+    for r in (iqm_results or []):
+        iqm_map.setdefault((r.sub_id, r.ses_id), []).append(r)
 
     # ---- header ----
     out("=" * W)
@@ -194,6 +198,23 @@ def _build_structured_summary(
                 out("      BOLD data       : Not found -- session has no functional scans")
             else:
                 out("      BOLD data       : Present")
+
+            # -- MRIQC --
+            sub_iqm = iqm_map.get(key, [])
+            if sub_iqm:
+                for r in sub_iqm:
+                    sev = r.worst_severity
+                    if sev == "OK":
+                        out(f"      MRIQC [{r.modality:5s}]    : OK")
+                    else:
+                        flag_strs = [
+                            f"{fl.metric_label}={fl.value:.3f}"
+                            for fl in r.flags
+                        ]
+                        out(
+                            f"      MRIQC [{r.modality:5s}]    : {sev}  "
+                            f"({', '.join(flag_strs)})"
+                        )
 
             # -- fMRIPrep --
             fmriprep_fails = [
@@ -293,6 +314,9 @@ def _build_structured_summary(
     out("    BOLD data        - Whether functional brain-activity scans were")
     out("                       found. Sessions without BOLD cannot be")
     out("                       preprocessed by fMRIPrep.")
+    out("    MRIQC            - Image quality metrics computed on raw data")
+    out("                       before preprocessing. Flags scans with poor")
+    out("                       SNR, motion, ghosting, or other artefacts.")
     out("    fMRIPrep         - Preprocessing: motion correction, spatial")
     out("                       normalisation, confound estimation.")
     out("    Motion           - Head-motion quality check. 'OK' is good;")
@@ -596,9 +620,9 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     Run QC analysis only on an existing pipeline output folder.
 
     Expects the folder to contain:
-      - sub-*/ses-*/ BIDS structure  (for Layer 1 checks)
-      - derivatives/                 (for Layer 3 motion analysis)
-      - derivatives/mriqc/            (for Layer 2 IQM parsing, if --run-mriqc)
+      - sub-*/ses-*/ BIDS structure   (for BIDS quality checks)
+      - derivatives/                  (for motion analysis)
+      - derivatives/mriqc/            (for MRIQC IQM parsing, if available)
 
     Generates qc_report.html and prints a summary.
     """
@@ -713,11 +737,11 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     except Exception as e:
         safe_print(f"\nConnectivity QC skipped (error: {e})", flush=True)
 
-    # Layer 2: MRIQC IQM parsing (if mriqc/ folder exists or --run-mriqc requested)
+    # MRIQC IQM parsing (if mriqc/ folder exists)
     iqm_results = []
     mriqc_reports = {}
     mriqc_dir = output_folder / "derivatives" / "mriqc"
-    if run_mriqc and mriqc_dir.exists():
+    if mriqc_dir.exists():
         safe_print("\nParsing MRIQC IQM files...", flush=True)
         iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
         mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
@@ -736,10 +760,8 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                     )
         else:
             safe_print("  No IQM JSON files found in mriqc/.", flush=True)
-    elif run_mriqc:
-        safe_print(f"\nNo mriqc/ folder found at {mriqc_dir} — skipping IQM parsing.", flush=True)
 
-    # Layer 5: HTML report
+    # HTML QC report
     html_path = generate_html_report(
         str(output_folder),
         qc_checker.get_all(),
@@ -817,8 +839,8 @@ Examples:
                         help="Keep temporary files for debugging (don't cleanup)")
     parser.add_argument("--fmriprep-opts", type=str, default="",
                         help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
-    parser.add_argument("--run-mriqc", action="store_true",
-                        help="Run MRIQC image quality assessment after BIDS conversion (requires docker pull nipreps/mriqc:latest)")
+    parser.add_argument("--skip-mriqc", action="store_true",
+                        help="Skip MRIQC image quality assessment (runs by default)")
     parser.add_argument("--connectivity-qc", action="store_true",
                         help="Run connectivity quality assessment (requires nilearn, analyzes motion-connectivity coupling)")
     parser.add_argument("--qc-only", action="store_true",
@@ -831,7 +853,7 @@ Examples:
         if not args.bids_folder:
             safe_print("Error: --qc-only requires --bids-folder <path/to/output_folder>", flush=True)
             sys.exit(1)
-        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=getattr(args, 'run_mriqc', False))
+        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=not getattr(args, 'skip_mriqc', False))
         return  # run_qc_only calls sys.exit(), but return as safety
 
     # Validate arguments
@@ -1061,7 +1083,7 @@ Examples:
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
     qc_checker = BIDSQualityChecker()
-    run_mriqc = getattr(args, 'run_mriqc', False)
+    run_mriqc = not getattr(args, 'skip_mriqc', False)
     mriqc_dir = output_folder / "derivatives" / "mriqc" if run_mriqc else None
 
     if run_mriqc:
@@ -1081,7 +1103,7 @@ Examples:
     # Phase 1: BIDS conversion + QC  (parallel per session)
     # ------------------------------------------------------------------
     if not args.skip_bids:
-        safe_print("\n=== Phase 1: BIDS conversion ===", flush=True)
+        safe_print("\n=== Phase 1: BIDS Conversion ===", flush=True)
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {
                 executor.submit(
@@ -1110,19 +1132,60 @@ Examples:
                     )
 
     # ------------------------------------------------------------------
-    # Layer 2: MRIQC  (once per subject, sequential to avoid race conditions)
+    # Phase 2: MRIQC  (once per subject, parallel across subjects)
     # ------------------------------------------------------------------
     if run_mriqc and mriqc_dir is not None:
         mriqc_subjects = list(subjects_tasks.keys())
-        safe_print(f"\n=== MRIQC ({len(mriqc_subjects)} subject(s)) ===", flush=True)
-        for sub_id in mriqc_subjects:
-            safe_print(f"[MRIQC] sub-{sub_id} - starting...", flush=True)
-            ok, err = mriqc_runner.run_mriqc_participant(bids_dir, mriqc_dir, sub_id)
-            if ok:
-                safe_print(f"[MRIQC] sub-{sub_id} - done", flush=True)
-            else:
-                safe_print(f"[MRIQC] sub-{sub_id} - warning: {err[:120]}", flush=True)
-                report.add_warning(f"MRIQC failed for sub-{sub_id}: {err[:120]}")
+        safe_print(f"\n=== Phase 2: MRIQC ({len(mriqc_subjects)} subject(s)) ===", flush=True)
+
+        mriqc_workers = min(args.parallel, len(mriqc_subjects))
+        with ThreadPoolExecutor(max_workers=mriqc_workers) as executor:
+            futures = {
+                executor.submit(
+                    mriqc_runner.run_mriqc_participant, bids_dir, mriqc_dir, sub_id
+                ): sub_id for sub_id in mriqc_subjects
+            }
+            for future in as_completed(futures):
+                sub_id = futures[future]
+                try:
+                    ok, err = future.result()
+                    if ok:
+                        safe_print(f"[MRIQC] sub-{sub_id} - done", flush=True)
+                    else:
+                        safe_print(f"[MRIQC] sub-{sub_id} - warning: {err[:120]}", flush=True)
+                        report.add_warning(f"MRIQC failed for sub-{sub_id}: {err[:120]}")
+                except Exception as e:
+                    safe_print(f"[MRIQC] sub-{sub_id} - error: {e}", flush=True)
+                    report.add_warning(f"MRIQC error for sub-{sub_id}: {e}")
+
+    # ------------------------------------------------------------------
+    # Early MRIQC report — available before fMRIPrep starts
+    # ------------------------------------------------------------------
+    if run_mriqc and mriqc_dir is not None:
+        safe_print("Running MRIQC group-level report...", flush=True)
+        grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
+        if grp_ok:
+            safe_print(
+                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
+                flush=True,
+            )
+        else:
+            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
+
+        early_iqm = iqm_parser.parse_all_subjects(mriqc_dir)
+        early_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+        if early_iqm:
+            flagged = [r for r in early_iqm if r.worst_severity != "OK"]
+            safe_print(
+                f"  IQM: {len(early_iqm)} scan(s) analysed, {len(flagged)} with flag(s)",
+                flush=True,
+            )
+
+        mriqc_report_path = generate_mriqc_report(
+            str(mriqc_dir), early_iqm, early_reports
+        )
+        safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
+        safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
 
     # ------------------------------------------------------------------
     # Create .bidsignore before fMRIPrep (defense-in-depth for BIDS validator)
@@ -1135,7 +1198,7 @@ Examples:
             safe_print(f"Warning: Could not create .bidsignore: {e}", flush=True)
 
     # ------------------------------------------------------------------
-    # Phase 2: fMRIPrep  (once per subject, parallel across subjects)
+    # Phase 3: fMRIPrep  (once per subject, parallel across subjects)
     # ------------------------------------------------------------------
     if not args.skip_fmriprep:
         # When skip_bids is set, determine BOLD availability from existing BIDS data
@@ -1174,7 +1237,7 @@ Examples:
                 fmriprep_subjects.append((sub_id, bold_session_ids))
 
         if fmriprep_subjects:
-            safe_print(f"\n=== Phase 2: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
+            safe_print(f"\n=== Phase 3: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
             safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
 
             fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
@@ -1308,7 +1371,7 @@ Examples:
             safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
             safe_print("  Install with: pip install nilearn nibabel", flush=True)
 
-    # Layer 2: MRIQC group-level report + IQM parsing
+    # MRIQC group-level report + IQM parsing (for final comprehensive report)
     iqm_results = []
     mriqc_reports = {}
     if run_mriqc and mriqc_dir is not None:
@@ -1377,6 +1440,7 @@ Examples:
         connectivity_results=connectivity_results,
         errors=errors,
         pipeline_start_time=report.start_time,
+        iqm_results=iqm_results,
     )
 
     # Summary
