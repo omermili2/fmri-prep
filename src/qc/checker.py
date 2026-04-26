@@ -105,6 +105,115 @@ class BIDSQualityChecker:
     def has_critical_issues(self) -> bool:
         return bool(self.get_errors())
 
+    def check_run_consistency(
+        self, bids_dir, subjects_tasks: Dict
+    ) -> List[QCFinding]:
+        """
+        Compare scan profiles across sessions within the same subject.
+
+        For each subject with 2+ sessions, the first session (sorted) is
+        treated as the baseline.  Any subsequent session whose scan counts
+        differ produces a WARNING-level finding.
+
+        Returns the list of new findings (also stored internally).
+        """
+        bids_path = Path(bids_dir)
+        new_findings: List[QCFinding] = []
+
+        for sub_id, sub_tasks in subjects_tasks.items():
+            # Collect unique session IDs for this subject
+            ses_ids = sorted({t["ses_id"] for t in sub_tasks})
+            if len(ses_ids) < 2:
+                continue
+
+            # Build a scan profile for each session
+            profiles: Dict[str, Dict[str, int]] = {}
+            for ses_id in ses_ids:
+                session_path = bids_path / f"sub-{sub_id}" / f"ses-{ses_id}"
+                if not session_path.exists():
+                    continue
+                profiles[ses_id] = self._build_scan_profile(session_path)
+
+            if len(profiles) < 2:
+                continue
+
+            baseline_ses = ses_ids[0]
+            baseline = profiles.get(baseline_ses)
+            if baseline is None:
+                continue
+
+            for ses_id in ses_ids[1:]:
+                profile = profiles.get(ses_id)
+                if profile is None:
+                    continue
+
+                # Compare all keys present in either profile
+                all_keys = sorted(set(baseline) | set(profile))
+                for key in all_keys:
+                    b_count = baseline.get(key, 0)
+                    s_count = profile.get(key, 0)
+                    if b_count != s_count:
+                        new_findings.append(
+                            QCFinding(
+                                severity=Severity.WARNING,
+                                sub_id=sub_id,
+                                ses_id=ses_id,
+                                category="run_consistency",
+                                message=(
+                                    f"ses-{ses_id} has {s_count} {key} file(s) "
+                                    f"but ses-{baseline_ses} has {b_count}"
+                                ),
+                                plain_message=(
+                                    f"Session ses-{ses_id} has {s_count} {key} "
+                                    f"file(s) while the baseline session "
+                                    f"ses-{baseline_ses} has {b_count}. "
+                                    f"The scan protocol may differ."
+                                ),
+                                action="",
+                            )
+                        )
+
+        if new_findings:
+            with self._lock:
+                self.findings.extend(new_findings)
+
+        return new_findings
+
+    @staticmethod
+    def _build_scan_profile(session_path: Path) -> Dict[str, int]:
+        """
+        Build a dict of scan-type → count for a BIDS session directory.
+
+        Keys produced:
+          - ``task-<name>_bold`` for each task name found under func/
+          - ``T1w`` for structural scans under anat/
+          - ``fmap`` for fieldmap files under fmap/
+        """
+        import re
+
+        profile: Dict[str, int] = {}
+
+        func_dir = session_path / "func"
+        if func_dir.exists():
+            for f in func_dir.glob("*_bold.nii.gz"):
+                m = re.search(r"task-([A-Za-z0-9]+)", f.name)
+                key = f"task-{m.group(1)}_bold" if m else "bold"
+                profile[key] = profile.get(key, 0) + 1
+
+        anat_dir = session_path / "anat"
+        if anat_dir.exists():
+            count = len(list(anat_dir.glob("*T1w.nii.gz")))
+            if count:
+                profile["T1w"] = count
+
+        fmap_dir = session_path / "fmap"
+        if fmap_dir.exists():
+            count = len(list(fmap_dir.glob("*.nii.gz")))
+            if count:
+                profile["fmap"] = count
+
+        return profile
+
     # ------------------------------------------------------------------
     # Individual checks
     # ------------------------------------------------------------------

@@ -22,10 +22,16 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .runner import (
-    check_docker, to_docker_path,
-    is_docker_installed, is_docker_running, start_docker,
-)
+try:
+    from ..fmriprep.runner import (
+        check_docker, to_docker_path,
+        is_docker_installed, is_docker_running, start_docker,
+    )
+except ImportError:
+    from fmriprep.runner import (
+        check_docker, to_docker_path,
+        is_docker_installed, is_docker_running, start_docker,
+    )
 
 MRIQC_IMAGE = "nipreps/mriqc:24.0.2"
 
@@ -179,12 +185,33 @@ def mriqc_preflight(callback=None, auto_start_docker=True, auto_pull=True):
     return True, None
 
 
+def get_docker_vm_resources():
+    """Return (cpus, mem_gb) available inside the Docker VM.
+
+    Returns ``(None, None)`` if detection fails (e.g. Docker not running).
+    """
+    try:
+        result = subprocess.run(
+            ["docker", "run", "--rm", "alpine", "sh", "-c",
+             "nproc && awk '/MemTotal/{printf \"%.0f\", $2/1048576}' /proc/meminfo"],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            lines = result.stdout.strip().split("\n")
+            if len(lines) >= 2:
+                return int(lines[0]), int(lines[1])
+    except Exception:
+        pass
+    return None, None
+
+
 def run_mriqc_participant(
     bids_dir,
     mriqc_output_dir,
     participant_label: str,
     session_id: str = None,
     nprocs: int = 4,
+    omp_nthreads: int = None,
     mem_gb: int = 16,
     modalities=None,
 ):
@@ -200,7 +227,10 @@ def run_mriqc_participant(
         participant_label: Subject ID WITHOUT 'sub-' prefix  (e.g. '001')
         session_id:        Session ID WITHOUT 'ses-' prefix  (e.g. '01').
                            None = process all sessions for this subject.
-        nprocs:            CPU cores (default: 4)
+        nprocs:            Parallel scan workflows (default: 4)
+        omp_nthreads:      OpenMP threads per workflow — controls thread-level
+                           parallelism within each scan's computation.
+                           None = same as nprocs.
         mem_gb:            Memory limit in GB (default: 16)
         modalities:        e.g. ['T1w', 'bold'] — None means auto-detect
 
@@ -209,6 +239,9 @@ def run_mriqc_participant(
     docker_ok, docker_err = check_docker()
     if not docker_ok:
         return False, docker_err
+
+    if omp_nthreads is None:
+        omp_nthreads = nprocs
 
     bids_dir = Path(bids_dir).resolve()
     mriqc_output_dir = Path(mriqc_output_dir).resolve()
@@ -246,6 +279,7 @@ def run_mriqc_participant(
         "participant",
         "--participant-label", participant_label,
         "--nprocs", str(nprocs),
+        "--omp-nthreads", str(omp_nthreads),
         "--mem-gb", str(mem_gb),
         "-w", "/work",
         "--no-sub",

@@ -43,7 +43,7 @@ pyright                        # Uses pyrightconfig.json (basic mode, Python 3.9
 ### Pipeline Flow (sequential phases)
 1. **Phase 1: BIDS Conversion** (`src/bids/converter.py`) — dcm2niix converts DICOM→NIfTI, parallelized per subject
 2. **BIDS QC** (`src/qc/checker.py`) — Validates immediately after each subject's conversion (missing scans, truncated runs, parameter drift)
-3. **Phase 2: MRIQC** (`src/fmriprep/mriqc_runner.py`) — Docker-based image quality metrics (SNR, tSNR, CJV, FD, GSR); generates early standalone report
+3. **Phase 2: MRIQC** (`src/mriqc/runner.py`) — Docker-based image quality metrics (SNR, tSNR, CJV, FD, GSR); parallel per session; generates early standalone report
 4. **Phase 3: fMRIPrep** (`src/fmriprep/runner.py`) — Docker-based preprocessing, parallel per subject
 5. **Motion Analysis** (`src/qc/motion_parser.py`) — Reads fMRIPrep confounds TSV after all subjects finish
 6. **Connectivity QC** (`src/qc/volume_censoring.py` + `src/qc/connectivity_qc.py`) — Optional (`--connectivity-qc`), QC-FC and DM-FC metrics per Parkes et al.
@@ -52,8 +52,9 @@ pyright                        # Uses pyrightconfig.json (basic mode, Python 3.9
 ### Module Responsibilities
 - `src/core/` — Subject/session discovery (`discovery.py`), thread-safe progress tracking (`progress.py`), encoding utilities (`utils.py`)
 - `src/bids/` — BIDS conversion (`converter.py`) and output file counting (`analyzer.py`)
-- `src/fmriprep/` — Docker runners for fMRIPrep and MRIQC; handles dynamic image pull with local tar fallback
-- `src/qc/` — All quality control layers; `connectivity_thresholds.py` holds literature-derived threshold constants
+- `src/mriqc/` — MRIQC Docker runner (`runner.py`) and IQM metrics parser (`iqm_parser.py`); handles image pull with local tar fallback
+- `src/fmriprep/` — fMRIPrep Docker runner; handles dynamic image pull with local tar fallback
+- `src/qc/` — Quality control layers: BIDS validation (`checker.py`), motion analysis (`motion_parser.py`), connectivity QC (`connectivity_qc.py`, `volume_censoring.py`); `connectivity_thresholds.py` holds literature-derived threshold constants
 - `src/reporting/` — HTML reports (`html_report.py`: full QC report + standalone MRIQC report) and text conversion report (`report.py`)
 - `src/gui/app.py` — CustomTkinter GUI with console log widget
 

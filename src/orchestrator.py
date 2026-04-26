@@ -40,8 +40,9 @@ try:
     from .reporting.report import ConversionReport
     from .reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from .qc.checker import BIDSQualityChecker
-    from .qc import motion_parser, iqm_parser
-    from .fmriprep import mriqc_runner
+    from .qc import motion_parser
+    from .mriqc import iqm_parser
+    from .mriqc import runner as mriqc_runner
 except ImportError:
     # When run directly as script
     from core.utils import setup_encoding, safe_print, set_log_file, close_log_file
@@ -52,8 +53,9 @@ except ImportError:
     from reporting.report import ConversionReport
     from reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from qc.checker import BIDSQualityChecker
-    from qc import motion_parser, iqm_parser
-    from fmriprep import mriqc_runner
+    from qc import motion_parser
+    from mriqc import iqm_parser
+    from mriqc import runner as mriqc_runner
 
 setup_encoding()
 
@@ -81,6 +83,8 @@ def _write_structured_summary(
     errors,
     pipeline_start_time,
     iqm_results=None,
+    ran_fmriprep=True,
+    ran_mriqc=True,
 ):
     """
     Write a human-readable, structured summary to its own file.
@@ -95,6 +99,7 @@ def _write_structured_summary(
             report, subjects_tasks, sessions_missing_bold,
             motion_results, censoring_results, connectivity_results,
             errors, pipeline_start_time, iqm_results,
+            ran_fmriprep=ran_fmriprep, ran_mriqc=ran_mriqc,
         )
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
@@ -110,6 +115,7 @@ def _build_structured_summary(
     report, subjects_tasks, sessions_missing_bold,
     motion_results, censoring_results, connectivity_results,
     errors, pipeline_start_time, iqm_results=None,
+    ran_fmriprep=True, ran_mriqc=True,
 ):
     """Build the structured summary as a list of lines. May raise; caller catches."""
 
@@ -200,81 +206,83 @@ def _build_structured_summary(
                 out("      BOLD data       : Present")
 
             # -- MRIQC --
-            sub_iqm = iqm_map.get(key, [])
-            if sub_iqm:
-                for r in sub_iqm:
-                    sev = r.worst_severity
-                    if sev == "OK":
-                        out(f"      MRIQC [{r.modality:5s}]    : OK")
-                    else:
-                        flag_strs = [
-                            f"{fl.metric_label}={fl.value:.3f}"
-                            for fl in r.flags
-                        ]
-                        out(
-                            f"      MRIQC [{r.modality:5s}]    : {sev}  "
-                            f"({', '.join(flag_strs)})"
-                        )
+            if ran_mriqc:
+                sub_iqm = iqm_map.get(key, [])
+                if sub_iqm:
+                    for r in sub_iqm:
+                        sev = r.worst_severity
+                        if sev == "OK":
+                            out(f"      MRIQC [{r.modality:5s}]    : OK")
+                        else:
+                            flag_strs = [
+                                f"{fl.metric_label}={fl.value:.3f}"
+                                for fl in r.flags
+                            ]
+                            out(
+                                f"      MRIQC [{r.modality:5s}]    : {sev}  "
+                                f"({', '.join(flag_strs)})"
+                            )
 
             # -- fMRIPrep --
-            fmriprep_fails = [
-                f for f in fail_map.get(key, []) if f['stage'] == "fMRIPrep"
-            ]
-            if fmriprep_fails:
-                for f in fmriprep_fails:
-                    out(f"      fMRIPrep        : FAILED -- {f['error'][:80]}")
-            elif key in sessions_missing_bold:
-                out("      fMRIPrep        : Skipped (no BOLD)")
-            elif key in success_map:
-                if motion_map.get(key):
-                    out("      fMRIPrep        : Done")
-                else:
-                    out("      fMRIPrep        : Done (no confounds found)")
+            if ran_fmriprep:
+                fmriprep_fails = [
+                    f for f in fail_map.get(key, []) if f['stage'] == "fMRIPrep"
+                ]
+                if fmriprep_fails:
+                    for f in fmriprep_fails:
+                        out(f"      fMRIPrep        : FAILED -- {f['error'][:80]}")
+                elif key in sessions_missing_bold:
+                    out("      fMRIPrep        : Skipped (no BOLD)")
+                elif key in success_map:
+                    if motion_map.get(key):
+                        out("      fMRIPrep        : Done")
+                    else:
+                        out("      fMRIPrep        : Done (no confounds found)")
 
-            # -- Motion QC --
-            for m in motion_map.get(key, []):
-                label = m.run_label or ""
-                if m.flag == "OK":
-                    out(
-                        f"      Motion [{label:20s}] : OK  "
-                        f"(mean FD {m.mean_fd:.2f} mm)"
-                    )
-                elif m.flag == "WARNING":
-                    out(
-                        f"      Motion [{label:20s}] : WARNING  "
-                        f"(mean FD {m.mean_fd:.2f} mm, "
-                        f"{m.pct_high_motion:.0f}% high-motion)"
-                    )
-                else:
-                    out(
-                        f"      Motion [{label:20s}] : RE-SCAN  "
-                        f"(mean FD {m.mean_fd:.2f} mm, "
-                        f"{m.pct_high_motion:.0f}% high-motion)"
-                    )
+                # -- Motion QC --
+                for m in motion_map.get(key, []):
+                    label = m.run_label or ""
+                    if m.flag == "OK":
+                        out(
+                            f"      Motion [{label:20s}] : OK  "
+                            f"(mean FD {m.mean_fd:.2f} mm)"
+                        )
+                    elif m.flag == "WARNING":
+                        out(
+                            f"      Motion [{label:20s}] : WARNING  "
+                            f"(mean FD {m.mean_fd:.2f} mm, "
+                            f"{m.pct_high_motion:.0f}% high-motion)"
+                        )
+                    else:
+                        out(
+                            f"      Motion [{label:20s}] : RE-SCAN  "
+                            f"(mean FD {m.mean_fd:.2f} mm, "
+                            f"{m.pct_high_motion:.0f}% high-motion)"
+                        )
 
-            # -- Volume censoring --
-            for c in censor_map.get(key, []):
-                label = c.run_label or ""
-                if c.severity == "OK":
-                    out(
-                        f"      Censoring [{label:17s}] : OK  "
-                        f"({c.pct_censored_02mm:.0f}% censored, "
-                        f"{c.usable_minutes_02mm:.1f} min usable)"
-                    )
-                else:
-                    out(
-                        f"      Censoring [{label:17s}] : {c.severity}  "
-                        f"({c.pct_censored_02mm:.0f}% censored, "
-                        f"{c.usable_minutes_02mm:.1f} min usable)"
-                    )
+                # -- Volume censoring --
+                for c in censor_map.get(key, []):
+                    label = c.run_label or ""
+                    if c.severity == "OK":
+                        out(
+                            f"      Censoring [{label:17s}] : OK  "
+                            f"({c.pct_censored_02mm:.0f}% censored, "
+                            f"{c.usable_minutes_02mm:.1f} min usable)"
+                        )
+                    else:
+                        out(
+                            f"      Censoring [{label:17s}] : {c.severity}  "
+                            f"({c.pct_censored_02mm:.0f}% censored, "
+                            f"{c.usable_minutes_02mm:.1f} min usable)"
+                        )
 
-            # -- Connectivity --
-            for c in conn_map.get(key, []):
-                label = c.run_label or ""
-                out(
-                    f"      Connectivity [{label:14s}] : {c.worst_severity}  "
-                    f"({c.plain_message[:60]})"
-                )
+                # -- Connectivity --
+                for c in conn_map.get(key, []):
+                    label = c.run_label or ""
+                    out(
+                        f"      Connectivity [{label:14s}] : {c.worst_severity}  "
+                        f"({c.plain_message[:60]})"
+                    )
 
     out()
 
@@ -314,20 +322,25 @@ def _build_structured_summary(
     out("    BOLD data        - Whether functional brain-activity scans were")
     out("                       found. Sessions without BOLD cannot be")
     out("                       preprocessed by fMRIPrep.")
-    out("    MRIQC            - Image quality metrics computed on raw data")
-    out("                       before preprocessing. Flags scans with poor")
-    out("                       SNR, motion, ghosting, or other artefacts.")
-    out("    fMRIPrep         - Preprocessing: motion correction, spatial")
-    out("                       normalisation, confound estimation.")
-    out("    Motion           - Head-motion quality check. 'OK' is good;")
-    out("                       'WARNING' means elevated motion; 'RE-SCAN'")
-    out("                       means the data may be unusable.")
-    out("    Censoring        - How many volumes were removed due to motion.")
-    out("                       More usable minutes = better.")
-    out("    Connectivity     - Checks whether motion corrupts brain-network")
-    out("                       estimates (DM-FC split-based metric).")
+    if ran_mriqc:
+        out("    MRIQC            - Image quality metrics computed on raw data")
+        out("                       before preprocessing. Flags scans with poor")
+        out("                       SNR, motion, ghosting, or other artefacts.")
+    if ran_fmriprep:
+        out("    fMRIPrep         - Preprocessing: motion correction, spatial")
+        out("                       normalisation, confound estimation.")
+        out("    Motion           - Head-motion quality check. 'OK' is good;")
+        out("                       'WARNING' means elevated motion; 'RE-SCAN'")
+        out("                       means the data may be unusable.")
+        out("    Censoring        - How many volumes were removed due to motion.")
+        out("                       More usable minutes = better.")
+        out("    Connectivity     - Checks whether motion corrupts brain-network")
+        out("                       estimates (DM-FC split-based metric).")
     out()
-    out("  For the full visual report, open full_pipeline_report.html in your browser.")
+    if ran_fmriprep:
+        out("  For the full visual report, open full_pipeline_report.html in your browser.")
+    elif ran_mriqc:
+        out("  For the visual report, open the mriqc_report.html in your browser.")
     out()
 
     # ---- footer ----
@@ -613,6 +626,37 @@ def cleanup_temp_files(bids_dir, report):
     else:
         safe_print("  No temporary files to clean up", flush=True)
         report.set_cleanup_info(0, 0)
+
+
+def cleanup_work_dirs(output_folder, report):
+    """Remove intermediate work directories from derivatives/."""
+    safe_print("\nCleaning up intermediate work directories...", flush=True)
+    cleanup_count = 0
+    cleanup_size = 0
+    output_path = Path(output_folder)
+
+    targets = [
+        output_path / "derivatives" / "mriqc" / "work",
+    ]
+
+    for target in targets:
+        if target.exists() and target.is_dir():
+            try:
+                for f in target.rglob('*'):
+                    if f.is_file():
+                        cleanup_size += f.stat().st_size
+                shutil.rmtree(target)
+                cleanup_count += 1
+                rel = target.relative_to(output_path)
+                safe_print(f"  Removed: {rel}/", flush=True)
+            except Exception as e:
+                safe_print(f"  Warning: Could not remove {target.name}/: {e}", flush=True)
+
+    if cleanup_count > 0:
+        size_mb = cleanup_size / (1024 * 1024)
+        safe_print(f"  Freed {size_mb:.1f} MB from {cleanup_count} work dir(s)", flush=True)
+    else:
+        safe_print("  No work directories to clean up", flush=True)
 
 
 def run_qc_only(output_folder: Path, run_mriqc: bool = False):
@@ -932,11 +976,13 @@ Examples:
     # Create debug log file for detailed error tracking (in derivatives/, not the BIDS root,
     # so the BIDS validator does not flag it as an unrecognised file)
     derivatives_dir.mkdir(parents=True, exist_ok=True)
-    debug_log_file = derivatives_dir / "fmriprep_debug.log"
-    if debug_log_file.exists():
-        debug_log_file.unlink()  # Remove old log if exists
-    debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
-    safe_print(f"Debug log: {debug_log_file}", flush=True)
+    debug_log_file = None
+    if not args.skip_fmriprep:
+        debug_log_file = derivatives_dir / "fmriprep_debug.log"
+        if debug_log_file.exists():
+            debug_log_file.unlink()  # Remove old log if exists
+        debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
+        safe_print(f"Debug log: {debug_log_file}", flush=True)
 
     # Execution logs folder — keeps both the raw and structured logs together
     logs_folder = output_folder / "execution_logs"
@@ -1131,6 +1177,12 @@ Examples:
                         flush=True,
                     )
 
+    # Cross-session run consistency check
+    if not args.skip_bids:
+        consistency_findings = qc_checker.check_run_consistency(bids_dir, subjects_tasks)
+        if consistency_findings:
+            safe_print(f"  Run consistency: {len(consistency_findings)} warning(s)", flush=True)
+
     # ------------------------------------------------------------------
     # Phase 2: MRIQC  (parallel per session — each session gets its own
     #                   Docker container so sessions run concurrently)
@@ -1152,32 +1204,67 @@ Examples:
             flush=True,
         )
 
-        # Dynamic resource allocation: divide available resources among
+        # Probe the Docker VM to learn its actual CPU / RAM limits.
+        # On macOS Docker Desktop runs in a VM whose resources are often
+        # much lower than the host — this is the #1 cause of slow MRIQC.
+        docker_cpus, docker_mem_gb = mriqc_runner.get_docker_vm_resources()
+        if docker_cpus is not None:
+            safe_print(
+                f"  Docker VM resources: {docker_cpus} CPUs, {docker_mem_gb} GB RAM",
+                flush=True,
+            )
+            host_cpus = multiprocessing.cpu_count()
+            if docker_cpus < host_cpus // 2:
+                safe_print(
+                    f"  WARNING: Docker only has {docker_cpus} of your {host_cpus} CPUs. "
+                    f"Increase in Docker Desktop > Settings > Resources for faster runs.",
+                    flush=True,
+                )
+            effective_cpus = docker_cpus
+            effective_mem_gb = docker_mem_gb
+        else:
+            safe_print("  Could not detect Docker VM resources — using host values.", flush=True)
+            effective_cpus = multiprocessing.cpu_count()
+            # Estimate host memory (fallback to 16 GB)
+            try:
+                if sys.platform == "darwin":
+                    import ctypes, ctypes.util
+                    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+                    mem = ctypes.c_int64(0)
+                    size = ctypes.c_size_t(ctypes.sizeof(mem))
+                    libc.sysctlbyname(b"hw.memsize", ctypes.byref(mem), ctypes.byref(size), None, 0)
+                    effective_mem_gb = int(mem.value / (1024 ** 3))
+                else:
+                    effective_mem_gb = int(
+                        os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
+                    )
+            except Exception:
+                effective_mem_gb = 16
+
+        # Dynamic resource allocation: divide Docker VM resources among
         # concurrent MRIQC containers so they don't starve each other.
-        cpu_count = multiprocessing.cpu_count()
         mriqc_workers = min(args.parallel, len(mriqc_tasks))
-        nprocs_per = max(cpu_count // max(mriqc_workers, 1), 1)
-        # Estimate available memory (fallback to 16 GB if detection fails)
-        try:
-            if sys.platform == "darwin":
-                import ctypes, ctypes.util
-                libc = ctypes.CDLL(ctypes.util.find_library("c"))
-                mem = ctypes.c_int64(0)
-                size = ctypes.c_size_t(ctypes.sizeof(mem))
-                # hw.memsize returns total physical RAM in bytes
-                libc.sysctlbyname(b"hw.memsize", ctypes.byref(mem), ctypes.byref(size), None, 0)
-                total_mem_gb = mem.value / (1024 ** 3)
-            else:
-                total_mem_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
-        except Exception:
-            total_mem_gb = 16
-        # Reserve ~20% for the OS, split the rest among containers
-        usable_mem_gb = total_mem_gb * 0.8
+
+        # Reserve ~20% for OS/Docker overhead, split the rest
+        usable_cpus = max(int(effective_cpus * 0.8), 1)
+        usable_mem_gb = effective_mem_gb * 0.8
+
+        cpus_per = max(usable_cpus // max(mriqc_workers, 1), 1)
         mem_per = max(int(usable_mem_gb // max(mriqc_workers, 1)), 4)
 
+        # Split per-container CPUs into nprocs (parallel scans) and
+        # omp_nthreads (threads per scan).  More omp threads speeds up
+        # the heavy per-scan computation (spatial normalization, IQMs).
+        if cpus_per >= 4:
+            nprocs_per = max(cpus_per // 2, 1)
+            omp_per = max(cpus_per // nprocs_per, 1)
+        else:
+            nprocs_per = cpus_per
+            omp_per = 1
+
         safe_print(
-            f"  Resources per container: {nprocs_per} CPUs, {mem_per} GB RAM "
-            f"({mriqc_workers} parallel containers)",
+            f"  Per container: {nprocs_per} scan workflows x {omp_per} threads, "
+            f"{mem_per} GB RAM ({mriqc_workers} parallel containers)",
             flush=True,
         )
 
@@ -1188,6 +1275,7 @@ Examples:
                     bids_dir, mriqc_dir, sub_id,
                     session_id=ses_id,
                     nprocs=nprocs_per,
+                    omp_nthreads=omp_per,
                     mem_gb=mem_per,
                 ): (sub_id, ses_id) for sub_id, ses_id in mriqc_tasks
             }
@@ -1235,6 +1323,10 @@ Examples:
         )
         safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
         safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
+
+        # Clean MRIQC work dir to free disk space before fMRIPrep
+        if not args.keep_temp:
+            cleanup_work_dirs(output_folder, report)
 
     # ------------------------------------------------------------------
     # Create .bidsignore before fMRIPrep (defense-in-depth for BIDS validator)
@@ -1323,6 +1415,7 @@ Examples:
         report.set_cleanup_info(0, 0)
     else:
         cleanup_temp_files(bids_dir, report)
+        cleanup_work_dirs(output_folder, report)
     
     # Analyze output
     safe_print("Analyzing output files...", flush=True)
@@ -1420,20 +1513,12 @@ Examples:
             safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
             safe_print("  Install with: pip install nilearn nibabel", flush=True)
 
-    # MRIQC group-level report + IQM parsing (for final comprehensive report)
+    # MRIQC IQM parsing (for final comprehensive report)
+    # Group report already generated after early MRIQC phase —
+    # just re-parse IQM files for the final comprehensive report.
     iqm_results = []
     mriqc_reports = {}
     if run_mriqc and mriqc_dir is not None:
-        safe_print("Running MRIQC group-level report...", flush=True)
-        grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
-        if grp_ok:
-            safe_print(
-                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
-                flush=True,
-            )
-        else:
-            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
-
         iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
         mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
         if iqm_results:
@@ -1455,18 +1540,21 @@ Examples:
     report.set_qc_results(qc_checker.get_all(), motion_results)
 
     # Layer 5: Generate HTML QC report
-    html_path = generate_html_report(
-        str(output_folder),
-        qc_checker.get_all(),
-        motion_results,
-        report.successful,
-        report.failed,
-        iqm_results=iqm_results,
-        mriqc_reports=mriqc_reports,
-        censoring_results=censoring_results,
-        connectivity_results=connectivity_results,
-    )
-    safe_print(f"QC report: {html_path}", flush=True)
+    # Only generate the full pipeline report when fMRIPrep actually ran;
+    # when fMRIPrep is skipped the early MRIQC report is sufficient.
+    if not args.skip_fmriprep:
+        html_path = generate_html_report(
+            str(output_folder),
+            qc_checker.get_all(),
+            motion_results,
+            report.successful,
+            report.failed,
+            iqm_results=iqm_results,
+            mriqc_reports=mriqc_reports,
+            censoring_results=censoring_results,
+            connectivity_results=connectivity_results,
+        )
+        safe_print(f"QC report: {html_path}", flush=True)
 
     # Save report
     report_text = report.generate_report()
@@ -1490,6 +1578,8 @@ Examples:
         errors=errors,
         pipeline_start_time=report.start_time,
         iqm_results=iqm_results,
+        ran_fmriprep=not args.skip_fmriprep,
+        ran_mriqc=run_mriqc,
     )
 
     # Summary

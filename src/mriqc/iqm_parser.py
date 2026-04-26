@@ -92,6 +92,22 @@ class IQMResult:
     flags: List[IQMFlag] = field(default_factory=list)
 
     @property
+    def scan_label(self) -> str:
+        """Human-readable scan label derived from filename."""
+        import re
+        stem = Path(self.scan_file).stem
+        parts = []
+        m = re.search(r"task-([A-Za-z0-9]+)", stem)
+        if m:
+            parts.append(f"task-{m.group(1)}")
+        m = re.search(r"run-(\d+)", stem)
+        if m:
+            parts.append(f"run-{m.group(1)}")
+        if parts:
+            return " ".join(parts)
+        return self.modality  # fallback: "T1w" or "bold"
+
+    @property
     def worst_severity(self) -> str:
         if any(f.severity == "ERROR" for f in self.flags):
             return "ERROR"
@@ -112,7 +128,7 @@ def parse_all_subjects(mriqc_dir) -> List[IQMResult]:
     if not mriqc_path.exists():
         return results
 
-    for json_file in sorted(mriqc_path.rglob("sub-*.json")):
+    for json_file in sorted(mriqc_path.glob("sub-*.json")):
         result = _parse_iqm_file(json_file)
         if result is not None:
             results.append(result)
@@ -146,6 +162,9 @@ def _parse_iqm_file(json_path: Path) -> Optional[IQMResult]:
                 metrics[key] = float(val)
             except (TypeError, ValueError):
                 pass
+
+    if not metrics:
+        return None
 
     flags: List[IQMFlag] = []
     for metric, (warn_thresh, err_thresh, direction) in thresholds.items():

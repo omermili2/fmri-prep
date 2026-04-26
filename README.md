@@ -18,8 +18,8 @@ flowchart TD
         C["BIDS Quality Checks\nchecker.py\n• Missing T1w / BOLD\n• Truncated runs\n• Small/corrupt files\n• Parameter drift across subjects"]
     end
 
-    subgraph PHASE2 ["Phase 2: MRIQC  (per subject, parallel, via Docker)"]
-        D["mriqc_runner.py\n• SNR / tSNR / CJV / FD / GSR\n• Per-subject visual HTML reports\n• Group-level outlier detection"]
+    subgraph PHASE2 ["Phase 2: MRIQC  (per session, parallel, via Docker)"]
+        D["mriqc/runner.py\n• SNR / tSNR / CJV / FD / GSR\n• Per-subject visual HTML reports\n• Group-level outlier detection"]
         D --> D2["Early MRIQC Report\nmriqc_report.html\n→ available before fMRIPrep starts"]
     end
 
@@ -76,9 +76,11 @@ Runs **immediately after each subject's BIDS conversion**, before any further pr
 
 ---
 
-### Phase 2: MRIQC (`src/fmriprep/mriqc_runner.py`)
-Runs **per subject in parallel after BIDS conversion**, before fMRIPrep starts. Enabled by default; skip with `--skip-mriqc`.
-Requires Docker. One-time image pull: `docker pull nipreps/mriqc:latest`
+### Phase 2: MRIQC (`src/mriqc/runner.py`)
+Runs **per session in parallel after BIDS conversion**, before fMRIPrep starts. Enabled by default; skip with `--skip-mriqc`.
+Requires Docker. One-time image pull: `docker pull nipreps/mriqc:24.0.2`
+
+MRIQC sessions are independent — each session's quality metrics are computed from that session's images alone. The pipeline automatically detects available Docker VM resources (CPU / RAM) and distributes them across parallel containers.
 
 | Metric | Meaning | Red flag |
 |---|---|---|
@@ -171,7 +173,13 @@ output_YYYYMMDD_HHMMSS/
 
 ## Quick Start
 
-### 1. Install Dependencies
+### 1. Run the GUI
+
+```bash
+python run.py
+```
+
+Dependencies are installed automatically on first run from `requirements.txt`. To install manually:
 
 ```bash
 python -m venv venv
@@ -179,11 +187,7 @@ source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 ```
 
-### 2. Run the GUI
-
-```bash
-python run.py
-```
+### 2. Select folders and run
 
 1. **Select Source Folder** — your DICOM data (organized by subject/session)
 2. **Select Output Folder** — where to save results
@@ -194,6 +198,8 @@ python run.py
    - **fMRIPrep Only** — Run fMRIPrep on existing BIDS data
    - **Connectivity QC Only** — Run connectivity analysis on existing fMRIPrep output
    - **Full Pipeline** — BIDS + MRIQC + fMRIPrep + all QC layers
+
+> **Note:** Action buttons remain disabled until both Source and Output folders are selected (BIDS Only, BIDS + MRIQC, Full Pipeline), or until the Source folder contains the appropriate data (fMRIPrep Only requires BIDS NIfTI data; Connectivity QC requires fMRIPrep confounds output).
 
 ---
 
@@ -239,24 +245,36 @@ PY
 | [FreeSurfer License](https://surfer.nmr.mgh.harvard.edu/registration.html) | Required by fMRIPrep (free registration) |
 | `nilearn`, `nibabel` | Connectivity QC only (`pip install -r requirements.txt`) |
 
+### Docker Desktop Performance
+
+On macOS and Windows, Docker runs inside a VM with its own resource limits. The pipeline automatically detects Docker's available CPUs and RAM and will warn if they are low. For best performance:
+
+1. Open **Docker Desktop > Settings > Resources**
+2. Set **CPUs** to at least half your machine's cores (e.g. 8 of 14)
+3. Set **Memory** to at least half your RAM (e.g. 48 GB of 96 GB)
+4. Click **Apply & Restart**
+
 ---
 
 ## Project Structure
 
 ```
 fMRI_Masters/
-├── run.py                      # Entry point for the GUI
+├── run.py                      # Entry point — auto-installs deps, launches GUI or CLI
 ├── src/
 │   ├── orchestrator.py         # Pipeline coordinator — start here to understand the code
 │   ├── gui/                    # GUI application (CustomTkinter)
 │   ├── core/                   # Subject discovery, progress tracking, utilities
 │   ├── bids/                   # BIDS conversion using dcm2niix
-│   ├── fmriprep/
-│   │   ├── runner.py           # fMRIPrep Docker runner
-│   │   └── mriqc_runner.py     # MRIQC Docker runner
-│   ├── qc/
-│   │   ├── checker.py          # BIDS quality checks
-│   │   ├── iqm_parser.py       # Parses MRIQC IQM JSON output
+│   │   ├── converter.py        # DICOM → NIfTI conversion (parallel per subject)
+│   │   └── analyzer.py         # Count output files by modality
+│   ├── mriqc/                  # MRIQC image quality assessment (dedicated module)
+│   │   ├── runner.py           # MRIQC Docker runner (parallel per session)
+│   │   └── iqm_parser.py       # Parses MRIQC IQM JSON metrics & flags outliers
+│   ├── fmriprep/               # fMRIPrep preprocessing
+│   │   └── runner.py           # fMRIPrep Docker runner (parallel per subject)
+│   ├── qc/                     # Quality control layers
+│   │   ├── checker.py          # BIDS quality checks (missing scans, corruption)
 │   │   ├── motion_parser.py    # Motion analysis from fMRIPrep confounds
 │   │   ├── volume_censoring.py # Volume censoring analysis
 │   │   ├── connectivity_qc.py  # QC-FC and DM-FC metrics
@@ -267,7 +285,7 @@ fMRI_Masters/
 ├── docs/
 │   ├── BIDS_CONVERSION_GUIDE.md
 │   └── FMRIPREP_GUIDE.md
-├── test/                       # Test suite
+├── test/                       # Test suite (66 tests)
 └── tools/                      # Bundled dcm2niix binary
 ```
 

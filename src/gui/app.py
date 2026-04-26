@@ -837,7 +837,7 @@ class App(ctk.CTk):
         src_dir = str(Path(__file__).parent.parent)
         if src_dir not in sys.path:
             sys.path.insert(0, src_dir)
-        mriqc_module = importlib.import_module("fmriprep.mriqc_runner")
+        mriqc_module = importlib.import_module("mriqc.runner")
         self._run_with_docker_preflight(
             "BIDS Conversion + MRIQC",
             preflight_fn=mriqc_module.mriqc_preflight,

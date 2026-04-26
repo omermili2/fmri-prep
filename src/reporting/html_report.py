@@ -594,7 +594,11 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
         group_links = f'<p style="margin-bottom:12px;">Group reports (open for outlier detection): {links}</p>'
 
     rows = []
-    for r in sorted(iqm_results, key=lambda x: (x.sub_id, x.scan_file)):
+    sorted_results = sorted(
+        iqm_results,
+        key=lambda x: (x.sub_id, x.ses_id, 0 if x.modality == "T1w" else 1, x.scan_file),
+    )
+    for r in sorted_results:
         sev = r.worst_severity
         if sev == "ERROR":
             badge = '<span class="badge badge-error">ERROR</span>'
@@ -603,15 +607,19 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
         else:
             badge = '<span class="badge badge-ok">OK</span>'
 
+        # --- Visual report link: match by filename stem ---
+        iqm_stem = Path(r.scan_file).stem  # e.g. "sub-010_ses-01_T1w"
         sub_html = next(
             (
                 f'<a href="mriqc/sub-{r.sub_id}/{s["scan_type"]}/{s["filename"]}" '
                 f'target="_blank">{s["filename"]}</a>'
-                for s in subject_reports if s["sub_id"] == r.sub_id
+                for s in subject_reports
+                if Path(s["filename"]).stem == iqm_stem
             ),
             r.scan_file,
         )
 
+        # --- Flags column ---
         flag_lines = (
             "<br>".join(
                 f'<span class="badge {"badge-error" if fl.severity == "ERROR" else "badge-warning"}">'
@@ -621,15 +629,20 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
             if r.flags else "<span class='meta'>No flags</span>"
         )
 
+        # --- Color-coded metrics: show ALL, colored by severity ---
+        flag_sev = {fl.metric: fl.severity for fl in r.flags}
         metrics_str = " &nbsp; ".join(
-            f"<span class='meta'>{k}={v:.2f}</span>"
-            for k, v in list(r.metrics.items())[:5]
+            _metric_span(f"{k}={v:.2f}", flag_sev.get(k, "OK"))
+            for k, v in r.metrics.items()
         )
 
+        # --- Scan column: subject, session, scan label ---
+        scan_label = r.scan_label if hasattr(r, 'scan_label') else r.modality
+        ses_line = f"<br><span class='meta'>ses-{r.ses_id}</span>" if r.ses_id else ""
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{r.sub_id}</b><br>"
-            f"<span class='meta'>{r.modality}</span></td>"
+            f"<td><b>sub-{r.sub_id}</b>{ses_line}<br>"
+            f"<span class='meta'>{scan_label}</span></td>"
             f"<td>{badge}</td>"
             f"<td>{flag_lines}</td>"
             f"<td style='font-size:12px'>{metrics_str}</td>"
@@ -666,11 +679,16 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
   <br><br>
   Thresholds shown here are indicative &mdash; always open the MRIQC visual HTML reports
   for the full picture (carpet plots, tissue segmentation overlays, and mosaic views).
+  <br><br>
+  <b>Metric colors:</b>
+  <span class="metric-ok">green = within normal range</span>,
+  <span class="metric-warn">yellow = borderline</span>,
+  <span class="metric-error">red = outside acceptable range</span>.
 </div>
 {group_links}
 <table>
   <thead><tr>
-    <th>Subject</th><th>Status</th><th>Flags</th><th>Key Metrics</th><th>Visual Report</th>
+    <th>Scan</th><th>Status</th><th>Flags</th><th>Metrics</th><th>Visual Report</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
