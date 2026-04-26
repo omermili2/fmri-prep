@@ -327,7 +327,7 @@ def _build_structured_summary(
     out("    Connectivity     - Checks whether motion corrupts brain-network")
     out("                       estimates (DM-FC split-based metric).")
     out()
-    out("  For the full visual report, open qc_report.html in your browser.")
+    out("  For the full visual report, open full_pipeline_report.html in your browser.")
     out()
 
     # ---- footer ----
@@ -624,7 +624,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
       - derivatives/                  (for motion analysis)
       - derivatives/mriqc/            (for MRIQC IQM parsing, if available)
 
-    Generates qc_report.html and prints a summary.
+    Generates full_pipeline_report.html and prints a summary.
     """
     safe_print(f"\nRunning QC-only analysis on: {output_folder}", flush=True)
     safe_print("=" * 60, flush=True)
@@ -784,11 +784,11 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
             f"QC COMPLETE — {len(all_errors)} scan error(s), {len(all_rescans)} motion re-scan flag(s)",
             flush=True,
         )
-        safe_print("Open qc_report.html for full details.", flush=True)
+        safe_print("Open full_pipeline_report.html for full details.", flush=True)
         sys.exit(1)
     else:
         safe_print("QC COMPLETE — No critical issues found.", flush=True)
-        safe_print("Open qc_report.html for full details.", flush=True)
+        safe_print("Open full_pipeline_report.html for full details.", flush=True)
         sys.exit(0)
 
 
@@ -1182,7 +1182,9 @@ Examples:
             )
 
         mriqc_report_path = generate_mriqc_report(
-            str(mriqc_dir), early_iqm, early_reports
+            str(mriqc_dir), early_iqm, early_reports,
+            qc_findings=qc_checker.get_all(),
+            output_folder=str(output_folder),
         )
         safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
         safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)

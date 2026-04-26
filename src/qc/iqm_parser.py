@@ -112,7 +112,7 @@ def parse_all_subjects(mriqc_dir) -> List[IQMResult]:
     if not mriqc_path.exists():
         return results
 
-    for json_file in sorted(mriqc_path.glob("sub-*.json")):
+    for json_file in sorted(mriqc_path.rglob("sub-*.json")):
         result = _parse_iqm_file(json_file)
         if result is not None:
             results.append(result)

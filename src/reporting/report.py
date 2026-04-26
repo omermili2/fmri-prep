@@ -397,7 +397,7 @@ class ConversionReport:
                     )
                 lines.append("")
 
-            lines.append("  See qc_report.html for the full visual report.")
+            lines.append("  See full_pipeline_report.html for the full visual report.")
             lines.append("")
 
         # ===== NEXT STEPS =====

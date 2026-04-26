@@ -1,7 +1,7 @@
 """
 HTML QC Report Generator - Layer 5
 
-Generates a self-contained qc_report.html file in the output folder.
+Generates a self-contained full_pipeline_report.html file in the output folder.
 Designed for non-technical research students — color-coded, scannable,
 requires no external CSS or JS libraries (everything inline).
 
@@ -31,7 +31,7 @@ def generate(
     connectivity_results=None,
 ) -> str:
     """
-    Write qc_report.html to output_folder.
+    Write full_pipeline_report.html to output_folder.
 
     Args:
         output_folder:          Pipeline output directory path
@@ -53,7 +53,7 @@ def generate(
         iqm_results or [], mriqc_reports or {},
         censoring_results or [], connectivity_results or []
     )
-    out_path = Path(output_folder) / "qc_report.html"
+    out_path = Path(output_folder) / "full_pipeline_report.html"
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
@@ -62,21 +62,36 @@ def generate(
     return str(out_path)
 
 
-def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports) -> str:
+def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
+                          qc_findings=None, output_folder: str = None) -> str:
     """
-    Write a standalone MRIQC-only HTML report to mriqc_dir/mriqc_report.html.
+    Write a standalone MRIQC-only HTML report.
 
     Designed for early feedback — the supervisor can open this as soon as
     MRIQC finishes, without waiting for the full pipeline to complete.
+    Includes BIDS scan quality findings (if available) so the researcher
+    gets maximum information at the earliest stage.
+
+    Args:
+        mriqc_dir:      Path to MRIQC derivatives directory.
+        iqm_results:    List of IQMResult from iqm_parser.
+        mriqc_reports:  Dict from mriqc_runner.collect_mriqc_reports.
+        qc_findings:    List of QCFinding from BIDSQualityChecker (optional).
+        output_folder:  Top-level output directory for the report file.
+                        If None, falls back to mriqc_dir.
     """
     iqm_results = iqm_results or []
     mriqc_reports = mriqc_reports or {}
+    qc_findings = qc_findings or []
+
+    bids_errors = [f for f in qc_findings if f.severity.value == "ERROR"]
+    bids_warnings = [f for f in qc_findings if f.severity.value == "WARNING"]
 
     iqm_errors = [r for r in iqm_results if r.worst_severity == "ERROR"]
     iqm_warns  = [r for r in iqm_results if r.worst_severity == "WARNING"]
 
-    n_critical = len(iqm_errors)
-    n_warnings = len(iqm_warns)
+    n_critical = len(iqm_errors) + len(bids_errors)
+    n_warnings = len(iqm_warns) + len(bids_warnings)
 
     if n_critical > 0:
         banner_color, banner_bg = "#c0392b", "#fdf0ef"
@@ -87,7 +102,7 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports) -> str:
         banner_color, banner_bg = "#d68910", "#fef9e7"
         banner_icon = "&#x26A0;"
         banner_title = f"{n_warnings} warning(s) detected"
-        banner_sub = "Some metrics are borderline. Review the MRIQC visual reports."
+        banner_sub = "Some metrics are borderline. Review the details below."
     else:
         banner_color, banner_bg = "#1e8449", "#eafaf1"
         banner_icon = "&#x2714;"
@@ -101,13 +116,20 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports) -> str:
         "<body>",
         _section_header_mriqc(now, mriqc_dir),
         _banner(banner_color, banner_bg, banner_icon, banner_title, banner_sub),
+    ]
+
+    if bids_errors or bids_warnings:
+        parts.append(_section_bids_findings(bids_errors, bids_warnings))
+
+    parts.extend([
         _section_mriqc(iqm_results, mriqc_reports),
         _html_footer(),
         "</body></html>",
-    ]
+    ])
 
     html = "\n".join(parts)
-    out_path = Path(mriqc_dir) / "mriqc_report.html"
+    report_dir = output_folder if output_folder else mriqc_dir
+    out_path = Path(report_dir) / "mriqc_report.html"
     try:
         with open(out_path, "w", encoding="utf-8") as f:
             f.write(html)
