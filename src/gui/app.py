@@ -469,21 +469,111 @@ class App(ctk.CTk):
     _MRIQC_MIN_PER_SUBJECT = 20      # ~20 min per subject
     _CONNECTIVITY_MIN_PER_SUBJECT = 8
 
+    # ------------------------------------------------------------------
+    # Folder-type detectors
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _has_bids_nifti(root):
+        """Return True if *root* is a BIDS dataset with raw NIfTI data.
+
+        Checks for:
+        1. ``dataset_description.json`` at the root (BIDS marker).
+        2. At least one ``sub-*`` folder **directly** under root (not
+           inside ``derivatives/``).
+        3. At least one ``.nii`` or ``.nii.gz`` file inside a top-level
+           ``sub-*`` tree (raw imaging data, not derivatives).
+
+        This deliberately ignores ``derivatives/sub-*`` so that the
+        fMRIPrep-Only button only lights up when actual raw BIDS data
+        is present.
+        """
+        if not (root / "dataset_description.json").exists():
+            return False
+
+        for sub in root.iterdir():
+            if not (sub.is_dir() and sub.name.startswith("sub-")):
+                continue
+            # Walk at most two levels (sub-*/[ses-*/]{anat,func}/*.nii*)
+            search_dirs = [sub]
+            for ses in sub.iterdir():
+                if ses.is_dir() and ses.name.startswith("ses-"):
+                    search_dirs.append(ses)
+            for parent in search_dirs:
+                for modality in ("anat", "func"):
+                    mod_dir = parent / modality
+                    if not mod_dir.is_dir():
+                        continue
+                    for f in mod_dir.iterdir():
+                        if f.name.endswith((".nii", ".nii.gz")):
+                            return True
+        return False
+
+    @staticmethod
+    def _has_fmriprep_derivatives(root):
+        """Return True if *root* contains fMRIPrep derivative results.
+
+        Looks for the fMRIPrep-specific confounds file
+        (``*_desc-confounds_timeseries.tsv``) under ``derivatives/``.
+        This file is unique to fMRIPrep output and cannot be confused
+        with raw BIDS data or MRIQC results.
+
+        Searches in both ``derivatives/fmriprep/sub-*`` (nipreps layout)
+        and ``derivatives/sub-*`` (flat layout) to cover all variants.
+        """
+        deriv = root / "derivatives"
+        if not deriv.is_dir():
+            return False
+
+        # Candidate roots that may contain sub-* result folders
+        search_roots = [deriv]
+        fmriprep_dir = deriv / "fmriprep"
+        if fmriprep_dir.is_dir():
+            search_roots.insert(0, fmriprep_dir)
+
+        for search_root in search_roots:
+            for sub in search_root.iterdir():
+                if not (sub.is_dir() and sub.name.startswith("sub-")):
+                    continue
+                # Look for confounds TSV up to two levels deep
+                # (sub-*/func/ or sub-*/ses-*/func/)
+                func_dirs = []
+                func_direct = sub / "func"
+                if func_direct.is_dir():
+                    func_dirs.append(func_direct)
+                for ses in sub.iterdir():
+                    if ses.is_dir() and ses.name.startswith("ses-"):
+                        ses_func = ses / "func"
+                        if ses_func.is_dir():
+                            func_dirs.append(ses_func)
+                for func_dir in func_dirs:
+                    for f in func_dir.iterdir():
+                        if f.name.endswith("_desc-confounds_timeseries.tsv"):
+                            return True
+        return False
+
+    # ------------------------------------------------------------------
+
     def _update_button_states(self):
-        """Enable/disable buttons based on what the source folder contains.
+        """Enable/disable buttons based on what the source folder contains
+        and whether an output folder has been selected.
 
         The Source folder can point to:
         - Raw DICOM data  -> enables BIDS Conversion and Full Pipeline
         - A BIDS dataset  -> enables fMRIPrep Only (and the above)
         - Pipeline output with derivatives/ -> enables Connectivity QC (and the above)
 
-        The Output folder is always just a destination for results.
+        Buttons that produce new output (BIDS Only, BIDS + MRIQC, Full Pipeline)
+        require both Source AND Output folders.  Buttons that operate on existing
+        data (fMRIPrep Only, Connectivity QC Only) only require Source.
         """
         input_dir = self.entry_input.get().strip()
+        output_dir = self.entry_output.get().strip()
+        has_output = bool(output_dir)
 
         has_subjects = False
         has_bids_data = False
-        has_derivatives = False
+        has_fmriprep_results = False
 
         if input_dir and Path(input_dir).is_dir():
             src = Path(input_dir)
@@ -501,47 +591,56 @@ class App(ctk.CTk):
                 p.is_dir() and not p.name.startswith(".")
                 for p in src.iterdir()
             )
-            has_bids_data = (
-                any(p.name.startswith("sub-") and p.is_dir()
-                    for p in check_path.iterdir())
-                and (check_path / "dataset_description.json").exists()
-            )
-            has_derivatives = (check_path / "derivatives").is_dir()
+
+            # BIDS detector: dataset_description.json + raw NIfTI under
+            # top-level sub-* folders (ignores derivatives/sub-*)
+            has_bids_data = self._has_bids_nifti(check_path)
+
+            # fMRIPrep detector: confounds TSV files under derivatives/
+            has_fmriprep_results = self._has_fmriprep_derivatives(check_path)
+
+        # Determine the reason to show when a button that needs output is disabled
+        if not input_dir and not has_output:
+            output_reason = "Select Source and Output folders"
+        elif not input_dir:
+            output_reason = "Select a Source DICOM Folder"
+        else:
+            output_reason = "Select an Output Root Folder"
 
         # --- Apply button states ---
-        # BIDS Conversion: needs any subject-like folders (raw DICOMs)
+        # BIDS Conversion: needs subject folders + output folder
         self._set_button_enabled(
             self.btn_bids_only, self.label_est_bids, "bids",
-            enabled=has_subjects,
-            reason="Select a Source DICOM Folder"
+            enabled=has_subjects and has_output,
+            reason=output_reason if not has_output else "Select a Source DICOM Folder"
         )
 
-        # BIDS + MRIQC: same as BIDS Conversion
+        # BIDS + MRIQC: needs subject folders + output folder
         self._set_button_enabled(
             self.btn_mriqc_only, self.label_est_mriqc, "mriqc",
-            enabled=has_subjects,
-            reason="Select a Source DICOM Folder"
+            enabled=has_subjects and has_output,
+            reason=output_reason if not has_output else "Select a Source DICOM Folder"
         )
 
-        # Full Pipeline: same as BIDS Conversion
+        # Full Pipeline: needs subject folders + output folder
         self._set_button_enabled(
             self.btn_full_pipeline, self.label_est_full, "full",
-            enabled=has_subjects,
-            reason="Select a Source DICOM Folder"
+            enabled=has_subjects and has_output,
+            reason=output_reason if not has_output else "Select a Source DICOM Folder"
         )
 
-        # fMRIPrep Only: needs BIDS data (sub-* + dataset_description.json)
+        # fMRIPrep Only: needs raw BIDS NIfTI data (not just any sub-* folder)
         self._set_button_enabled(
             self.btn_fmriprep_only, self.label_est_fmriprep, "fmriprep",
             enabled=has_bids_data,
-            reason="Source must contain BIDS data (sub-* folders)"
+            reason="Source must contain BIDS data (NIfTI files in sub-*/)"
         )
 
-        # Connectivity QC: needs fMRIPrep derivatives
+        # Connectivity QC: needs actual fMRIPrep confounds/results
         self._set_button_enabled(
             self.btn_connectivity_qc, self.label_est_conn, "conn",
-            enabled=has_derivatives,
-            reason="Source must contain fMRIPrep output (derivatives/)"
+            enabled=has_fmriprep_results,
+            reason="Source must contain fMRIPrep results (derivatives/)"
         )
 
         # Update time estimates for enabled buttons
