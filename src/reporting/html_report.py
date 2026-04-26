@@ -180,23 +180,11 @@ def _build_html(output_folder, qc_findings, motion_results,
     n_warnings = len(warnings) + len(motion_warns) + len(iqm_warns) + len(censor_warns) + len(conn_warns)
 
     if n_critical > 0:
-        banner_color = "#c0392b"
-        banner_bg = "#fdf0ef"
-        banner_icon = "&#x26A0;"
-        banner_title = f"{n_critical} error(s) detected"
-        banner_sub = f"{n_critical} error(s) and {n_warnings} warning(s) found. See details below."
+        accent_color = "#c0392b"
     elif n_warnings > 0:
-        banner_color = "#d68910"
-        banner_bg = "#fef9e7"
-        banner_icon = "&#x26A0;"
-        banner_title = f"{n_warnings} warning(s) detected"
-        banner_sub = "No errors found. See warning details below."
+        accent_color = "#d68910"
     else:
-        banner_color = "#1e8449"
-        banner_bg = "#eafaf1"
-        banner_icon = "&#x2714;"
-        banner_title = "NO ISSUES DETECTED"
-        banner_sub = "All checks passed with no errors or warnings."
+        accent_color = "#1e8449"
 
     subjects = _collect_subjects(
         conversion_successes, conversion_failures, qc_findings, motion_results,
@@ -206,10 +194,9 @@ def _build_html(output_folder, qc_findings, motion_results,
     now = datetime.now().strftime("%B %d, %Y at %I:%M %p")
 
     parts = [
-        _html_head(banner_color),
+        _html_head(accent_color),
         "<body>",
         _section_header(now, output_folder),
-        _banner(banner_color, banner_bg, banner_icon, banner_title, banner_sub),
         _section_summary_table(subjects, qc_findings, motion_results, iqm_results,
                                 censoring_results, connectivity_results),
     ]
@@ -277,7 +264,7 @@ def _html_head(accent_color: str) -> str:
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>fMRI Pipeline QC Report</title>
+<title>fMRI-Prep Full Pipeline Report</title>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -289,9 +276,12 @@ def _html_head(accent_color: str) -> str:
   table {{ width: 100%; border-collapse: collapse; font-size: 14px;
            background: #fff; border-radius: 8px; overflow: hidden;
            box-shadow: 0 1px 4px rgba(0,0,0,.08); margin-bottom: 24px; }}
-  th {{ background: #f0f2f5; text-align: left; padding: 10px 14px;
+  th {{ background: #f0f2f5; text-align: center; padding: 10px 14px;
         font-weight: 600; color: #555; }}
-  td {{ padding: 9px 14px; border-top: 1px solid #eee; vertical-align: top; }}
+  td {{ padding: 9px 14px; border-top: 1px solid #eee; vertical-align: middle;
+       text-align: center; }}
+  td:first-child, th:first-child {{ text-align: left; }}
+  .details-left {{ text-align: left; }}
   tr:hover td {{ background: #fafafa; }}
   .badge {{ display: inline-block; padding: 2px 9px; border-radius: 12px;
              font-size: 12px; font-weight: 700; white-space: nowrap; }}
@@ -300,6 +290,10 @@ def _html_head(accent_color: str) -> str:
   .badge-ok      {{ background: #d4edda; color: #155724; }}
   .badge-rescan  {{ background: #fdecea; color: #c0392b; }}
   .badge-failed  {{ background: #fdecea; color: #c0392b; }}
+  .badge-check {{ background: #d4edda; color: #155724; display: inline-block;
+                   padding: 2px 9px; border-radius: 12px; font-size: 14px;
+                   font-weight: 700; white-space: nowrap; }}
+  .th-hint {{ font-size: 10px; font-weight: 400; color: #999; letter-spacing: .01em; }}
   .action-box {{ background: #fff8e1; border-left: 3px solid #f39c12;
                   padding: 6px 10px; border-radius: 4px; margin-top: 4px;
                   font-size: 13px; color: #7d6608; }}
@@ -326,7 +320,8 @@ def _html_head(accent_color: str) -> str:
                           margin: 18px 0 8px; border-left: 3px solid #7986cb;
                           padding-left: 8px; }}
   .nilearn-section table {{ box-shadow: 0 1px 6px rgba(92,107,192,.15); }}
-  .nilearn-section th {{ background: #e8eaf6; color: #3949ab; }}
+  .nilearn-section th {{ background: #e8eaf6; color: #3949ab; text-align: center; }}
+  .nilearn-section .th-hint {{ color: #7986cb; }}
   .metric-ok    {{ font-weight: 700; color: #155724; }}
   .metric-warn  {{ font-weight: 700; color: #856404; }}
   .metric-error {{ font-weight: 700; color: #c0392b; }}
@@ -338,7 +333,7 @@ def _html_head(accent_color: str) -> str:
 def _section_header(now: str, output_folder: str) -> str:
     return f"""<div class="container">
 <div style="margin-bottom:24px;">
-  <div style="font-size:1.5rem;font-weight:800;color:#2c3e50;">fMRI Pipeline QC Report</div>
+  <div style="font-size:1.5rem;font-weight:800;color:#2c3e50;">fMRI-Prep Full Pipeline Report</div>
   <div class="meta">Generated: {now} &nbsp;|&nbsp; Output: {output_folder}</div>
 </div>"""
 
@@ -379,10 +374,12 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
     # Determine if connectivity QC was run
     has_connectivity = bool(censoring_results or connectivity_results)
 
+    _check = '<span class="badge-check">&#10003;</span>'
+
     rows = []
     for (sub_id, ses_id), info in sorted(subjects.items()):
         conv_badge = (
-            '<span class="badge badge-ok">Converted</span>'
+            _check
             if info["status"] == "converted"
             else '<span class="badge badge-failed">Failed</span>'
         )
@@ -393,25 +390,25 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
         elif any(f.severity.value == "WARNING" for f in sub_findings):
             qc_badge = '<span class="badge badge-warning">Warnings</span>'
         else:
-            qc_badge = '<span class="badge badge-ok">OK</span>'
+            qc_badge = _check
 
         sub_iqm = iqm_by_sub.get(sub_id, [])
         if any(r.worst_severity == "ERROR" for r in sub_iqm):
-            iqm_badge = '<span class="badge badge-error">IQM issues</span>'
+            iqm_badge = '<span class="badge badge-error">Issues found</span>'
         elif any(r.worst_severity == "WARNING" for r in sub_iqm):
-            iqm_badge = '<span class="badge badge-warning">IQM warnings</span>'
+            iqm_badge = '<span class="badge badge-warning">Warnings</span>'
         elif sub_iqm:
-            iqm_badge = '<span class="badge badge-ok">OK</span>'
+            iqm_badge = _check
         else:
             iqm_badge = '<span class="meta">—</span>'
 
         sub_motion = motion_by_sub.get((sub_id, ses_id), [])
         if any(m.flag == "RESCAN" for m in sub_motion):
-            motion_badge = '<span class="badge badge-rescan">High motion</span>'
+            motion_badge = '<span class="badge badge-rescan">Issues found</span>'
         elif any(m.flag == "WARNING" for m in sub_motion):
-            motion_badge = '<span class="badge badge-warning">Elevated motion</span>'
+            motion_badge = '<span class="badge badge-warning">Warnings</span>'
         elif sub_motion:
-            motion_badge = '<span class="badge badge-ok">OK</span>'
+            motion_badge = _check
         else:
             motion_badge = '<span class="meta">—</span>'
 
@@ -430,14 +427,14 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
             warn_conn = any(c.worst_severity == "WARNING" for c in sub_conn)
 
             if unsuitable_censor or error_conn:
-                conn_badge = '<span class="badge badge-error">Not suitable</span>'
+                conn_badge = '<span class="badge badge-error">Issues found</span>'
             elif warn_censor or warn_conn:
-                conn_badge = '<span class="badge badge-warning">Marginal</span>'
+                conn_badge = '<span class="badge badge-warning">Warnings</span>'
             elif sub_censor or sub_conn:
-                conn_badge = '<span class="badge badge-ok">Ready</span>'
+                conn_badge = _check
 
         row_content = (
-            f"<tr><td><b>sub-{sub_id}</b></td><td>ses-{ses_id}</td>"
+            f"<tr><td><b>sub-{sub_id}</b><br><span class='meta'>ses-{ses_id}</span></td>"
             f"<td>{conv_badge}</td><td>{qc_badge}</td>"
             f"<td>{iqm_badge}</td><td>{motion_badge}</td>"
         )
@@ -448,21 +445,16 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
         row_content += "</tr>"
         rows.append(row_content)
 
-    colspan = 7 if has_connectivity else 6
+    colspan = 6 if has_connectivity else 5
     rows_html = "\n".join(rows) if rows else f"<tr><td colspan='{colspan}'>No subjects found.</td></tr>"
 
     conn_header = "<th>Connectivity</th>" if has_connectivity else ""
 
-    return f"""<h2>Subject Overview</h2>
-<div class="section-explainer">
-  At-a-glance status for every subject and session that passed through the pipeline.
-  Each column corresponds to a quality-control stage; click any flagged badge in the
-  sections below for details.
-</div>
+    return f"""<h2>Overview</h2>
 <table>
   <thead><tr>
-    <th>Subject</th><th>Session</th>
-    <th>Conversion</th><th>Scan QC</th><th>MRIQC</th><th>Motion</th>{conn_header}
+    <th>Run</th>
+    <th>BIDS Conversion</th><th>Scan QC</th><th>MRIQC</th><th>Motion Analysis</th>{conn_header}
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -479,13 +471,13 @@ def _section_bids_findings(errors, warnings) -> str:
             f"<td><b>sub-{f.sub_id}</b><br><span class='meta'>ses-{f.ses_id}</span></td>"
             f"<td>{badge}</td>"
             f"<td><span class='meta'>{f.category.replace('_', ' ').title()}</span></td>"
-            f"<td><span class='plain-msg'>{f.plain_message}</span></td>"
+            f"<td class='details-left'><span class='plain-msg'>{f.plain_message}</span></td>"
             f"</tr>"
         )
     rows_html = "\n".join(rows)
 
     return f"""<hr class="sep">
-<h2>Scan Quality Findings</h2>
+<h2>Scan Quality</h2>
 <div class="section-explainer">
   Checks performed immediately after DICOM-to-BIDS conversion, before any preprocessing.
   They verify that the expected scan types are present (T1w anatomical, BOLD functional),
@@ -496,13 +488,14 @@ def _section_bids_findings(errors, warnings) -> str:
 </div>
 <table>
   <thead><tr>
-    <th>Subject</th><th>Severity</th><th>Category</th><th>Details</th>
+    <th>Subject</th><th>Status</th><th>Category</th><th>Details</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
 
 
 def _section_motion(motion_results) -> str:
+    _check = '<span class="badge-check">&#10003;</span>'
     rows = []
     for m in sorted(motion_results, key=lambda x: (x.sub_id, x.ses_id)):
         if m.flag == "RESCAN":
@@ -510,24 +503,23 @@ def _section_motion(motion_results) -> str:
         elif m.flag == "WARNING":
             badge = '<span class="badge badge-warning">WARNING</span>'
         else:
-            badge = '<span class="badge badge-ok">OK</span>'
+            badge = _check
 
         fd_bar = _fd_bar(m.pct_high_motion)
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{m.sub_id}</b><br><span class='meta'>ses-{m.ses_id}</span></td>"
-            f"<td><span class='meta'>{m.run_label}</span></td>"
+            f"<td><b>sub-{m.sub_id}</b><br>"
+            f"<span class='meta'>ses-{m.ses_id} / {m.run_label}</span></td>"
             f"<td>{badge}</td>"
-            f"<td style='text-align:center'>{m.mean_fd:.2f} mm</td>"
+            f"<td>{m.mean_fd:.2f} mm</td>"
             f"<td>{fd_bar}<br><span class='meta'>{m.pct_high_motion:.0f}% "
             f"({m.n_high_motion}/{m.n_frames} frames)</span></td>"
-            f"<td><span class='plain-msg'>{m.plain_message}</span></td>"
             f"</tr>"
         )
     rows_html = "\n".join(rows)
 
     return f"""<hr class="sep">
-<h2>Motion Analysis (fMRIPrep Confounds)</h2>
+<h2>Motion Analysis</h2>
 <div class="section-explainer">
   After preprocessing, <a href="https://fmriprep.org/" target="_blank"
   style="color:#5c6bc0;">fMRIPrep</a> outputs a confounds time-series file for every
@@ -546,8 +538,8 @@ def _section_motion(motion_results) -> str:
 </div>
 <table>
   <thead><tr>
-    <th>Subject</th><th>Run</th><th>Status</th>
-    <th>Mean FD</th><th>High-motion frames</th><th>Details</th>
+    <th>Run</th><th>Status</th>
+    <th>Mean FD<br><span class="th-hint">&#9888; &ge;0.5mm &nbsp; &#10007; &ge;1.0mm</span></th><th>High-motion frames<br><span class="th-hint">FD &gt;0.5mm &nbsp;|&nbsp; &#9888; &ge;10% &nbsp; &#10007; &ge;20%</span></th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -789,7 +781,7 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
                 f"<span class='meta'>({c.n_censored_02mm}/{c.n_volumes} vols @ 0.2mm)</span></td>"
                 f"<td>{c.usable_minutes_02mm:.1f} min<br>"
                 f"<span class='meta'>({c.usable_volumes_02mm} volumes)</span></td>"
-                f"<td style='font-size:12px'>{c.plain_message}</td>"
+                f"<td class='details-left' style='font-size:12px'>{c.plain_message}</td>"
                 f"</tr>"
             )
 
@@ -798,7 +790,7 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
 <table>
   <thead><tr>
     <th>Subject / Run</th><th>Status</th><th>Mean FD</th>
-    <th>Censored @ 0.2mm</th><th>Usable Time</th><th>Notes</th>
+    <th>Censored @ 0.2mm<br><span class="th-hint">&#10007; &gt;80% censored</span></th><th>Usable Time<br><span class="th-hint">&#10007; &lt;1 min remaining</span></th><th>Notes</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>""")
