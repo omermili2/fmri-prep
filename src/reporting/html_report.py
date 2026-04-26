@@ -94,28 +94,18 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
     n_warnings = len(iqm_warns) + len(bids_warnings)
 
     if n_critical > 0:
-        banner_color, banner_bg = "#c0392b", "#fdf0ef"
-        banner_icon = "&#x26A0;"
-        banner_title = f"{n_critical} critical issue(s) detected"
-        banner_sub = "One or more scans have metrics outside acceptable ranges. Review details below."
+        accent_color = "#c0392b"
     elif n_warnings > 0:
-        banner_color, banner_bg = "#d68910", "#fef9e7"
-        banner_icon = "&#x26A0;"
-        banner_title = f"{n_warnings} warning(s) detected"
-        banner_sub = "Some metrics are borderline. Review the details below."
+        accent_color = "#d68910"
     else:
-        banner_color, banner_bg = "#1e8449", "#eafaf1"
-        banner_icon = "&#x2714;"
-        banner_title = "ALL SCANS PASSED"
-        banner_sub = "No image quality issues detected across all scans."
+        accent_color = "#1e8449"
 
     now = datetime.now().strftime("%B %d, %Y at %I:%M %p")
 
     parts = [
-        _html_head(banner_color),
+        _html_head(accent_color),
         "<body>",
         _section_header_mriqc(now, mriqc_dir),
-        _banner(banner_color, banner_bg, banner_icon, banner_title, banner_sub),
     ]
 
     if bids_errors or bids_warnings:
@@ -142,7 +132,7 @@ def _section_header_mriqc(now: str, mriqc_dir: str) -> str:
     return f"""<div class="container">
 <div style="margin-bottom:24px;">
   <div style="font-size:1.5rem;font-weight:800;color:#2c3e50;">
-    MRIQC &#x2014; Early Image Quality Report
+    MRIQC - Image Quality Report
   </div>
   <div class="meta">Generated: {now} &nbsp;|&nbsp; MRIQC output: {mriqc_dir}</div>
   <div class="meta" style="margin-top:4px;">
@@ -326,6 +316,8 @@ def _html_head(accent_color: str) -> str:
   .metric-warn  {{ font-weight: 700; color: #856404; }}
   .metric-error {{ font-weight: 700; color: #c0392b; }}
   .metric-unknown {{ color: #888; }}
+  .metric-bubble {{ display: inline-block; padding: 2px 9px; border-radius: 12px;
+                    font-size: 12px; font-weight: 700; white-space: nowrap; }}
 </style>
 </head>"""
 
@@ -408,10 +400,10 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
         elif sub_motion:
             motion_badge = _check
         else:
-            motion_badge = '<span class="meta">—</span>'
+            motion_badge = '<span class="meta">-</span>'
 
         # Connectivity badge (if enabled)
-        conn_badge = '<span class="meta">—</span>'
+        conn_badge = '<span class="meta">-</span>'
         if has_connectivity:
             sub_censor = censoring_by_sub.get((sub_id, ses_id), [])
             sub_conn = connectivity_by_sub.get((sub_id, ses_id), [])
@@ -572,16 +564,12 @@ def _section_pipeline_failures(failures) -> str:
 
 
 def _section_mriqc(iqm_results, mriqc_reports) -> str:
-    group_reports = mriqc_reports.get("group_reports", [])
-    subject_reports = mriqc_reports.get("subject_reports", [])
+    try:
+        from mriqc.iqm_parser import METRIC_DISPLAY
+    except ImportError:
+        from ..mriqc.iqm_parser import METRIC_DISPLAY
 
-    group_links = ""
-    if group_reports:
-        links = " &nbsp;|&nbsp; ".join(
-            f'<a href="mriqc/{r["path"].name}" target="_blank">group_{r["scan_type"]}.html</a>'
-            for r in group_reports
-        )
-        group_links = f'<p style="margin-bottom:12px;">Group reports (open for outlier detection): {links}</p>'
+    _check = '<span class="badge-check">&#10003;</span>'
 
     rows = []
     sorted_results = sorted(
@@ -595,36 +583,20 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
         elif sev == "WARNING":
             badge = '<span class="badge badge-warning">WARNING</span>'
         else:
-            badge = '<span class="badge badge-ok">OK</span>'
+            badge = _check
 
-        # --- Visual report link: match by filename stem ---
-        iqm_stem = Path(r.scan_file).stem  # e.g. "sub-010_ses-01_T1w"
-        sub_html = next(
-            (
-                f'<a href="mriqc/sub-{r.sub_id}/{s["scan_type"]}/{s["filename"]}" '
-                f'target="_blank">{s["filename"]}</a>'
-                for s in subject_reports
-                if Path(s["filename"]).stem == iqm_stem
-            ),
-            r.scan_file,
-        )
-
-        # --- Flags column ---
-        flag_lines = (
-            "<br>".join(
-                f'<span class="badge {"badge-error" if fl.severity == "ERROR" else "badge-warning"}">'
-                f'{fl.severity}</span> {fl.metric_label}: {fl.value:.3f}'
-                for fl in r.flags
-            )
-            if r.flags else "<span class='meta'>No flags</span>"
-        )
-
-        # --- Color-coded metrics: show ALL, colored by severity ---
+        # --- Metrics column: colored bubbles, one per line ---
         flag_sev = {fl.metric: fl.severity for fl in r.flags}
-        metrics_str = " &nbsp; ".join(
-            _metric_span(f"{k}={v:.2f}", flag_sev.get(k, "OK"))
-            for k, v in r.metrics.items()
-        )
+        metric_lines = []
+        for k, v in r.metrics.items():
+            display_name = METRIC_DISPLAY.get(k, k)
+            severity = flag_sev.get(k, "OK")
+            css = {"OK": "badge-ok", "WARNING": "badge-warning",
+                   "ERROR": "badge-error"}.get(severity, "badge-ok")
+            metric_lines.append(
+                f'<span class="metric-bubble {css}">{display_name}: {v:.2f}</span>'
+            )
+        metrics_html = "<br>".join(metric_lines)
 
         # --- Scan column: subject, session, scan label ---
         scan_label = r.scan_label if hasattr(r, 'scan_label') else r.modality
@@ -634,51 +606,37 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
             f"<td><b>sub-{r.sub_id}</b>{ses_line}<br>"
             f"<span class='meta'>{scan_label}</span></td>"
             f"<td>{badge}</td>"
-            f"<td>{flag_lines}</td>"
-            f"<td style='font-size:12px'>{metrics_str}</td>"
-            f"<td style='font-size:12px'>{sub_html}</td>"
+            f"<td>{metrics_html}</td>"
             f"</tr>"
         )
     rows_html = "\n".join(rows)
 
     return f"""<hr class="sep">
-<h2>MRIQC &#x2014; Image Quality Metrics</h2>
+<h2>MRIQC - Image Quality Metrics</h2>
 <div class="section-explainer">
-  <a href="https://mriqc.readthedocs.io/" target="_blank" style="color:#5c6bc0;">MRIQC</a>
-  (MRI Quality Control) is a tool developed by the
-  <a href="https://www.nipreps.org/" target="_blank" style="color:#5c6bc0;">NiPreps</a>
-  community that computes <b>Image Quality Metrics (IQMs)</b> on unprocessed MRI data.
-  It produces per-scan visual reports and a set of numerical measures that help identify
-  problematic acquisitions <i>before</i> investing time in preprocessing.
-  <br><br>
   <b>Structural (T1w) metrics:</b>
-  <b>SNR</b> (signal-to-noise ratio in gray matter) quantifies overall image clarity;
-  <b>CNR</b> (contrast-to-noise ratio) measures the ability to distinguish gray from white matter;
-  <b>CJV</b> (coefficient of joint variation) detects tissue-intensity overlap caused by motion or
-  B1-field inhomogeneity;
-  <b>INU range</b> captures the severity of intensity non-uniformity (bias field);
-  <b>QI1</b> estimates the proportion of artifact-contaminated voxels in the air background.
-  <br><br>
+  <ul style="margin:4px 0 8px 18px;">
+    <li><b>SNR</b> - signal-to-noise ratio in gray matter; quantifies overall image clarity</li>
+    <li><b>CNR</b> - contrast-to-noise ratio; ability to distinguish gray from white matter</li>
+    <li><b>CJV</b> - coefficient of joint variation; detects tissue-intensity overlap from motion or B1-field inhomogeneity</li>
+    <li><b>INU range</b> - intensity non-uniformity (bias field) severity</li>
+    <li><b>QI1</b> - proportion of artifact-contaminated voxels in the air background</li>
+  </ul>
   <b>Functional (BOLD) metrics:</b>
-  <b>tSNR</b> (temporal signal-to-noise ratio) reflects the stability of the BOLD signal over time
-  &mdash; low tSNR means noisy time-series that reduce statistical power;
-  <b>FD mean</b> (mean framewise displacement) summarizes average head movement per volume;
-  <b>GSR</b> (ghost-to-signal ratio, X and Y) detects EPI ghosting artifacts along each
-  phase-encode direction;
-  <b>AOR</b> (AFNI outlier ratio) reports the fraction of volumes flagged as outliers.
-  <br><br>
-  Thresholds shown here are indicative &mdash; always open the MRIQC visual HTML reports
-  for the full picture (carpet plots, tissue segmentation overlays, and mosaic views).
-  <br><br>
+  <ul style="margin:4px 0 8px 18px;">
+    <li><b>tSNR</b> - temporal signal-to-noise ratio; stability of the BOLD signal over time</li>
+    <li><b>FD mean</b> - mean framewise displacement; average head movement per volume</li>
+    <li><b>GSR X / Y</b> - ghost-to-signal ratio; detects EPI ghosting artifacts per phase-encode direction</li>
+    <li><b>AOR</b> - AFNI outlier ratio; fraction of volumes flagged as outliers</li>
+  </ul>
   <b>Metric colors:</b>
-  <span class="metric-ok">green = within normal range</span>,
-  <span class="metric-warn">yellow = borderline</span>,
-  <span class="metric-error">red = outside acceptable range</span>.
+  <span class="badge badge-ok" style="font-size:11px;">Normal</span>
+  <span class="badge badge-warning" style="font-size:11px;">Borderline</span>
+  <span class="badge badge-error" style="font-size:11px;">Out of range</span>
 </div>
-{group_links}
 <table>
   <thead><tr>
-    <th>Scan</th><th>Status</th><th>Flags</th><th>Metrics</th><th>Visual Report</th>
+    <th>Scan</th><th>Status</th><th>Metrics</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -732,19 +690,19 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
 </div>
 <div class="nilearn-legend">
   <b>Metrics at a glance:</b><br>
-  &#9679; <b>Volume Censoring</b> &mdash;
+  &#9679; <b>Volume Censoring</b> -
   Identifies BOLD volumes where framewise displacement exceeds 0.2&nbsp;mm (a strict threshold
   appropriate for connectivity work) and reports the proportion of volumes that would be
   removed ("scrubbed"). If more than 80% of volumes are censored or less than 1&nbsp;minute of
   clean data remains, the run is <span class="metric-error">not suitable</span> for
   connectivity analysis.<br>
-  &#9679; <b>DM-FC</b> (Distance-dependent Motion &ndash; Functional Connectivity, split-based) &mdash;
+  &#9679; <b>DM-FC</b> (Distance-dependent Motion &ndash; Functional Connectivity, split-based) -
   Splits each run&rsquo;s timepoints into high-FD (&gt;0.2&nbsp;mm) and low-FD groups,
   computes separate connectivity matrices for each, and correlates the difference
   (high&minus;low) with inter-ROI Euclidean distance.
   A strong negative correlation means motion inflates short-range connections (bad);
   near-zero means denoising worked (good).
-  If either split has too few frames (&lt;20), the metric is skipped &mdash; this is treated
+  If either split has too few frames (&lt;20), the metric is skipped - this is treated
   as OK since it indicates a low-motion scan.
   <span class="metric-ok">|r|&lt;0.10 = acceptable</span>,
   <span class="metric-warn">0.10&ndash;0.20 = caution</span>,
@@ -811,10 +769,10 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
             elif getattr(c, 'dm_fc_note', ''):
                 dm_fc_str = f'<span class="metric-ok">{c.dm_fc_note}</span>'
             else:
-                dm_fc_str = '<span class="metric-unknown">&mdash;</span>'
+                dm_fc_str = '<span class="metric-unknown">-</span>'
             mod_str   = (_metric_span(f"{c.modularity_q:.3f}", c.modularity_severity)
                          if c.modularity_q is not None
-                         else '<span class="metric-unknown">&mdash;</span>')
+                         else '<span class="metric-unknown">-</span>')
 
             error_msg = ""
             if c.error_message:

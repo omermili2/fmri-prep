@@ -13,7 +13,7 @@ from .runner import (
     mriqc_preflight,
     get_docker_vm_resources,
 )
-from .iqm_parser import parse_all_subjects, IQMResult, IQMFlag
+from .iqm_parser import parse_all_subjects, IQMResult, IQMFlag, METRIC_DISPLAY
 
 __all__ = [
     "run_mriqc_participant",
@@ -24,4 +24,5 @@ __all__ = [
     "parse_all_subjects",
     "IQMResult",
     "IQMFlag",
+    "METRIC_DISPLAY",
 ]
