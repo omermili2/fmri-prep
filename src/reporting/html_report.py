@@ -451,7 +451,8 @@ def _section_bids_findings(errors, warnings) -> str:
     rows = []
     for f in sorted(all_findings, key=lambda x: (x.sub_id, x.ses_id)):
         sev_class = "badge-error" if f.severity.value == "ERROR" else "badge-warning"
-        badge = f'<span class="badge {sev_class}">{f.severity.value}</span>'
+        sev_label = "Error" if f.severity.value == "ERROR" else "Warning"
+        badge = f'<span class="badge {sev_class}">{sev_label}</span>'
         rows.append(
             f"<tr>"
             f"<td><b>sub-{f.sub_id}</b><br><span class='meta'>ses-{f.ses_id}</span></td>"
@@ -575,9 +576,9 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
     for r in sorted_results:
         sev = r.worst_severity
         if sev == "ERROR":
-            badge = '<span class="badge badge-error">ERROR</span>'
+            badge = '<span class="badge badge-error">Error</span>'
         elif sev == "WARNING":
-            badge = '<span class="badge badge-warning">WARNING</span>'
+            badge = '<span class="badge badge-warning">Warning</span>'
         else:
             badge = _check
 
