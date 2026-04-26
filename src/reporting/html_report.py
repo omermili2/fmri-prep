@@ -370,33 +370,29 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
 
     rows = []
     for (sub_id, ses_id), info in sorted(subjects.items()):
-        conv_badge = (
-            _check
-            if info["status"] == "converted"
-            else '<span class="badge badge-failed">Failed</span>'
-        )
-
         sub_findings = findings_by_sub.get((sub_id, ses_id), [])
-        if any(f.severity.value == "ERROR" for f in sub_findings):
-            qc_badge = '<span class="badge badge-error">Issues found</span>'
+        if info["status"] != "converted":
+            qc_badge = '<span class="badge badge-failed">Failed</span>'
+        elif any(f.severity.value == "ERROR" for f in sub_findings):
+            qc_badge = '<span class="badge badge-error">Error</span>'
         elif any(f.severity.value == "WARNING" for f in sub_findings):
-            qc_badge = '<span class="badge badge-warning">Warnings</span>'
+            qc_badge = '<span class="badge badge-warning">Warning</span>'
         else:
             qc_badge = _check
 
         sub_iqm = iqm_by_sub.get(sub_id, [])
         if any(r.worst_severity == "ERROR" for r in sub_iqm):
-            iqm_badge = '<span class="badge badge-error">Issues found</span>'
+            iqm_badge = '<span class="badge badge-error">Error</span>'
         elif any(r.worst_severity == "WARNING" for r in sub_iqm):
-            iqm_badge = '<span class="badge badge-warning">Warnings</span>'
+            iqm_badge = '<span class="badge badge-warning">Warning</span>'
         else:
             iqm_badge = _check
 
         sub_motion = motion_by_sub.get((sub_id, ses_id), [])
         if any(m.flag == "RESCAN" for m in sub_motion):
-            motion_badge = '<span class="badge badge-rescan">Issues found</span>'
+            motion_badge = '<span class="badge badge-rescan">Error</span>'
         elif any(m.flag == "WARNING" for m in sub_motion):
-            motion_badge = '<span class="badge badge-warning">Warnings</span>'
+            motion_badge = '<span class="badge badge-warning">Warning</span>'
         elif sub_motion:
             motion_badge = _check
         else:
@@ -417,15 +413,15 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
             warn_conn = any(c.worst_severity == "WARNING" for c in sub_conn)
 
             if unsuitable_censor or error_conn:
-                conn_badge = '<span class="badge badge-error">Issues found</span>'
+                conn_badge = '<span class="badge badge-error">Error</span>'
             elif warn_censor or warn_conn:
-                conn_badge = '<span class="badge badge-warning">Warnings</span>'
+                conn_badge = '<span class="badge badge-warning">Warning</span>'
             elif sub_censor or sub_conn:
                 conn_badge = _check
 
         row_content = (
             f"<tr><td><b>sub-{sub_id}</b><br><span class='meta'>ses-{ses_id}</span></td>"
-            f"<td>{conv_badge}</td><td>{qc_badge}</td>"
+            f"<td>{qc_badge}</td>"
             f"<td>{iqm_badge}</td><td>{motion_badge}</td>"
         )
 
@@ -435,7 +431,7 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
         row_content += "</tr>"
         rows.append(row_content)
 
-    colspan = 6 if has_connectivity else 5
+    colspan = 5 if has_connectivity else 4
     rows_html = "\n".join(rows) if rows else f"<tr><td colspan='{colspan}'>No subjects found.</td></tr>"
 
     conn_header = "<th>Connectivity</th>" if has_connectivity else ""
@@ -444,7 +440,7 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
 <table>
   <thead><tr>
     <th>Run</th>
-    <th>BIDS Conversion</th><th>Scan QC</th><th>MRIQC</th><th>Motion Analysis</th>{conn_header}
+    <th>Scan Quality</th><th>MRIQC</th><th>Motion Analysis</th>{conn_header}
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
