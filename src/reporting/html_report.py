@@ -397,10 +397,8 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
             iqm_badge = '<span class="badge badge-error">Issues found</span>'
         elif any(r.worst_severity == "WARNING" for r in sub_iqm):
             iqm_badge = '<span class="badge badge-warning">Warnings</span>'
-        elif sub_iqm:
-            iqm_badge = _check
         else:
-            iqm_badge = '<span class="meta">—</span>'
+            iqm_badge = _check
 
         sub_motion = motion_by_sub.get((sub_id, ses_id), [])
         if any(m.flag == "RESCAN" for m in sub_motion):
