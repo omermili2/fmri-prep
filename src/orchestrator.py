@@ -371,7 +371,8 @@ def process_bids_task(task, bids_dir, progress_tracker,
         qc_checker: BIDSQualityChecker instance
 
     Returns:
-        Tuple of (error_string_or_None, missing_bold: bool)
+        Tuple of (error_string_or_None, missing_bold: bool,
+                  excluded_bold: list of (nii_path, json_path) tuples)
     """
     sub_id = task['sub_id']
     ses_id = task['ses_id']
@@ -385,16 +386,24 @@ def process_bids_task(task, bids_dir, progress_tracker,
     progress_tracker.task_start(task_num)
 
     missing_bold = False
+    excluded_bold = []
 
-    success, duration, error_msg = run_bids_conversion(
+    success, duration, error_msg, bold_notes = run_bids_conversion(
         dicom_path, sub_id, ses_id, bids_dir, task_label, anonymize=anonymize
     )
 
     if success:
         report.add_success(sub_id, ses_id, duration)
 
+        # Collect BOLD files that should be hidden from fMRIPrep
+        from bids.converter import get_excluded_bold_paths
+        excluded_bold = get_excluded_bold_paths(bold_notes)
+
         # Layer 1: Run BIDS quality checks immediately after conversion
         if qc_checker is not None:
+            # Record BOLD fragment/duplicate findings from conversion
+            if bold_notes:
+                qc_checker.add_bold_notes(sub_id, ses_id, bold_notes)
             session_findings = qc_checker.check_session(bids_dir, sub_id, ses_id)
             n_errors = sum(1 for f in session_findings if f.severity.value == "ERROR")
             n_warnings = sum(1 for f in session_findings if f.severity.value == "WARNING")
@@ -428,10 +437,10 @@ def process_bids_task(task, bids_dir, progress_tracker,
         report.add_failure(sub_id, ses_id, error_msg, "BIDS Conversion")
         progress_tracker.increment()
         safe_print(f"[FAIL] {task_label} - BIDS conversion failed", flush=True)
-        return f"{task_label} (BIDS failed)", missing_bold
+        return f"{task_label} (BIDS failed)", missing_bold, []
 
     progress_tracker.increment()
-    return None, missing_bold
+    return None, missing_bold, excluded_bold
 
 
 def run_fmriprep_for_subject(sub_id, session_ids, bids_dir, derivatives_dir,
@@ -1145,6 +1154,10 @@ Examples:
     # Keyed by (sub_id, ses_id) — only sessions explicitly flagged are missing.
     sessions_missing_bold: set = set()
 
+    # BOLD files to temporarily hide from fMRIPrep (shorter duplicates).
+    # Collected during Phase 1 as a list of (nii_path, json_path) tuples.
+    fmriprep_exclude_pairs: list = []
+
     # ------------------------------------------------------------------
     # Phase 1: BIDS conversion + QC  (parallel per session)
     # ------------------------------------------------------------------
@@ -1163,11 +1176,12 @@ Examples:
                 task = futures[future]
                 sub_id = task['sub_id']
                 try:
-                    error, missing_bold = future.result()
+                    error, missing_bold, excluded_bold = future.result()
                     if error:
                         errors.append(error)
                     if missing_bold:
                         sessions_missing_bold.add((sub_id, task['ses_id']))
+                    fmriprep_exclude_pairs.extend(excluded_bold)
                 except Exception as e:
                     error_msg = f"sub-{task['sub_id']}/ses-{task['ses_id']} (Unexpected error: {e})"
                     errors.append(error_msg)
@@ -1381,31 +1395,54 @@ Examples:
             safe_print(f"\n=== Phase 3: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
             safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
 
-            fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
-            with ThreadPoolExecutor(max_workers=fmriprep_workers) as executor:
-                futures = {
-                    executor.submit(
-                        run_fmriprep_for_subject,
-                        sub_id, session_ids, bids_dir, derivatives_dir,
-                        fmriprep_script, fmriprep_opts, report, debug_log_file
-                    ): sub_id for sub_id, session_ids in fmriprep_subjects
-                }
+            # Temporarily hide shorter duplicate BOLD runs so fMRIPrep
+            # only processes the longest run per task.
+            renamed_bold = []
+            if fmriprep_exclude_pairs:
+                from bids.converter import hide_excluded_bold
+                renamed_bold = hide_excluded_bold(fmriprep_exclude_pairs)
+                if renamed_bold:
+                    safe_print(
+                        f"  Hidden {len(renamed_bold)} duplicate BOLD file(s) "
+                        f"from fMRIPrep",
+                        flush=True,
+                    )
 
-                for future in as_completed(futures):
-                    sub_id = futures[future]
-                    try:
-                        error = future.result()
-                        if error:
-                            errors.append(error)
-                    except Exception as e:
-                        error_msg = f"sub-{sub_id} (Unexpected fMRIPrep error: {e})"
-                        errors.append(error_msg)
-                        for t in subjects_tasks[sub_id]:
-                            report.add_failure(sub_id, t['ses_id'], str(e), "fMRIPrep")
-                        safe_print(
-                            f"[FAIL] Unexpected error for sub-{sub_id}: {e}",
-                            flush=True,
-                        )
+            fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
+            try:
+                with ThreadPoolExecutor(max_workers=fmriprep_workers) as executor:
+                    futures = {
+                        executor.submit(
+                            run_fmriprep_for_subject,
+                            sub_id, session_ids, bids_dir, derivatives_dir,
+                            fmriprep_script, fmriprep_opts, report, debug_log_file
+                        ): sub_id for sub_id, session_ids in fmriprep_subjects
+                    }
+
+                    for future in as_completed(futures):
+                        sub_id = futures[future]
+                        try:
+                            error = future.result()
+                            if error:
+                                errors.append(error)
+                        except Exception as e:
+                            error_msg = f"sub-{sub_id} (Unexpected fMRIPrep error: {e})"
+                            errors.append(error_msg)
+                            for t in subjects_tasks[sub_id]:
+                                report.add_failure(sub_id, t['ses_id'], str(e), "fMRIPrep")
+                            safe_print(
+                                f"[FAIL] Unexpected error for sub-{sub_id}: {e}",
+                                flush=True,
+                            )
+            finally:
+                # Always restore hidden files, even if fMRIPrep fails
+                if renamed_bold:
+                    from bids.converter import restore_excluded_bold
+                    restore_excluded_bold(renamed_bold)
+                    safe_print(
+                        f"  Restored {len(renamed_bold)} hidden BOLD file(s)",
+                        flush=True,
+                    )
 
     safe_print(f"[PROGRESS:COMPLETE]", flush=True)
     

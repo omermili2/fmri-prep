@@ -81,7 +81,7 @@ def run_bids_conversion(
             duration = (datetime.now() - start_time).total_seconds()
             error_msg = result.stderr[:300] if result.stderr else "dcm2niix failed"
             safe_print(f"[{task_label}] dcm2niix error: {error_msg[:100]}", flush=True)
-            return False, duration, error_msg
+            return False, duration, error_msg, []
         
         # Log dcm2niix output for debugging
         if result.stdout:
@@ -90,60 +90,65 @@ def run_bids_conversion(
             safe_print(f"[{task_label}] dcm2niix converted {converted_count} series", flush=True)
         
         # Now organize converted files into BIDS structure
-        organized = _organize_to_bids(temp_dir, bids_path, sub_id, ses_id)
-        
+        organized, bold_notes = _organize_to_bids(temp_dir, bids_path, sub_id, ses_id)
+
         # Clean up temp directory
         shutil.rmtree(temp_dir, ignore_errors=True)
-        
+
         duration = (datetime.now() - start_time).total_seconds()
-        
+
         if organized > 0:
             safe_print(f"[OK] {task_label} - BIDS completed ({organized} files, {duration:.1f}s)", flush=True)
-            return True, duration, None
+            return True, duration, None, bold_notes
         else:
             error_msg = "No files were organized into BIDS structure"
             safe_print(f"[WARN] {task_label} - {error_msg}", flush=True)
-            return False, duration, error_msg
+            return False, duration, error_msg, bold_notes
             
     except subprocess.TimeoutExpired:
         duration = (datetime.now() - start_time).total_seconds()
         error_msg = f"Conversion timed out after {timeout // 60} minutes"
         safe_print(f"[FAIL] {task_label} - dcm2niix timed out", flush=True)
-        return False, duration, error_msg
-        
+        return False, duration, error_msg, []
+
     except FileNotFoundError:
         duration = (datetime.now() - start_time).total_seconds()
         error_msg = "dcm2niix not found. Please ensure dcm2niix is installed and in PATH"
         safe_print(f"[FAIL] {task_label} - dcm2niix not found", flush=True)
-        return False, duration, error_msg
-        
+        return False, duration, error_msg, []
+
     except Exception as e:
         duration = (datetime.now() - start_time).total_seconds()
         safe_print(f"[FAIL] {task_label} - dcm2niix conversion failed: {e}", flush=True)
-        return False, duration, str(e)
+        return False, duration, str(e), []
 
 
 def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
     """
     Organize dcm2niix output into BIDS structure based on JSON metadata.
-    
+
     Reads each JSON sidecar to determine modality and organizes files accordingly.
-    
+    BOLD scans with fewer than _MIN_BOLD_VOLUMES timepoints are dropped as
+    dcm2niix split artifacts.
+
     Returns:
-        Number of files organized
+        Tuple of (files_organized: int, bold_notes: list[dict])
+        Each bold_note is {"action": "dropped"|"kept", "task": str,
+                           "file": str, "volumes": int, "series_desc": str}
     """
     temp_path = Path(temp_dir)
     bids_path = Path(bids_dir)
     organized_count = 0
     skipped_count = 0
-    
+    bold_notes = []
+
     # Track run numbers for each task
     run_counters = {}
-    
+
     # Find all JSON files
     json_files = sorted(temp_path.glob("*.json"))
     safe_print(f"  Found {len(json_files)} JSON sidecar files to process", flush=True)
-    
+
     for json_file in json_files:
         nii_file = json_file.with_suffix('.nii.gz')
         if not nii_file.exists():
@@ -151,20 +156,20 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
             if not nii_file.exists():
                 safe_print(f"  Skipping {json_file.name}: no matching NIfTI file", flush=True)
                 continue
-        
+
         try:
             with open(json_file, 'r', encoding='utf-8') as f:
                 metadata = json.load(f)
         except Exception as e:
             safe_print(f"  Skipping {json_file.name}: failed to read JSON - {e}", flush=True)
             continue
-        
+
         # Determine modality from metadata
         series_desc = metadata.get("SeriesDescription", "").lower()
-        
+
         # Try to auto-fill missing PhaseEncodingDirection for fieldmap EPIs
         _infer_phase_encoding_direction(metadata, series_desc, json_file.name)
-        
+
         modality_info = _classify_scan(metadata, series_desc)
 
         # Fallback: detect BOLD by NIfTI volume count when keywords fail
@@ -175,30 +180,66 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
             skipped_count += 1
             safe_print(f"  Unrecognized: {metadata.get('SeriesDescription', 'NO_DESC')} ({json_file.name})", flush=True)
             continue
-        
+
         datatype, suffix, entities = modality_info
-        
+
+        # --- Drop BOLD fragments with too few volumes ---
+        n_vols = None
+        if datatype == "func":
+            n_vols = _get_nifti_volumes(nii_file)
+            if n_vols is not None and n_vols < _MIN_BOLD_VOLUMES:
+                task_match = re.search(r'task-(\w+)', entities)
+                task_name = task_match.group(1) if task_match else "unknown"
+                bold_notes.append({
+                    "action": "dropped",
+                    "task": task_name,
+                    "file": json_file.stem,
+                    "volumes": n_vols,
+                    "series_desc": metadata.get("SeriesDescription", ""),
+                })
+                safe_print(
+                    f"  Dropped BOLD fragment ({n_vols} vols < {_MIN_BOLD_VOLUMES}): "
+                    f"{metadata.get('SeriesDescription', 'N/A')} ({json_file.name})",
+                    flush=True,
+                )
+                skipped_count += 1
+                continue
+
         # Handle run numbering for BOLD scans
         if datatype == "func" and "task-" in entities:
             task_key = f"{datatype}_{entities}"
             run_counters[task_key] = run_counters.get(task_key, 0) + 1
             run_num = run_counters[task_key]
             entities = f"{entities}_run-{run_num:02d}"
-        
+
         # Create output directory
         out_dir = bids_path / f"sub-{sub_id}" / f"ses-{ses_id}" / datatype
         out_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # Create BIDS filename
         bids_name = f"sub-{sub_id}_ses-{ses_id}"
         if entities:
             bids_name += f"_{entities}"
         bids_name += f"_{suffix}"
-        
+
         # Copy files
         out_nii = out_dir / f"{bids_name}.nii.gz"
         out_json = out_dir / f"{bids_name}.json"
-        
+
+        # Record kept BOLD with its BIDS output path
+        if datatype == "func" and n_vols is not None:
+            task_match = re.search(r'task-(\w+)', entities)
+            task_name = task_match.group(1) if task_match else "unknown"
+            bold_notes.append({
+                "action": "kept",
+                "task": task_name,
+                "file": json_file.stem,
+                "volumes": n_vols,
+                "series_desc": metadata.get("SeriesDescription", ""),
+                "bids_nii_path": str(out_nii),
+                "bids_json_path": str(out_json),
+            })
+
         shutil.copy2(nii_file, out_nii)
 
         # Repair NIfTI headers with sform_code/qform_code == 0.
@@ -233,8 +274,41 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
     
     if skipped_count > 0:
         safe_print(f"  Warning: {skipped_count} scans were not recognized and skipped", flush=True)
-    
-    return organized_count
+
+    # --- Post-processing: mark shorter duplicate BOLD runs for fMRIPrep exclusion ---
+    # When the same task has multiple runs in a session (e.g. aborted + re-run),
+    # exclude the shorter run from fMRIPrep but keep it in the BIDS directory.
+    kept = [n for n in bold_notes if n["action"] == "kept"]
+    from collections import Counter
+    task_counts = Counter(n["task"] for n in kept)
+    for task_name, count in task_counts.items():
+        if count <= 1:
+            continue
+        task_runs = [n for n in kept if n["task"] == task_name]
+        longest = max(task_runs, key=lambda n: n["volumes"])
+        for run in task_runs:
+            if run is not longest:
+                run["action"] = "kept_excluded"
+                safe_print(
+                    f"  Excluding shorter duplicate from fMRIPrep: "
+                    f"task-{task_name} ({run['volumes']} vols) — "
+                    f"keeping {longest['volumes']} vols",
+                    flush=True,
+                )
+
+    # Log summary of BOLD disposition
+    dropped = [n for n in bold_notes if n["action"] == "dropped"]
+    excluded = [n for n in bold_notes if n["action"] == "kept_excluded"]
+    final_kept = [n for n in bold_notes if n["action"] == "kept"]
+    parts = [f"{len(final_kept)} run(s) kept"]
+    if excluded:
+        parts.append(f"{len(excluded)} duplicate(s) excluded from fMRIPrep")
+    if dropped:
+        parts.append(f"{len(dropped)} fragment(s) dropped")
+    if excluded or dropped:
+        safe_print(f"  BOLD summary: {', '.join(parts)}", flush=True)
+
+    return organized_count, bold_notes
 
 
 def _classify_scan(metadata, series_desc):
@@ -300,6 +374,19 @@ def _classify_scan(metadata, series_desc):
     if "flair" in series_desc or "dark_fluid" in series_desc:
         return ("anat", "FLAIR", "")
     
+    # Check for diffusion BEFORE fieldmaps — DWI series may contain "ap"/"pa"
+    # in their SeriesDescription (e.g. "dwi_AP") and must not be misclassified
+    # as fieldmap EPIs.
+    _DIFFUSION_KEYS = (
+        "bValue", "bValues", "bval",
+        "DiffusionGradientOrientation",
+        "DiffusionBValue", "DiffusionDirection",
+    )
+    is_diffusion = any(x in series_desc for x in ["dwi", "dti", "diffusion", "hardi"])
+    has_diffusion_meta = any(k in metadata for k in _DIFFUSION_KEYS)
+    if is_diffusion or has_diffusion_meta:
+        return ("dwi", "dwi", "")
+
     # Check for fieldmaps
     phase_dir = metadata.get("PhaseEncodingDirection", "")
     if any(x in series_desc for x in ["ap", "pa", "se_epi", "spinecho", "topup", "distortion"]):
@@ -310,10 +397,6 @@ def _classify_scan(metadata, series_desc):
         return ("fmap", "epi", "")
     if "fieldmap" in series_desc or "gre_field" in series_desc:
         return ("fmap", "phasediff", "")
-    
-    # Check for diffusion
-    if any(x in series_desc for x in ["dwi", "dti", "diffusion", "hardi"]):
-        return ("dwi", "dwi", "")
     
     # Check for perfusion
     if any(x in series_desc for x in ["asl", "pcasl", "pasl"]):
@@ -333,6 +416,16 @@ def _classify_scan(metadata, series_desc):
 # Multi-echo anatomicals have < 10.  A threshold of 50 avoids all non-BOLD
 # 4-D data while catching even short BOLD runs.
 _MIN_BOLD_VOLUMES = 50
+
+
+def _get_nifti_volumes(nii_path):
+    """Return number of volumes (4th dimension) from a NIfTI file, or None."""
+    try:
+        import nibabel as nib
+        shape = nib.load(str(nii_path)).shape
+        return shape[3] if len(shape) >= 4 else 1
+    except Exception:
+        return None
 
 
 def _classify_bold_by_volume(nii_path, metadata):
@@ -525,3 +618,57 @@ def create_dataset_description(bids_dir, name="fMRI Pipeline Output"):
         return True
     except Exception:
         return False
+
+
+# -- fMRIPrep BOLD exclusion helpers ------------------------------------------
+
+_EXCLUDE_SUFFIX = "._excluded_from_fmriprep"
+
+
+def get_excluded_bold_paths(bold_notes):
+    """Extract BIDS NIfTI+JSON paths that should be hidden from fMRIPrep.
+
+    Args:
+        bold_notes: List of bold_note dicts from ``_organize_to_bids()``.
+
+    Returns:
+        List of (nii_path, json_path) tuples.
+    """
+    pairs = []
+    for n in bold_notes:
+        if n.get("action") == "kept_excluded":
+            nii = n.get("bids_nii_path")
+            jsn = n.get("bids_json_path")
+            if nii:
+                pairs.append((nii, jsn))
+    return pairs
+
+
+def hide_excluded_bold(pairs):
+    """Temporarily rename excluded BOLD files so pybids/fMRIPrep won't see them.
+
+    Renames each file by appending ``._excluded_from_fmriprep``.
+    Returns the list of (original, renamed) tuples for later restoration.
+    """
+    renamed = []
+    for nii, jsn in pairs:
+        for p in (nii, jsn):
+            if p is None:
+                continue
+            src = Path(p)
+            if src.exists():
+                dst = src.with_name(src.name + _EXCLUDE_SUFFIX)
+                src.rename(dst)
+                renamed.append((str(dst), str(src)))
+    return renamed
+
+
+def restore_excluded_bold(renamed):
+    """Restore files hidden by :func:`hide_excluded_bold`.
+
+    ``renamed`` is the list returned by ``hide_excluded_bold``.
+    """
+    for hidden, original in renamed:
+        src = Path(hidden)
+        if src.exists():
+            src.rename(Path(original))

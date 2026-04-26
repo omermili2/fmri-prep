@@ -105,6 +105,79 @@ class BIDSQualityChecker:
     def has_critical_issues(self) -> bool:
         return bool(self.get_errors())
 
+    def add_bold_notes(
+        self, sub_id: str, ses_id: str, bold_notes: list
+    ) -> List[QCFinding]:
+        """
+        Create QC findings from BOLD conversion notes (dropped fragments,
+        duplicate runs kept).
+
+        ``bold_notes`` is a list of dicts produced by ``_organize_to_bids()``:
+            {"action": "dropped"|"kept", "task": str,
+             "file": str, "volumes": int, "series_desc": str}
+        """
+        new_findings: List[QCFinding] = []
+        if not bold_notes:
+            return new_findings
+
+        dropped = [n for n in bold_notes if n["action"] == "dropped"]
+        excluded = [n for n in bold_notes if n["action"] == "kept_excluded"]
+        kept = [n for n in bold_notes if n["action"] == "kept"]
+
+        # --- Report each dropped fragment ---
+        for d in dropped:
+            new_findings.append(
+                QCFinding(
+                    severity=Severity.WARNING,
+                    sub_id=sub_id,
+                    ses_id=ses_id,
+                    category="bold_fragment_dropped",
+                    message=(
+                        f"Dropped BOLD fragment: task-{d['task']} "
+                        f"({d['volumes']} volumes, series: {d['series_desc']})"
+                    ),
+                    plain_message=(
+                        f"A BOLD fragment with only {d['volumes']} volume(s) "
+                        f"(task-{d['task']}, series '{d['series_desc']}') "
+                        f"was detected and excluded from preprocessing. "
+                        f"This is typically a dcm2niix split artifact."
+                    ),
+                    action="",
+                )
+            )
+
+        # --- Report shorter duplicate runs excluded from fMRIPrep ---
+        for exc in excluded:
+            # Find the kept run for the same task
+            same_task_kept = [n for n in kept if n["task"] == exc["task"]]
+            kept_vols = same_task_kept[0]["volumes"] if same_task_kept else "?"
+            new_findings.append(
+                QCFinding(
+                    severity=Severity.WARNING,
+                    sub_id=sub_id,
+                    ses_id=ses_id,
+                    category="duplicate_bold_run",
+                    message=(
+                        f"task-{exc['task']}: shorter run ({exc['volumes']} vols) "
+                        f"excluded from fMRIPrep, longer run ({kept_vols} vols) kept"
+                    ),
+                    plain_message=(
+                        f"Multiple BOLD runs found for task-{exc['task']}. "
+                        f"The shorter run ({exc['volumes']} vols) was excluded "
+                        f"from fMRIPrep preprocessing; the longer run "
+                        f"({kept_vols} vols) was kept. Both files remain in "
+                        f"the BIDS directory."
+                    ),
+                    action="",
+                )
+            )
+
+        if new_findings:
+            with self._lock:
+                self.findings.extend(new_findings)
+
+        return new_findings
+
     def check_run_consistency(
         self, bids_dir, subjects_tasks: Dict
     ) -> List[QCFinding]:
