@@ -1132,31 +1132,78 @@ Examples:
                     )
 
     # ------------------------------------------------------------------
-    # Phase 2: MRIQC  (once per subject, parallel across subjects)
+    # Phase 2: MRIQC  (parallel per session — each session gets its own
+    #                   Docker container so sessions run concurrently)
     # ------------------------------------------------------------------
     if run_mriqc and mriqc_dir is not None:
-        mriqc_subjects = list(subjects_tasks.keys())
-        safe_print(f"\n=== Phase 2: MRIQC ({len(mriqc_subjects)} subject(s)) ===", flush=True)
+        # Build (subject, session) pairs for per-session parallelism
+        mriqc_tasks = []
+        for sub_id, sub_tasks in subjects_tasks.items():
+            seen_sessions = set()
+            for t in sub_tasks:
+                ses_id = t['ses_id']
+                if ses_id not in seen_sessions:
+                    seen_sessions.add(ses_id)
+                    mriqc_tasks.append((sub_id, ses_id))
 
-        mriqc_workers = min(args.parallel, len(mriqc_subjects))
+        safe_print(
+            f"\n=== Phase 2: MRIQC ({len(mriqc_tasks)} session(s) across "
+            f"{len(subjects_tasks)} subject(s)) ===",
+            flush=True,
+        )
+
+        # Dynamic resource allocation: divide available resources among
+        # concurrent MRIQC containers so they don't starve each other.
+        cpu_count = multiprocessing.cpu_count()
+        mriqc_workers = min(args.parallel, len(mriqc_tasks))
+        nprocs_per = max(cpu_count // max(mriqc_workers, 1), 1)
+        # Estimate available memory (fallback to 16 GB if detection fails)
+        try:
+            if sys.platform == "darwin":
+                import ctypes, ctypes.util
+                libc = ctypes.CDLL(ctypes.util.find_library("c"))
+                mem = ctypes.c_int64(0)
+                size = ctypes.c_size_t(ctypes.sizeof(mem))
+                # hw.memsize returns total physical RAM in bytes
+                libc.sysctlbyname(b"hw.memsize", ctypes.byref(mem), ctypes.byref(size), None, 0)
+                total_mem_gb = mem.value / (1024 ** 3)
+            else:
+                total_mem_gb = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
+        except Exception:
+            total_mem_gb = 16
+        # Reserve ~20% for the OS, split the rest among containers
+        usable_mem_gb = total_mem_gb * 0.8
+        mem_per = max(int(usable_mem_gb // max(mriqc_workers, 1)), 4)
+
+        safe_print(
+            f"  Resources per container: {nprocs_per} CPUs, {mem_per} GB RAM "
+            f"({mriqc_workers} parallel containers)",
+            flush=True,
+        )
+
         with ThreadPoolExecutor(max_workers=mriqc_workers) as executor:
             futures = {
                 executor.submit(
-                    mriqc_runner.run_mriqc_participant, bids_dir, mriqc_dir, sub_id
-                ): sub_id for sub_id in mriqc_subjects
+                    mriqc_runner.run_mriqc_participant,
+                    bids_dir, mriqc_dir, sub_id,
+                    session_id=ses_id,
+                    nprocs=nprocs_per,
+                    mem_gb=mem_per,
+                ): (sub_id, ses_id) for sub_id, ses_id in mriqc_tasks
             }
             for future in as_completed(futures):
-                sub_id = futures[future]
+                sub_id, ses_id = futures[future]
+                label = f"sub-{sub_id}/ses-{ses_id}"
                 try:
                     ok, err = future.result()
                     if ok:
-                        safe_print(f"[MRIQC] sub-{sub_id} - done", flush=True)
+                        safe_print(f"[MRIQC] {label} - done", flush=True)
                     else:
-                        safe_print(f"[MRIQC] sub-{sub_id} - warning: {err[:120]}", flush=True)
-                        report.add_warning(f"MRIQC failed for sub-{sub_id}: {err[:120]}")
+                        safe_print(f"[MRIQC] {label} - warning: {err[:120]}", flush=True)
+                        report.add_warning(f"MRIQC failed for {label}: {err[:120]}")
                 except Exception as e:
-                    safe_print(f"[MRIQC] sub-{sub_id} - error: {e}", flush=True)
-                    report.add_warning(f"MRIQC error for sub-{sub_id}: {e}")
+                    safe_print(f"[MRIQC] {label} - error: {e}", flush=True)
+                    report.add_warning(f"MRIQC error for {label}: {e}")
 
     # ------------------------------------------------------------------
     # Early MRIQC report — available before fMRIPrep starts

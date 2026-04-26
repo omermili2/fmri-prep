@@ -183,19 +183,23 @@ def run_mriqc_participant(
     bids_dir,
     mriqc_output_dir,
     participant_label: str,
+    session_id: str = None,
     nprocs: int = 4,
     mem_gb: int = 16,
     modalities=None,
 ):
     """
-    Run MRIQC at the participant level for one subject.
+    Run MRIQC at the participant level for one subject (optionally one session).
 
-    Produces HTML visual reports and JSON IQM files for all scans of this subject.
+    Produces HTML visual reports and JSON IQM files for the scans of this
+    subject/session.
 
     Args:
         bids_dir:          Path to BIDS dataset
         mriqc_output_dir:  MRIQC output directory (e.g. output_folder/mriqc)
         participant_label: Subject ID WITHOUT 'sub-' prefix  (e.g. '001')
+        session_id:        Session ID WITHOUT 'ses-' prefix  (e.g. '01').
+                           None = process all sessions for this subject.
         nprocs:            CPU cores (default: 4)
         mem_gb:            Memory limit in GB (default: 16)
         modalities:        e.g. ['T1w', 'bold'] — None means auto-detect
@@ -209,7 +213,13 @@ def run_mriqc_participant(
     bids_dir = Path(bids_dir).resolve()
     mriqc_output_dir = Path(mriqc_output_dir).resolve()
     mriqc_output_dir.mkdir(parents=True, exist_ok=True)
-    work_dir = mriqc_output_dir / "work"
+
+    # Use per-session work dirs to avoid file collisions between parallel
+    # containers writing to the same MRIQC work tree.
+    if session_id:
+        work_dir = mriqc_output_dir / "work" / f"sub-{participant_label}_ses-{session_id}"
+    else:
+        work_dir = mriqc_output_dir / "work" / f"sub-{participant_label}"
     work_dir.mkdir(parents=True, exist_ok=True)
 
     bids_mount = to_docker_path(bids_dir)
@@ -242,10 +252,16 @@ def run_mriqc_participant(
         "--float32",
     ])
 
+    if session_id:
+        docker_cmd.extend(["--session-id", session_id])
+
     if modalities:
         docker_cmd.extend(["--modalities"] + modalities)
 
-    print(f"Starting MRIQC (participant) for sub-{participant_label}")
+    label = f"sub-{participant_label}"
+    if session_id:
+        label += f"/ses-{session_id}"
+    print(f"Starting MRIQC (participant) for {label}")
 
     try:
         result = subprocess.run(
@@ -255,10 +271,10 @@ def run_mriqc_participant(
         )
 
         if result.stdout:
-            print("--- MRIQC stdout ---")
+            print(f"--- MRIQC stdout ({label}) ---")
             print(result.stdout[-3000:])
         if result.stderr:
-            print("--- MRIQC stderr ---")
+            print(f"--- MRIQC stderr ({label}) ---")
             print(result.stderr[-2000:])
 
         if result.returncode == 0:
