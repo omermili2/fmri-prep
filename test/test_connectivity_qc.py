@@ -3,7 +3,7 @@
 Tests for Connectivity QC implementation.
 
 Verifies that all required modules are importable and functional,
-and that the QC-FC removal / DM-FC split overhaul is correct.
+and that the load_confounds_strategy-based approach is correctly wired.
 """
 
 import pytest
@@ -46,10 +46,10 @@ class TestConnectivityQcModules:
         from qc import connectivity_thresholds
         assert connectivity_thresholds
 
-    def test_volume_censoring_import(self):
-        """Test that volume_censoring module is importable."""
-        from qc import volume_censoring
-        assert volume_censoring
+    def test_volume_censoring_removed(self):
+        """Test that volume_censoring module no longer exists."""
+        with pytest.raises(ImportError):
+            from qc import volume_censoring  # noqa: F401
 
     def test_connectivity_qc_import(self):
         """Test that connectivity_qc module is importable."""
@@ -81,42 +81,57 @@ class TestConnectivityThresholds:
         from qc import connectivity_thresholds as thresh
         assert thresh.MIN_USABLE_MINUTES_FAIL == 1.0
 
-    def test_qc_fc_constants_removed(self):
-        """Confirm QC_FC_WARN and QC_FC_FAIL no longer exist."""
+    def test_old_constants_removed(self):
+        """Confirm DM-FC, modularity, and CENSORING_FD constants no longer exist."""
         from qc import connectivity_thresholds as thresh
         assert not hasattr(thresh, "QC_FC_WARN")
         assert not hasattr(thresh, "QC_FC_FAIL")
+        assert not hasattr(thresh, "DM_FC_WARN")
+        assert not hasattr(thresh, "DM_FC_FAIL")
+        assert not hasattr(thresh, "DM_FC_FD_SPLIT")
+        assert not hasattr(thresh, "DM_FC_MIN_FRAMES")
+        assert not hasattr(thresh, "MIN_MODULARITY_WARN")
+        assert not hasattr(thresh, "MIN_MODULARITY_FAIL")
+        assert not hasattr(thresh, "CENSORING_FD_THRESHOLD")
+        assert not hasattr(thresh, "DEFAULT_TR")
 
-    def test_dm_fc_fd_split(self):
-        """Test new DM_FC_FD_SPLIT constant."""
+    def test_loss_dof_warn(self):
+        """Test new LOSS_DOF_WARN constant."""
         from qc import connectivity_thresholds as thresh
-        assert thresh.DM_FC_FD_SPLIT == 0.2
-
-    def test_dm_fc_min_frames(self):
-        """Test new DM_FC_MIN_FRAMES constant."""
-        from qc import connectivity_thresholds as thresh
-        assert thresh.DM_FC_MIN_FRAMES == 20
-
-    def test_dm_fc_warn_updated(self):
-        """Test DM-FC thresholds updated for split-based metric."""
-        from qc import connectivity_thresholds as thresh
-        assert thresh.DM_FC_WARN == 0.10
-
-    def test_dm_fc_fail_updated(self):
-        from qc import connectivity_thresholds as thresh
-        assert thresh.DM_FC_FAIL == 0.20
+        assert thresh.LOSS_DOF_WARN == 0.60
 
 
 class TestDataclassFields:
     """Test that ConnectivityQCResult has the correct fields."""
 
-    def test_no_qc_fc_fields(self):
-        """Confirm dataclass has no qc_fc_* fields."""
+    def test_new_fields_present(self):
+        """Confirm dataclass has the new per-run metric fields."""
         from qc.connectivity_qc import ConnectivityQCResult
         r = ConnectivityQCResult(
             sub_id="01", ses_id="01", run_label="task-rest",
-            mean_fd=0.1, n_volumes=200
         )
+        assert hasattr(r, "total_volumes")
+        assert hasattr(r, "censored_volumes")
+        assert hasattr(r, "pct_censored")
+        assert hasattr(r, "usable_minutes")
+        assert hasattr(r, "tr_sec")
+        assert hasattr(r, "mean_fd")
+        assert hasattr(r, "n_regressors")
+        assert hasattr(r, "loss_of_dof")
+        assert hasattr(r, "loss_of_dof_pct")
+        assert hasattr(r, "rescan_warning")
+
+    def test_old_fields_removed(self):
+        """Confirm dataclass no longer has DM-FC or modularity fields."""
+        from qc.connectivity_qc import ConnectivityQCResult
+        r = ConnectivityQCResult(
+            sub_id="01", ses_id="01", run_label="task-rest",
+        )
+        assert not hasattr(r, "dm_fc_value")
+        assert not hasattr(r, "dm_fc_severity")
+        assert not hasattr(r, "dm_fc_note")
+        assert not hasattr(r, "modularity_q")
+        assert not hasattr(r, "modularity_severity")
         assert not hasattr(r, "qc_fc_value")
         assert not hasattr(r, "qc_fc_severity")
 
@@ -125,22 +140,11 @@ class TestDataclassFields:
         from qc.connectivity_qc import ConnectivityQCResult
         r = ConnectivityQCResult(
             sub_id="01", ses_id="01", run_label="task-rest",
-            mean_fd=0.1, n_volumes=200
         )
         assert hasattr(r, "heatmap_base64")
         assert hasattr(r, "network_summary_base64")
         assert r.heatmap_base64 is None
         assert r.network_summary_base64 is None
-
-    def test_has_dm_fc_note(self):
-        """Confirm dataclass has dm_fc_note field."""
-        from qc.connectivity_qc import ConnectivityQCResult
-        r = ConnectivityQCResult(
-            sub_id="01", ses_id="01", run_label="task-rest",
-            mean_fd=0.1, n_volumes=200
-        )
-        assert hasattr(r, "dm_fc_note")
-        assert r.dm_fc_note == ""
 
 
 class TestNetworkParsing:
@@ -178,14 +182,71 @@ class TestNetworkParsing:
 
 
 class TestAnalyzeAllSubjectsSignature:
-    """Test that analyze_all_subjects no longer accepts compute_qc_fc."""
+    """Test that analyze_all_subjects has the new signature."""
 
-    def test_no_compute_qc_fc_parameter(self):
-        """Confirm compute_qc_fc is not in the function signature."""
+    def test_no_old_parameters(self):
+        """Confirm old parameters are gone from the function signature."""
         import inspect
         from qc.connectivity_qc import analyze_all_subjects
         sig = inspect.signature(analyze_all_subjects)
         assert "compute_qc_fc" not in sig.parameters
+        assert "compute_dm_fc" not in sig.parameters
+        assert "compute_modularity" not in sig.parameters
+
+
+class TestQualityAssessment:
+    """Test the _assess_quality threshold logic."""
+
+    def test_ok_run(self):
+        from qc.connectivity_qc import _assess_quality
+        severity, ready, rescan, msg, action = _assess_quality(
+            mean_fd=0.10, pct_censored=5.0, usable_minutes=4.5, loss_of_dof_pct=15.0
+        )
+        assert severity == "OK"
+        assert ready is True
+        assert rescan is False
+
+    def test_warning_high_fd(self):
+        from qc.connectivity_qc import _assess_quality
+        severity, ready, rescan, msg, action = _assess_quality(
+            mean_fd=0.35, pct_censored=10.0, usable_minutes=4.0, loss_of_dof_pct=20.0
+        )
+        assert severity == "WARNING"
+        assert ready is True
+        assert "elevated FD" in msg
+
+    def test_warning_high_dof_loss(self):
+        from qc.connectivity_qc import _assess_quality
+        severity, ready, rescan, msg, action = _assess_quality(
+            mean_fd=0.10, pct_censored=10.0, usable_minutes=4.0, loss_of_dof_pct=65.0
+        )
+        assert severity == "WARNING"
+        assert "DoF loss" in msg
+
+    def test_error_high_fd(self):
+        from qc.connectivity_qc import _assess_quality
+        severity, ready, rescan, msg, action = _assess_quality(
+            mean_fd=0.60, pct_censored=10.0, usable_minutes=4.0, loss_of_dof_pct=20.0
+        )
+        assert severity == "ERROR"
+        assert ready is False
+        assert rescan is True
+
+    def test_error_too_much_censored(self):
+        from qc.connectivity_qc import _assess_quality
+        severity, ready, rescan, msg, action = _assess_quality(
+            mean_fd=0.20, pct_censored=85.0, usable_minutes=0.5, loss_of_dof_pct=90.0
+        )
+        assert severity == "ERROR"
+        assert ready is False
+
+    def test_error_too_short(self):
+        from qc.connectivity_qc import _assess_quality
+        severity, ready, rescan, msg, action = _assess_quality(
+            mean_fd=0.15, pct_censored=30.0, usable_minutes=0.8, loss_of_dof_pct=40.0
+        )
+        assert severity == "ERROR"
+        assert ready is False
 
 
 class TestNilearnAtlas:

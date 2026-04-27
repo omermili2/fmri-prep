@@ -36,12 +36,12 @@ flowchart TD
     subgraph POST ["Post-processing  (after all subjects finish)"]
         F["Motion Analysis\nmotion_parser.py\n• Reads fMRIPrep confounds TSV\n• Mean FD per run\n• % high-motion frames\n• OK / WARNING / RESCAN flags"]
         F --> G
-        G["Connectivity QC\n(optional: --connectivity-qc)\nvolume_censoring.py + connectivity_qc.py\n• % volumes censored at 0.2 mm / 0.5 mm FD\n• Usable scan time remaining\n• QC-FC: motion-connectivity correlation\n• DM-FC: distance-dependent artifacts"]
+        G["Connectivity QC\n(optional: --connectivity-qc)\nconnectivity_qc.py\n• Nilearn scrubbing strategy\n• % volumes censored / usable scan time\n• Loss of degrees of freedom\n• Full & network-level connectivity heatmaps"]
         G --> H
-        H["HTML Report\nhtml_report.py\n→ qc_report.html"]
+        H["HTML Report\nhtml_report.py\n→ full_pipeline_report.html"]
     end
 
-    H --> I([Output folder\nqc_report.html\nconversion_report.txt\nsub-*/ses-*/ BIDS data\nderivatives/ fMRIPrep outputs\nderivatives/mriqc/ MRIQC reports])
+    H --> I([Output folder\nfull_pipeline_report.html\nexecution_report.txt\nsub-*/ses-*/ BIDS data\nderivatives/ fMRIPrep outputs\nderivatives/mriqc/ MRIQC reports])
 
     style PHASE1 fill:#e8f4e8,stroke:#4a8c4a
     style PHASE2 fill:#e8edf8,stroke:#4a6aac
@@ -49,7 +49,7 @@ flowchart TD
     style POST fill:#fdf5e0,stroke:#ac8a4a
 ```
 
-> **Early feedback:** When MRIQC finishes (Phase 2), a standalone `mriqc_report.html` is generated in the MRIQC output directory. The supervisor can review image quality immediately — without waiting for fMRIPrep to finish.
+> **Early feedback:** When MRIQC finishes (Phase 2), a standalone `mriqc_report.html` is generated in the main output folder. The supervisor can review image quality immediately — without waiting for fMRIPrep to finish.
 
 ---
 
@@ -90,7 +90,7 @@ MRIQC sessions are independent — each session's quality metrics are computed f
 | **FD mean** (BOLD) | Average head motion per TR | > 0.5 mm — elevated motion |
 | **GSR x/y** (BOLD) | EPI ghosting artifact | > 0.1 — check phase-encode direction |
 
-After MRIQC completes, a **standalone MRIQC report** (`derivatives/mriqc/mriqc_report.html`) is generated automatically. This provides early feedback on image quality before the longer fMRIPrep step begins.
+After MRIQC completes, a **standalone MRIQC report** (`mriqc_report.html`) is generated automatically in the main output folder. This provides early feedback on image quality before the longer fMRIPrep step begins.
 
 > Always open the visual HTML reports — the images tell the full story.
 
@@ -116,22 +116,25 @@ Runs **after all fMRIPrep jobs complete**. Reads the confounds TSV files fMRIPre
 
 | Flag | Condition |
 |---|---|
-| OK | Mean FD < 0.5 mm and < 20% high-motion frames |
-| WARNING | Mean FD 0.5–0.8 mm or 20–50% high-motion frames |
-| RESCAN | Mean FD > 0.8 mm or > 50% high-motion frames |
+| OK | Mean FD < 0.5 mm and < 10% high-motion frames |
+| WARNING | Mean FD >= 0.5 mm or >= 10% high-motion frames |
+| RESCAN | Mean FD >= 1.0 mm or >= 20% high-motion frames |
 
-#### Connectivity QC (`src/qc/volume_censoring.py` + `src/qc/connectivity_qc.py`) — *optional*
+#### Connectivity QC (`src/qc/connectivity_qc.py`) — *optional*
 Runs **after motion analysis**, only with `--connectivity-qc` flag. Requires `nilearn` and `nibabel`.
-Based on [Parkes et al. / PMC10977879](https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/).
+Uses Nilearn's `load_confounds_strategy` with the `"scrubbing"` preset to handle confound selection and volume censoring.
+Thresholds follow recommendations from [Parkes et al. / PMC10977879](https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/).
 
-| Sub-layer | Metric | What it means | Pass threshold |
+| Metric | What it means | Warning | Fail |
 |---|---|---|---|
-| **4a** | % volumes censored | Timepoints removed at 0.2 mm FD | < 80% |
-| **4a** | Usable scan time | Clean data remaining after scrubbing | >= 1 minute |
-| **4b** | QC-FC | Correlation between motion and connectivity | < 0.1 (warn > 0.2) |
-| **4b** | DM-FC | Distance-dependent motion artifact | near 0 (fail > 0.1) |
+| Mean FD | Average framewise displacement | > 0.25 mm | > 0.50 mm |
+| % volumes censored | Timepoints removed by scrubbing | > 50% | > 80% |
+| Usable scan time | Clean data remaining after censoring | < 2 minutes | < 1 minute |
+| Loss of DoF | Regressors + censored volumes as % of total | > 60% | — |
 
-Result labels: **Ready** / **Marginal** / **Not Suitable**
+Additionally computes full (116x116) and network-level (~8x8) connectivity heatmaps on scrubbed data.
+
+Result labels: **OK** / **WARNING** / **ERROR**
 
 #### HTML Report (`src/reporting/html_report.py`)
 Always the **last step**. Aggregates all QC findings into a single self-contained HTML file.
@@ -143,6 +146,8 @@ Sections in the report:
 4. MRIQC Image Quality Metrics (unless `--skip-mriqc` was used)
 5. Motion analysis
 6. Connectivity QC (if enabled)
+7. Pipeline failures (if any)
+8. Researcher comments
 
 ---
 
@@ -156,17 +161,17 @@ output_YYYYMMDD_HHMMSS/
 ├── derivatives/
 │   ├── fmriprep/
 │   │   └── sub-001/            ← Preprocessed BOLD + confounds TSV files
-│   └── mriqc/
-│       ├── mriqc_report.html   ← Early MRIQC report (available before fMRIPrep)
-│       ├── group_T1w.html
-│       ├── group_bold.html
-│       └── sub-001/anat/*.html
-├── qc_report.html              ← Final QC report — open this in a browser
-├── conversion_report.txt       ← Text summary of all pipeline steps
-├── execution_logs/
-│   ├── raw_execution_log.log   ← Full pipeline console output with timestamps
-│   └── execution_logs_summary.txt ← Structured per-subject/session summary
-└── fmriprep_debug.log          ← Detailed error log for failed fMRIPrep runs
+│   ├── mriqc/
+│   │   ├── group_T1w.html
+│   │   ├── group_bold.html
+│   │   └── sub-001/anat/*.html
+│   └── fmriprep_debug.log      ← Detailed error log for failed fMRIPrep runs
+├── full_pipeline_report.html    ← Final QC report — open this in a browser
+├── mriqc_report.html            ← Early MRIQC report (available before fMRIPrep)
+├── execution_report.txt         ← Text summary of all pipeline steps
+└── execution_logs/
+    ├── raw_execution_log.log    ← Full pipeline console output with timestamps
+    └── execution_logs_summary.txt ← Structured per-subject/session summary
 ```
 
 ---
@@ -239,7 +244,7 @@ PY
 
 | Requirement | Purpose |
 |---|---|
-| Python 3.10+ | Core application |
+| Python 3.9+ | Core application |
 | `dcm2niix` | BIDS conversion (bundled in `tools/` or system-installed) |
 | Docker Desktop | fMRIPrep and MRIQC (both run in containers) |
 | [FreeSurfer License](https://surfer.nmr.mgh.harvard.edu/registration.html) | Required by fMRIPrep (free registration) |
@@ -276,16 +281,17 @@ fMRI_Masters/
 │   ├── qc/                     # Quality control layers
 │   │   ├── checker.py          # BIDS quality checks (missing scans, corruption)
 │   │   ├── motion_parser.py    # Motion analysis from fMRIPrep confounds
-│   │   ├── volume_censoring.py # Volume censoring analysis
-│   │   ├── connectivity_qc.py  # QC-FC and DM-FC metrics
+│   │   ├── connectivity_qc.py  # Nilearn-based connectivity QC (scrubbing, heatmaps)
 │   │   └── connectivity_thresholds.py  # Thresholds from literature
 │   └── reporting/
 │       ├── html_report.py      # HTML QC report generator (full + standalone MRIQC)
-│       └── report.py           # Text conversion report
+│       └── report.py           # Text execution report
 ├── docs/
 │   ├── BIDS_CONVERSION_GUIDE.md
-│   └── FMRIPREP_GUIDE.md
-├── test/                       # Test suite (66 tests)
+│   ├── FMRIPREP_GUIDE.md
+│   ├── FREESURFER_LICENSE.md
+│   └── MRIQC_REPORT_GUIDE.md
+├── test/                       # Test suite (69 tests)
 └── tools/                      # Bundled dcm2niix binary
 ```
 
@@ -297,6 +303,8 @@ fMRI_Masters/
 |---|---|
 | [BIDS Conversion Guide](docs/BIDS_CONVERSION_GUIDE.md) | Input folder format, conversion steps, output layout |
 | [fMRIPrep Guide](docs/FMRIPREP_GUIDE.md) | Preprocessing steps, output files, confounds |
+| [FreeSurfer License](docs/FREESURFER_LICENSE.md) | How to obtain and configure the FreeSurfer license |
+| [MRIQC Report Guide](docs/MRIQC_REPORT_GUIDE.md) | Understanding MRIQC output and image quality metrics |
 
 ---
 
@@ -310,4 +318,4 @@ MIT License
 - [dcm2niix](https://github.com/rordenlab/dcm2niix)
 - [fMRIPrep](https://fmriprep.org/)
 - [MRIQC](https://mriqc.readthedocs.io/)
-- Parkes et al. (2018) — QC-FC and DM-FC metrics for connectivity studies
+- Parkes et al. (2018) — Quality control practices for functional connectivity studies

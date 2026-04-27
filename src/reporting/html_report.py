@@ -14,6 +14,7 @@ Sections:
   6. Connectivity QC results (optional)
 """
 
+import base64
 from datetime import datetime
 from pathlib import Path
 from typing import List
@@ -27,7 +28,6 @@ def generate(
     conversion_failures: List[dict],
     iqm_results=None,
     mriqc_reports=None,
-    censoring_results=None,
     connectivity_results=None,
     researcher_comments: str = "",
 ) -> str:
@@ -42,7 +42,6 @@ def generate(
         conversion_failures:    Report.failed list (dicts with sub_id/ses_id/error)
         iqm_results:            List[IQMResult] from iqm_parser (optional)
         mriqc_reports:          Dict from mriqc_runner.collect_mriqc_reports (optional)
-        censoring_results:      List[CensoringResult] from volume_censoring (optional)
         connectivity_results:   List[ConnectivityQCResult] from connectivity_qc (optional)
         researcher_comments:    Free-text notes from the researcher (optional)
 
@@ -53,7 +52,7 @@ def generate(
         output_folder, qc_findings, motion_results,
         conversion_successes, conversion_failures,
         iqm_results or [], mriqc_reports or {},
-        censoring_results or [], connectivity_results or [],
+        connectivity_results or [],
         researcher_comments=researcher_comments,
     )
     out_path = Path(output_folder) / "full_pipeline_report.html"
@@ -108,7 +107,7 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
     now = datetime.now().strftime("%B %d, %Y at %I:%M %p")
 
     parts = [
-        _html_head(accent_color),
+        _html_head(accent_color, title="MRIQC - Image Quality Report"),
         "<body>",
         _section_header_mriqc(now, mriqc_dir),
     ]
@@ -155,11 +154,10 @@ def _section_header_mriqc(now: str, mriqc_dir: str) -> str:
 def _build_html(output_folder, qc_findings, motion_results,
                 conversion_successes, conversion_failures,
                 iqm_results=None, mriqc_reports=None,
-                censoring_results=None, connectivity_results=None,
+                connectivity_results=None,
                 researcher_comments: str = "") -> str:
     iqm_results = iqm_results or []
     mriqc_reports = mriqc_reports or {}
-    censoring_results = censoring_results or []
     connectivity_results = connectivity_results or []
 
     errors = [f for f in qc_findings if f.severity.value == "ERROR"]
@@ -168,13 +166,11 @@ def _build_html(output_folder, qc_findings, motion_results,
     motion_warns = [m for m in motion_results if m.flag == "WARNING"]
     iqm_errors = [r for r in iqm_results if r.worst_severity == "ERROR"]
     iqm_warns  = [r for r in iqm_results if r.worst_severity == "WARNING"]
-    censor_errors = [c for c in censoring_results if c.severity == "ERROR"]
-    censor_warns = [c for c in censoring_results if c.severity == "WARNING"]
     conn_errors = [c for c in connectivity_results if c.worst_severity == "ERROR"]
     conn_warns = [c for c in connectivity_results if c.worst_severity == "WARNING"]
 
-    n_critical = len(errors) + len(rescans) + len(iqm_errors) + len(censor_errors) + len(conn_errors)
-    n_warnings = len(warnings) + len(motion_warns) + len(iqm_warns) + len(censor_warns) + len(conn_warns)
+    n_critical = len(errors) + len(rescans) + len(iqm_errors) + len(conn_errors)
+    n_warnings = len(warnings) + len(motion_warns) + len(iqm_warns) + len(conn_warns)
 
     if n_critical > 0:
         accent_color = "#c0392b"
@@ -185,7 +181,7 @@ def _build_html(output_folder, qc_findings, motion_results,
 
     subjects = _collect_subjects(
         conversion_successes, conversion_failures, qc_findings, motion_results,
-        censoring_results, connectivity_results
+        connectivity_results,
     )
 
     now = datetime.now().strftime("%B %d, %Y at %I:%M %p")
@@ -195,7 +191,7 @@ def _build_html(output_folder, qc_findings, motion_results,
         "<body>",
         _section_header(now, output_folder),
         _section_summary_table(subjects, qc_findings, motion_results, iqm_results,
-                                censoring_results, connectivity_results),
+                                connectivity_results),
     ]
 
     if errors or warnings:
@@ -207,8 +203,8 @@ def _build_html(output_folder, qc_findings, motion_results,
     if motion_results:
         parts.append(_section_motion(motion_results))
 
-    if censoring_results or connectivity_results:
-        parts.append(_section_connectivity_qc(censoring_results, connectivity_results))
+    if connectivity_results:
+        parts.append(_section_connectivity_qc(connectivity_results))
 
     if conversion_failures:
         parts.append(_section_pipeline_failures(conversion_failures))
@@ -222,9 +218,8 @@ def _build_html(output_folder, qc_findings, motion_results,
 
 
 def _collect_subjects(successes, failures, qc_findings, motion_results,
-                      censoring_results=None, connectivity_results=None):
+                      connectivity_results=None):
     """Build a unified list of subject/session keys seen in any source."""
-    censoring_results = censoring_results or []
     connectivity_results = connectivity_results or []
 
     seen = {}
@@ -242,10 +237,6 @@ def _collect_subjects(successes, failures, qc_findings, motion_results,
         key = (m.sub_id, m.ses_id)
         if key not in seen:
             seen[key] = {"status": "converted"}
-    for c in censoring_results:
-        key = (c.sub_id, c.ses_id)
-        if key not in seen:
-            seen[key] = {"status": "converted"}
     for c in connectivity_results:
         key = (c.sub_id, c.ses_id)
         if key not in seen:
@@ -257,13 +248,13 @@ def _collect_subjects(successes, failures, qc_findings, motion_results,
 # HTML blocks
 # ---------------------------------------------------------------------------
 
-def _html_head(accent_color: str) -> str:
+def _html_head(accent_color: str, title: str = "fMRI-Prep Full Pipeline Report") -> str:
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>fMRI-Prep Full Pipeline Report</title>
+<title>{title}</title>
 <style>
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -327,6 +318,31 @@ def _html_head(accent_color: str) -> str:
   .metric-unknown {{ color: #888; }}
   .metric-bubble {{ display: inline-block; padding: 2px 9px; border-radius: 12px;
                     font-size: 12px; font-weight: 700; white-space: nowrap; }}
+  /* Carpet plot styling */
+  .carpet-row td {{ padding: 0; background: #fafbfc; }}
+  .carpet-container {{ padding: 10px 16px 14px; }}
+  .carpet-header {{
+    font-size: 12px; font-weight: 600; color: #666;
+    margin-bottom: 6px; display: flex; align-items: center; gap: 6px;
+  }}
+  .carpet-header .carpet-icon {{
+    display: inline-block; width: 14px; height: 14px;
+    background: linear-gradient(180deg, #3498db 0%, #2c3e50 30%, #95a5a6 60%, #ecf0f1 100%);
+    border-radius: 2px; flex-shrink: 0;
+  }}
+  .carpet-img {{ width: 100%; border: 1px solid #e0e0e0; border-radius: 6px; background: #fff; }}
+  .carpet-caption {{ font-size: 11px; color: #999; margin-top: 4px; line-height: 1.5; }}
+  details.carpet-details {{ margin: 0; }}
+  details.carpet-details summary {{
+    cursor: pointer; font-size: 12px; color: #5c6bc0;
+    font-weight: 600; padding: 6px 16px; user-select: none; list-style: none;
+  }}
+  details.carpet-details summary::-webkit-details-marker {{ display: none; }}
+  details.carpet-details summary::before {{
+    content: "\\25B6\\FE0E"; display: inline-block; margin-right: 6px;
+    font-size: 10px; transition: transform 0.15s;
+  }}
+  details.carpet-details[open] summary::before {{ transform: rotate(90deg); }}
 </style>
 </head>"""
 
@@ -351,7 +367,7 @@ padding:18px 22px;margin-bottom:28px;display:flex;align-items:flex-start;gap:14p
 
 
 def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=None,
-                            censoring_results=None, connectivity_results=None) -> str:
+                            connectivity_results=None) -> str:
     findings_by_sub = {}
     for f in qc_findings:
         findings_by_sub.setdefault((f.sub_id, f.ses_id), []).append(f)
@@ -364,16 +380,11 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
     for r in (iqm_results or []):
         iqm_by_sub.setdefault(r.sub_id, []).append(r)
 
-    censoring_by_sub = {}
-    for c in (censoring_results or []):
-        censoring_by_sub.setdefault((c.sub_id, c.ses_id), []).append(c)
-
     connectivity_by_sub = {}
     for c in (connectivity_results or []):
         connectivity_by_sub.setdefault((c.sub_id, c.ses_id), []).append(c)
 
-    # Determine if connectivity QC was run
-    has_connectivity = bool(censoring_results or connectivity_results)
+    has_connectivity = bool(connectivity_results)
 
     _check = '<span class="badge-check">&#10003;</span>'
 
@@ -407,29 +418,21 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
         else:
             motion_badge = '<span class="meta">-</span>'
 
-        # Connectivity badge (if enabled)
         conn_badge = '<span class="meta">-</span>'
         if has_connectivity:
-            sub_censor = censoring_by_sub.get((sub_id, ses_id), [])
             sub_conn = connectivity_by_sub.get((sub_id, ses_id), [])
-
-            # Check censoring first (more critical)
-            unsuitable_censor = any(not c.connectivity_ready for c in sub_censor)
-            warn_censor = any(c.severity == "WARNING" for c in sub_censor)
-
-            # Check connectivity metrics
             error_conn = any(c.worst_severity == "ERROR" for c in sub_conn)
             warn_conn = any(c.worst_severity == "WARNING" for c in sub_conn)
 
-            if unsuitable_censor or error_conn:
+            if error_conn:
                 conn_badge = '<span class="badge badge-error">Error</span>'
-            elif warn_censor or warn_conn:
+            elif warn_conn:
                 conn_badge = '<span class="badge badge-warning">Warning</span>'
-            elif sub_censor or sub_conn:
+            elif sub_conn:
                 conn_badge = _check
 
         row_content = (
-            f"<tr><td><b>sub-{sub_id}</b><br><span class='meta'>ses-{ses_id}</span></td>"
+            f"<tr><td><b>sub-{sub_id}/ses-{ses_id}</b></td>"
             f"<td>{qc_badge}</td>"
             f"<td>{iqm_badge}</td><td>{motion_badge}</td>"
         )
@@ -464,7 +467,7 @@ def _section_bids_findings(errors, warnings) -> str:
         badge = f'<span class="badge {sev_class}">{sev_label}</span>'
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{f.sub_id}</b><br><span class='meta'>ses-{f.ses_id}</span></td>"
+            f"<td><b>sub-{f.sub_id}/ses-{f.ses_id}</b></td>"
             f"<td>{badge}</td>"
             f"<td><span class='meta'>{f.category.replace('_', ' ').title()}</span></td>"
             f"<td class='details-left'><span class='plain-msg'>{f.plain_message}</span></td>"
@@ -484,7 +487,7 @@ def _section_bids_findings(errors, warnings) -> str:
 </div>
 <table>
   <thead><tr>
-    <th>Subject</th><th>Status</th><th>Category</th><th>Details</th>
+    <th>Run</th><th>Status</th><th>Category</th><th>Details</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -504,8 +507,8 @@ def _section_motion(motion_results) -> str:
         fd_bar = _fd_bar(m.pct_high_motion)
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{m.sub_id}</b><br>"
-            f"<span class='meta'>ses-{m.ses_id} / {m.run_label}</span></td>"
+            f"<td><b>sub-{m.sub_id}/ses-{m.ses_id}</b><br>"
+            f"<span class='meta'>{m.run_label}</span></td>"
             f"<td>{badge}</td>"
             f"<td>{m.mean_fd:.2f} mm</td>"
             f"<td>{fd_bar}<br><span class='meta'>{m.pct_high_motion:.0f}% "
@@ -546,7 +549,7 @@ def _section_pipeline_failures(failures) -> str:
     for item in sorted(failures, key=lambda x: (x["sub_id"], x["ses_id"])):
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{item['sub_id']}</b></td><td>ses-{item['ses_id']}</td>"
+            f"<td><b>sub-{item['sub_id']}/ses-{item['ses_id']}</b></td>"
             f"<td>{item.get('stage','?')}</td>"
             f"<td><span class='meta'>{item.get('error','')[:200]}</span></td>"
             f"</tr>"
@@ -563,7 +566,7 @@ def _section_pipeline_failures(failures) -> str:
 </div>
 <table>
   <thead><tr>
-    <th>Subject</th><th>Session</th><th>Stage</th><th>Error</th>
+    <th>Run</th><th>Stage</th><th>Error</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -576,6 +579,8 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
         from ..mriqc.iqm_parser import METRIC_DISPLAY
 
     _check = '<span class="badge-check">&#10003;</span>'
+
+    carpet_plots = mriqc_reports.get("carpet_plots", {})
 
     rows = []
     sorted_results = sorted(
@@ -604,23 +609,52 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
             )
         metrics_html = "<br>".join(metric_lines)
 
-        # --- Scan column: subject, session, scan label ---
+        # --- Run column: subject/session bold, scan label gray ---
         scan_label = r.scan_label if hasattr(r, 'scan_label') else r.modality
-        ses_line = f"<br><span class='meta'>ses-{r.ses_id}</span>" if r.ses_id else ""
+        ses_part = f"/ses-{r.ses_id}" if r.ses_id else ""
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{r.sub_id}</b>{ses_line}<br>"
+            f"<td><b>sub-{r.sub_id}{ses_part}</b><br>"
             f"<span class='meta'>{scan_label}</span></td>"
             f"<td>{badge}</td>"
             f"<td>{metrics_html}</td>"
             f"</tr>"
         )
+
+        # --- Carpet plot row (BOLD runs only) ---
+        carpet_key = Path(r.scan_file).stem
+        carpet_path = carpet_plots.get(carpet_key)
+        if carpet_path and Path(carpet_path).is_file():
+            try:
+                svg_data = Path(carpet_path).read_bytes()
+                b64 = base64.b64encode(svg_data).decode("ascii")
+                rows.append(
+                    f'<tr class="carpet-row"><td colspan="3">'
+                    f'<details class="carpet-details">'
+                    f'<summary>Carpet plot &mdash; {scan_label}</summary>'
+                    f'<div class="carpet-container">'
+                    f'<div class="carpet-header">'
+                    f'<span class="carpet-icon"></span> Carpet plot'
+                    f'</div>'
+                    f'<img class="carpet-img" '
+                    f'src="data:image/svg+xml;base64,{b64}" '
+                    f'alt="Carpet plot for {carpet_key}">'
+                    f'<div class="carpet-caption">'
+                    f'Each row is one brain voxel; each column is one time-point (TR). '
+                    f'Vertical stripes indicate signal changes affecting many voxels '
+                    f'simultaneously (often head motion). The traces above the carpet '
+                    f'show framewise displacement and DVARS.'
+                    f'</div></div></details></td></tr>'
+                )
+            except Exception:
+                pass  # Graceful fallback — skip if SVG cannot be read
+
     rows_html = "\n".join(rows)
 
     if rows_html:
         table_html = f"""<table>
   <thead><tr>
-    <th>Scan</th><th>Status</th><th>Metrics</th>
+    <th>Run</th><th>Status</th><th>Metrics</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -649,6 +683,11 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
     <li><b>GSR X / Y</b> - ghost-to-signal ratio; detects EPI ghosting artifacts per phase-encode direction</li>
     <li><b>AOR</b> - AFNI outlier ratio; fraction of volumes flagged as outliers</li>
   </ul>
+  <b>Carpet plots</b> (BOLD runs only): The carpet plot shows signal intensity across all brain
+  voxels (rows) over time (columns). Vertical stripes indicate whole-brain signal shifts — usually
+  from head motion or scanner artifacts. The traces above the carpet show framewise displacement
+  and DVARS. Click the toggle below each BOLD row to expand.
+  <br><br>
   <b>Metric colors:</b>
   <span class="badge badge-ok" style="font-size:11px;">Normal</span>
   <span class="badge badge-warning" style="font-size:11px;">Borderline</span>
@@ -675,10 +714,10 @@ def _metric_span(value: str, severity: str) -> str:
     return f'<span class="{css}">{value}</span>'
 
 
-def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
+def _section_connectivity_qc(connectivity_results) -> str:
     """Generate the Nilearn connectivity QC section with distinctive styling."""
 
-    if not censoring_results and not connectivity_results:
+    if not connectivity_results:
         return ""
 
     intro = """<hr class="sep">
@@ -695,137 +734,116 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
   can introduce spurious short-range correlations and inflate or distort network structure
   (Power et al., 2012; Satterthwaite et al., 2013).
   <br><br>
-  The analyses below are computed with
-  <a href="https://nilearn.github.io/" target="_blank" style="color:#5c6bc0;">Nilearn</a>,
-  an open-source Python library for statistical learning on neuroimaging data.
-  Nilearn extracts regional time-series from a brain atlas (here, Schaefer 100-parcel),
-  computes a connectivity matrix (Pearson correlation), and then derives the QC metrics below.
+  The analyses below use Nilearn&rsquo;s
+  <a href="https://nilearn.github.io/stable/modules/generated/nilearn.interfaces.fmriprep.load_confounds_strategy.html"
+     target="_blank" style="color:#5c6bc0;"><code>load_confounds_strategy</code></a>
+  with the <b>&ldquo;scrubbing&rdquo;</b> preset, which automatically selects confound
+  regressors and identifies volumes to censor. Time-series extraction and connectivity
+  matrices are computed on the <b>scrubbed (cleaned) data only</b>, so the heatmaps below
+  reflect denoised connectivity.
   Thresholds follow recommendations from
-  <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank" style="color:#5c6bc0;">Parkes et al.</a>
+  <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank"
+     style="color:#5c6bc0;">Parkes et al.</a>
 </div>
 <div class="nilearn-legend">
   <b>Metrics at a glance:</b><br>
-  &#9679; <b>Volume Censoring</b> -
-  Identifies BOLD volumes where framewise displacement exceeds 0.2&nbsp;mm (a strict threshold
-  appropriate for connectivity work) and reports the proportion of volumes that would be
-  removed ("scrubbed"). If more than 80% of volumes are censored or less than 1&nbsp;minute of
-  clean data remains, the run is <span class="metric-error">not suitable</span> for
-  connectivity analysis.<br>
-  &#9679; <b>DM-FC</b> (Distance-dependent Motion &ndash; Functional Connectivity, split-based) -
-  Splits each run&rsquo;s timepoints into high-FD (&gt;0.2&nbsp;mm) and low-FD groups,
-  computes separate connectivity matrices for each, and correlates the difference
-  (high&minus;low) with inter-ROI Euclidean distance.
-  A strong negative correlation means motion inflates short-range connections (bad);
-  near-zero means denoising worked (good).
-  If either split has too few frames (&lt;20), the metric is skipped - this is treated
-  as OK since it indicates a low-motion scan.
-  <span class="metric-ok">|r|&lt;0.10 = acceptable</span>,
-  <span class="metric-warn">0.10&ndash;0.20 = caution</span>,
-  <span class="metric-error">&gt;0.20 = likely biased</span>.
+  &#9679; <b>Mean FD</b> &mdash;
+  Average framewise displacement across all volumes.
+  <span class="metric-ok">&lt;0.25&nbsp;mm</span>,
+  <span class="metric-warn">0.25&ndash;0.50&nbsp;mm</span>,
+  <span class="metric-error">&gt;0.50&nbsp;mm</span>.<br>
+  &#9679; <b>Censored Volumes</b> &mdash;
+  Volumes flagged by the scrubbing strategy and removed before time-series extraction.
+  <span class="metric-error">&gt;80% censored = not suitable</span>.<br>
+  &#9679; <b>Usable Time</b> &mdash;
+  Clean scan duration remaining after censoring (in minutes).
+  <span class="metric-error">&lt;1&nbsp;min = not suitable</span>.<br>
+  &#9679; <b># Regressors</b> &mdash;
+  Number of confound columns selected by the scrubbing strategy.<br>
+  &#9679; <b>Loss of DoF</b> &mdash;
+  Total temporal degrees of freedom consumed (regressors + censored volumes).
+  High values reduce statistical power and can inflate connectivity estimates.
+  <span class="metric-warn">&gt;60% = caution</span>.
 </div>"""
 
     sections = [intro]
 
-    # Section 4a: Volume Censoring
-    if censoring_results:
-        rows = []
-        for c in sorted(censoring_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
-            if c.connectivity_ready and c.severity == "OK":
-                badge = '<span class="badge badge-ok">Ready</span>'
-            elif c.connectivity_ready and c.severity == "WARNING":
-                badge = '<span class="badge badge-warning">Marginal</span>'
-            else:
-                badge = '<span class="badge badge-error">Not Suitable</span>'
+    # Metrics table
+    rows = []
+    for c in sorted(connectivity_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
+        if c.worst_severity == "OK":
+            badge = '<span class="badge badge-ok">OK</span>'
+        elif c.worst_severity == "WARNING":
+            badge = '<span class="badge badge-warning">WARNING</span>'
+        elif c.worst_severity == "ERROR":
+            badge = '<span class="badge badge-error">EXCLUDE</span>'
+        else:
+            badge = '<span class="metric-unknown">UNKNOWN</span>'
 
-            censor_bar = _fd_bar(c.pct_censored_02mm)
-            pct_cls = ("metric-error" if c.pct_censored_02mm > 80
-                       else "metric-warn" if c.pct_censored_02mm > 40
-                       else "metric-ok")
+        # Mean FD
+        fd_cls = ("metric-error" if c.mean_fd > 0.50
+                  else "metric-warn" if c.mean_fd > 0.25
+                  else "metric-ok")
 
-            rows.append(
-                f"<tr>"
-                f"<td><b>sub-{c.sub_id}</b> / ses-{c.ses_id}<br>"
-                f"<span class='meta'>{c.run_label}</span></td>"
-                f"<td>{badge}</td>"
-                f"<td>{c.mean_fd:.2f} mm</td>"
-                f"<td><span class='{pct_cls}'>{c.pct_censored_02mm:.0f}%</span> {censor_bar}<br>"
-                f"<span class='meta'>({c.n_censored_02mm}/{c.n_volumes} vols @ 0.2mm)</span></td>"
-                f"<td>{c.usable_minutes_02mm:.1f} min<br>"
-                f"<span class='meta'>({c.usable_volumes_02mm} volumes)</span></td>"
-                f"<td class='details-left' style='font-size:12px'>{c.plain_message}</td>"
-                f"</tr>"
-            )
+        # Censored volumes
+        censor_bar = _fd_bar(c.pct_censored)
+        pct_cls = ("metric-error" if c.pct_censored > 80
+                   else "metric-warn" if c.pct_censored > 50
+                   else "metric-ok")
 
-        rows_html = "\n".join(rows) if rows else "<tr><td colspan='6'>No results</td></tr>"
-        sections.append(f"""<h3>Volume Censoring</h3>
+        # DoF loss
+        dof_cls = ("metric-warn" if c.loss_of_dof_pct > 60.0 else "metric-ok")
+
+        error_msg = ""
+        if c.error_message:
+            error_msg = (f"<br><span class='meta' style='color:#c0392b;'>"
+                         f"Error: {c.error_message[:120]}</span>")
+
+        action_box = ""
+        if c.action:
+            action_box = (f"<div class='action-box' style='border-color:#5c6bc0;"
+                          f"background:#e8eaf6;color:#283593;'>{c.action}</div>")
+
+        rows.append(
+            f"<tr>"
+            f"<td><b>sub-{c.sub_id}/ses-{c.ses_id}</b><br>"
+            f"<span class='meta'>{c.run_label}</span></td>"
+            f"<td>{badge}</td>"
+            f"<td><span class='{fd_cls}'>{c.mean_fd:.2f}&nbsp;mm</span></td>"
+            f"<td><span class='{pct_cls}'>{c.pct_censored:.0f}%</span> {censor_bar}<br>"
+            f"<span class='meta'>({c.censored_volumes}/{c.total_volumes} vols)</span></td>"
+            f"<td>{c.usable_minutes:.1f}&nbsp;min</td>"
+            f"<td>{c.n_regressors}</td>"
+            f"<td><span class='{dof_cls}'>{c.loss_of_dof}</span><br>"
+            f"<span class='meta'>({c.loss_of_dof_pct:.0f}% of {c.total_volumes})</span></td>"
+            f"<td class='details-left' style='font-size:12px'>"
+            f"{c.plain_message}{error_msg}{action_box}</td>"
+            f"</tr>"
+        )
+
+    rows_html = "\n".join(rows) if rows else "<tr><td colspan='8'>No results</td></tr>"
+    sections.append(f"""<h3>Per-Run Quality Metrics</h3>
 <table>
   <thead><tr>
-    <th>Subject / Run</th><th>Status</th><th>Mean FD</th>
-    <th>Censored @ 0.2mm<br><span class="th-hint">&#10007; &gt;80% censored</span></th><th>Usable Time<br><span class="th-hint">&#10007; &lt;1 min remaining</span></th><th>Notes</th>
+    <th>Run</th>
+    <th>Status</th>
+    <th>Mean FD<br><span class="th-hint">&#9888; &ge;0.25mm &#10007; &ge;0.50mm</span></th>
+    <th>Censored<br><span class="th-hint">&#10007; &gt;80%</span></th>
+    <th>Usable Time<br><span class="th-hint">&#10007; &lt;1 min</span></th>
+    <th># Regressors</th>
+    <th>Loss of DoF<br><span class="th-hint">&#9888; &gt;60%</span></th>
+    <th>Notes</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>""")
 
-    # Section 4b: DM-FC metrics
-    if connectivity_results:
-        rows = []
-        for c in sorted(connectivity_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
-            if c.worst_severity == "OK":
-                badge = '<span class="badge badge-ok">OK</span>'
-            elif c.worst_severity == "WARNING":
-                badge = '<span class="badge badge-warning">WARNING</span>'
-            elif c.worst_severity == "ERROR":
-                badge = '<span class="badge badge-error">EXCLUDE</span>'
-            else:
-                badge = '<span class="metric-unknown">UNKNOWN</span>'
-
-            if c.dm_fc_value is not None:
-                dm_fc_str = _metric_span(f"{c.dm_fc_value:.3f}", c.dm_fc_severity)
-            elif getattr(c, 'dm_fc_note', ''):
-                dm_fc_str = f'<span class="metric-ok">{c.dm_fc_note}</span>'
-            else:
-                dm_fc_str = '<span class="metric-unknown">-</span>'
-            mod_str   = (_metric_span(f"{c.modularity_q:.3f}", c.modularity_severity)
-                         if c.modularity_q is not None
-                         else '<span class="metric-unknown">-</span>')
-
-            error_msg = ""
-            if c.error_message:
-                error_msg = (f"<br><span class='meta' style='color:#c0392b;'>"
-                             f"Error: {c.error_message[:100]}</span>")
-
-            action_box = ""
-            if c.action:
-                action_box = (f"<div class='action-box' style='border-color:#5c6bc0;"
-                              f"background:#e8eaf6;color:#283593;'>{c.action}</div>")
-
-            rows.append(
-                f"<tr>"
-                f"<td><b>sub-{c.sub_id}</b> / ses-{c.ses_id}<br>"
-                f"<span class='meta'>{c.run_label} &bull; {c.atlas_name} &bull; {c.n_rois} ROIs</span></td>"
-                f"<td>{badge}</td>"
-                f"<td>{dm_fc_str}<br><span class='meta'>({c.dm_fc_severity})</span></td>"
-                f"<td>{mod_str}<br><span class='meta'>({c.modularity_severity})</span></td>"
-                f"<td style='font-size:12px'>{c.plain_message}{error_msg}{action_box}</td>"
-                f"</tr>"
-            )
-
-        rows_html = "\n".join(rows) if rows else "<tr><td colspan='5'>No results</td></tr>"
-        sections.append(f"""<h3>Motion-Connectivity Metrics (DM-FC)</h3>
-<table>
-  <thead><tr>
-    <th>Subject / Run</th><th>Status</th><th>DM-FC</th><th>Modularity Q</th><th>Recommendation</th>
-  </tr></thead>
-  <tbody>{rows_html}</tbody>
-</table>""")
-
-    # Section 4c: Connectivity Heatmaps
+    # Connectivity Heatmaps
     heatmap_runs = [c for c in connectivity_results
                     if getattr(c, 'heatmap_base64', None)]
     if heatmap_runs:
-        heatmap_parts = ['<h3>Connectivity Heatmaps</h3>']
+        heatmap_parts = ['<h3>Connectivity Heatmaps (scrubbed data)</h3>']
         for c in sorted(heatmap_runs, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
-            label = f"sub-{c.sub_id} / ses-{c.ses_id} / {c.run_label}"
+            label = f"sub-{c.sub_id}/ses-{c.ses_id} — {c.run_label}"
             heatmap_parts.append(
                 f'<p style="font-weight:700;margin:12px 0 6px;">{label}</p>'
                 f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">'

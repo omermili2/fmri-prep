@@ -78,7 +78,6 @@ def _write_structured_summary(
     subjects_tasks,
     sessions_missing_bold,
     motion_results,
-    censoring_results,
     connectivity_results,
     errors,
     pipeline_start_time,
@@ -97,7 +96,7 @@ def _write_structured_summary(
     try:
         lines = _build_structured_summary(
             report, subjects_tasks, sessions_missing_bold,
-            motion_results, censoring_results, connectivity_results,
+            motion_results, connectivity_results,
             errors, pipeline_start_time, iqm_results,
             ran_fmriprep=ran_fmriprep, ran_mriqc=ran_mriqc,
         )
@@ -113,7 +112,7 @@ def _write_structured_summary(
 
 def _build_structured_summary(
     report, subjects_tasks, sessions_missing_bold,
-    motion_results, censoring_results, connectivity_results,
+    motion_results, connectivity_results,
     errors, pipeline_start_time, iqm_results=None,
     ran_fmriprep=True, ran_mriqc=True,
 ):
@@ -139,9 +138,6 @@ def _build_structured_summary(
     motion_map = {}
     for m in (motion_results or []):
         motion_map.setdefault((m.sub_id, m.ses_id), []).append(m)
-    censor_map = {}
-    for c in (censoring_results or []):
-        censor_map.setdefault((c.sub_id, c.ses_id), []).append(c)
     conn_map = {}
     for c in (connectivity_results or []):
         conn_map.setdefault((c.sub_id, c.ses_id), []).append(c)
@@ -258,22 +254,6 @@ def _build_structured_summary(
                             f"      Motion [{label:20s}] : RE-SCAN  "
                             f"(mean FD {m.mean_fd:.2f} mm, "
                             f"{m.pct_high_motion:.0f}% high-motion)"
-                        )
-
-                # -- Volume censoring --
-                for c in censor_map.get(key, []):
-                    label = c.run_label or ""
-                    if c.severity == "OK":
-                        out(
-                            f"      Censoring [{label:17s}] : OK  "
-                            f"({c.pct_censored_02mm:.0f}% censored, "
-                            f"{c.usable_minutes_02mm:.1f} min usable)"
-                        )
-                    else:
-                        out(
-                            f"      Censoring [{label:17s}] : {c.severity}  "
-                            f"({c.pct_censored_02mm:.0f}% censored, "
-                            f"{c.usable_minutes_02mm:.1f} min usable)"
                         )
 
                 # -- Connectivity --
@@ -749,42 +729,32 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         safe_print("\nNo derivatives/ folder found — skipping motion analysis.", flush=True)
 
     # Layer 4: Connectivity QC (optional)
-    censoring_results = []
     connectivity_results = []
-    # Check if --connectivity-qc was requested (it's in run_qc_only args via run_mriqc for now)
-    # For qc-only mode, we'll add a separate check
+    # Check if --connectivity-qc was requested
     try:
         import sys
         if '--connectivity-qc' in sys.argv and derivatives_dir.exists():
             try:
-                from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+                from .qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
             except ImportError:
-                from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+                from qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
 
             if CONNECTIVITY_QC_AVAILABLE:
-                safe_print("\nRunning connectivity quality assessment...", flush=True)
-
-                safe_print("  Analyzing volume censoring...", flush=True)
-                censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, output_folder)
-                if censoring_results:
-                    unsuitable = [c for c in censoring_results if not c.connectivity_ready]
-                    safe_print(
-                        f"    {len(censoring_results)} runs analyzed, {len(unsuitable)} unsuitable for connectivity",
-                        flush=True,
-                    )
-
-                safe_print("  Computing connectivity metrics (may take several minutes)...", flush=True)
+                safe_print("\nRunning connectivity quality assessment (scrubbing strategy)...", flush=True)
                 connectivity_results = connectivity_qc.analyze_all_subjects(
                     derivatives_dir,
                     output_folder,
                     atlas='schaefer_116_tian',
-                    compute_dm_fc=True,
-                    compute_modularity=False,
                     mni_space=_pick_mni_space([])
                 )
                 if connectivity_results:
                     failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
-                    safe_print(f"    {len(connectivity_results)} runs analyzed, {len(failed)} failed QC", flush=True)
+                    warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
+                    safe_print(
+                        f"    {len(connectivity_results)} runs analyzed, "
+                        f"{len(failed)} failed, {len(warned)} warning(s)",
+                        flush=True,
+                    )
             else:
                 safe_print("\nConnectivity QC skipped (Nilearn not installed)", flush=True)
     except Exception as e:
@@ -823,7 +793,6 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         [],
         iqm_results=iqm_results,
         mriqc_reports=mriqc_reports,
-        censoring_results=censoring_results,
         connectivity_results=connectivity_results,
     )
     safe_print(f"\nQC report saved to: {html_path}", flush=True)
@@ -1519,46 +1488,20 @@ Examples:
         report.record_phase_end("Motion Analysis")
 
     # Layer 4: Connectivity QC (runs automatically when fMRIPrep output exists)
-    censoring_results = []
     connectivity_results = []
     if not args.skip_fmriprep:
         try:
-            from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            from .qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
         except ImportError:
-            from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            from qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
 
         if CONNECTIVITY_QC_AVAILABLE:
-            safe_print("Running connectivity quality assessment...", flush=True)
-
-            # 5a: Volume censoring analysis
-            report.record_phase_start("Volume Censoring")
-            safe_print("  Analyzing volume censoring...", flush=True)
-            censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, bids_dir)
-            if censoring_results:
-                unsuitable = [c for c in censoring_results if not c.connectivity_ready]
-                marginal = [c for c in censoring_results if c.connectivity_ready and c.severity == "WARNING"]
-                good = [c for c in censoring_results if c.connectivity_ready and c.severity == "OK"]
-                safe_print(
-                    f"    Volume censoring: {len(good)} OK, {len(marginal)} marginal, {len(unsuitable)} unsuitable",
-                    flush=True,
-                )
-                for c in unsuitable:
-                    safe_print(
-                        f"    [CONN-FAIL] sub-{c.sub_id}/ses-{c.ses_id} [{c.run_label}]: "
-                        f"{c.pct_censored_02mm:.0f}% censored, {c.usable_minutes_02mm:.1f}min usable",
-                        flush=True,
-                    )
-            report.record_phase_end("Volume Censoring")
-
-            # 5b: DM-FC analysis (computationally expensive)
-            report.record_phase_start("Connectivity (DM-FC)")
-            safe_print("  Computing connectivity metrics (DM-FC)...", flush=True)
+            report.record_phase_start("Connectivity QC")
+            safe_print("Running connectivity quality assessment (scrubbing strategy)...", flush=True)
             connectivity_results = connectivity_qc.analyze_all_subjects(
                 derivatives_dir,
                 bids_dir,
                 atlas='schaefer_116_tian',
-                compute_dm_fc=True,
-                compute_modularity=False,  # Too expensive for routine QC
                 mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", []))
             )
             if connectivity_results:
@@ -1566,7 +1509,7 @@ Examples:
                 warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
                 ok_conn = [r for r in connectivity_results if r.worst_severity == "OK"]
                 safe_print(
-                    f"    Connectivity metrics: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
+                    f"    Connectivity: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
                     flush=True,
                 )
                 for r in failed:
@@ -1575,7 +1518,7 @@ Examples:
                         f"{r.plain_message}",
                         flush=True,
                     )
-            report.record_phase_end("Connectivity (DM-FC)")
+            report.record_phase_end("Connectivity QC")
         else:
             safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
             safe_print("  Install with: pip install nilearn nibabel", flush=True)
@@ -1619,7 +1562,6 @@ Examples:
             report.failed,
             iqm_results=iqm_results,
             mriqc_reports=mriqc_reports,
-            censoring_results=censoring_results,
             connectivity_results=connectivity_results,
             researcher_comments=researcher_comments,
         )
@@ -1643,7 +1585,6 @@ Examples:
         subjects_tasks=subjects_tasks,
         sessions_missing_bold=sessions_missing_bold,
         motion_results=motion_results,
-        censoring_results=censoring_results,
         connectivity_results=connectivity_results,
         errors=errors,
         pipeline_start_time=report.start_time,

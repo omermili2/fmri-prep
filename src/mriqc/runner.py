@@ -398,10 +398,12 @@ def collect_mriqc_reports(mriqc_dir) -> dict:
                                'filename': '...', 'path': Path}],
           'group_reports':   [{'scan_type': 'T1w'/'bold', 'path': Path}],
           'iqm_files':       [{'sub_id': '001', 'modality': 'T1w', 'path': Path}],
+          'carpet_plots':    {'sub-010_ses-01_task-memory_run-01_bold': Path, ...},
         }
     """
     mriqc_path = Path(mriqc_dir)
-    out = {"subject_reports": [], "group_reports": [], "iqm_files": []}
+    out = {"subject_reports": [], "group_reports": [], "iqm_files": [],
+           "carpet_plots": {}}
 
     if not mriqc_path.exists():
         return out
@@ -441,5 +443,25 @@ def collect_mriqc_reports(mriqc_dir) -> dict:
             "filename": json_file.name,
             "path": json_file,
         })
+
+    # Collect carpet plot SVGs for BOLD runs.
+    # MRIQC writes them to {mriqc_dir}/sub-*/figures/ and fMRIPrep writes
+    # similar plots to {derivatives_dir}/sub-*/figures/.  Search both locations
+    # so the report can surface whichever is available.
+    import re
+    _carpet_re = re.compile(r"_desc-carpet(?:plot)?_")
+    search_roots = [mriqc_path]
+    derivatives_dir = mriqc_path.parent
+    if derivatives_dir.exists() and derivatives_dir != mriqc_path:
+        search_roots.append(derivatives_dir)
+    for root in search_roots:
+        for svg in sorted(root.glob("sub-*/figures/*_desc-carpet*_bold.svg")):
+            if "work" in svg.parts:
+                continue
+            # Build a key that matches the IQM scan_file stem by stripping
+            # the _desc-carpet(plot)_ entity from the filename stem.
+            key = _carpet_re.sub("_", svg.stem)
+            if key not in out["carpet_plots"]:
+                out["carpet_plots"][key] = svg
 
     return out
