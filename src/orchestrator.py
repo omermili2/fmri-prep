@@ -37,7 +37,7 @@ try:
     from .core.progress import ProgressTracker
     from .bids.converter import run_bids_conversion, create_dataset_description
     from .bids.analyzer import count_output_files
-    from .reporting.report import ConversionReport
+    from .reporting.report import ExecutionReport
     from .reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from .qc.checker import BIDSQualityChecker
     from .qc import motion_parser
@@ -50,7 +50,7 @@ except ImportError:
     from core.progress import ProgressTracker
     from bids.converter import run_bids_conversion, create_dataset_description
     from bids.analyzer import count_output_files
-    from reporting.report import ConversionReport
+    from reporting.report import ExecutionReport
     from reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from qc.checker import BIDSQualityChecker
     from qc import motion_parser
@@ -366,7 +366,7 @@ def process_bids_task(task, bids_dir, progress_tracker,
         bids_dir: BIDS output directory
         progress_tracker: ProgressTracker instance
         desc_created_event: Threading event for dataset_description.json
-        report: ConversionReport instance
+        report: ExecutionReport instance
         anonymize: If True, anonymize DICOM metadata
         qc_checker: BIDSQualityChecker instance
 
@@ -464,7 +464,7 @@ def run_fmriprep_for_subject(sub_id, session_ids, bids_dir, derivatives_dir,
         derivatives_dir: fMRIPrep derivatives directory
         fmriprep_script: Path to fMRIPrep runner script
         fmriprep_opts: Dictionary of fMRIPrep options
-        report: ConversionReport instance
+        report: ExecutionReport instance
         debug_log_file: Optional path to a debug log file
 
     Returns:
@@ -594,7 +594,7 @@ def cleanup_temp_files(bids_dir, report):
     
     Args:
         bids_dir: BIDS output directory
-        report: ConversionReport to update with cleanup info
+        report: ExecutionReport to update with cleanup info
     """
     safe_print("\nCleaning up temporary files...", flush=True)
     cleanup_count = 0
@@ -898,6 +898,8 @@ Examples:
                         help="Run connectivity quality assessment (requires nilearn, analyzes motion-connectivity coupling)")
     parser.add_argument("--qc-only", action="store_true",
                         help="Run QC analysis only on an existing output folder (use with --bids-folder)")
+    parser.add_argument("--researcher-comments", type=str, default="",
+                        help="Base64-encoded researcher comments (free text)")
 
     args = parser.parse_args()
 
@@ -1002,12 +1004,23 @@ Examples:
     set_log_file(execution_log)
     safe_print(f"Execution logs: {logs_folder}", flush=True)
 
+    # Decode researcher comments (base64-encoded from GUI, or plain text from CLI)
+    researcher_comments = args.researcher_comments or ""
+    if researcher_comments:
+        try:
+            researcher_comments = base64.b64decode(
+                researcher_comments.encode('ascii')
+            ).decode('utf-8')
+        except Exception:
+            pass  # Not base64 — use as-is (plain text from CLI)
+
     # Initialize report
-    report = ConversionReport()
+    report = ExecutionReport()
     report.input_folder = str(input_root)
     report.output_folder = str(output_folder)
     report.skip_bids = args.skip_bids
     report.skip_fmriprep = args.skip_fmriprep
+    report.set_researcher_comments(researcher_comments)
     
     safe_print(f"Output folder: {output_folder}", flush=True)
     
@@ -1163,6 +1176,7 @@ Examples:
     # ------------------------------------------------------------------
     if not args.skip_bids:
         safe_print("\n=== Phase 1: BIDS Conversion ===", flush=True)
+        report.record_phase_start("BIDS Conversion")
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {
                 executor.submit(
@@ -1196,12 +1210,14 @@ Examples:
         consistency_findings = qc_checker.check_run_consistency(bids_dir, subjects_tasks)
         if consistency_findings:
             safe_print(f"  Run consistency: {len(consistency_findings)} warning(s)", flush=True)
+        report.record_phase_end("BIDS Conversion")
 
     # ------------------------------------------------------------------
     # Phase 2: MRIQC  (parallel per session — each session gets its own
     #                   Docker container so sessions run concurrently)
     # ------------------------------------------------------------------
     if run_mriqc and mriqc_dir is not None:
+        report.record_phase_start("MRIQC")
         # Build (subject, session) pairs for per-session parallelism
         mriqc_tasks = []
         for sub_id, sub_tasks in subjects_tasks.items():
@@ -1282,6 +1298,7 @@ Examples:
             flush=True,
         )
 
+        report.record_phase_start("  Participant-level")
         with ThreadPoolExecutor(max_workers=mriqc_workers) as executor:
             futures = {
                 executor.submit(
@@ -1306,11 +1323,13 @@ Examples:
                 except Exception as e:
                     safe_print(f"[MRIQC] {label} - error: {e}", flush=True)
                     report.add_warning(f"MRIQC error for {label}: {e}")
+        report.record_phase_end("  Participant-level")
 
     # ------------------------------------------------------------------
     # Early MRIQC report — available before fMRIPrep starts
     # ------------------------------------------------------------------
     if run_mriqc and mriqc_dir is not None:
+        report.record_phase_start("  Group report")
         safe_print("Running MRIQC group-level report...", flush=True)
         grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
         if grp_ok:
@@ -1334,9 +1353,12 @@ Examples:
             str(mriqc_dir), early_iqm, early_reports,
             qc_findings=qc_checker.get_all(),
             output_folder=str(output_folder),
+            researcher_comments=researcher_comments,
         )
         safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
         safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
+        report.record_phase_end("  Group report")
+        report.record_phase_end("MRIQC")
 
         # Clean MRIQC work dir to free disk space before fMRIPrep
         if not args.keep_temp:
@@ -1392,6 +1414,7 @@ Examples:
                 fmriprep_subjects.append((sub_id, bold_session_ids))
 
         if fmriprep_subjects:
+            report.record_phase_start("fMRIPrep")
             safe_print(f"\n=== Phase 3: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
             safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
 
@@ -1443,6 +1466,7 @@ Examples:
                         f"  Restored {len(renamed_bold)} hidden BOLD file(s)",
                         flush=True,
                     )
+            report.record_phase_end("fMRIPrep")
 
     safe_print(f"[PROGRESS:COMPLETE]", flush=True)
     
@@ -1473,6 +1497,7 @@ Examples:
     # Layer 3: Parse fMRIPrep confounds for motion analysis
     motion_results = []
     if not args.skip_fmriprep:
+        report.record_phase_start("Motion Analysis")
         safe_print("Analyzing motion from fMRIPrep confounds...", flush=True)
         motion_results = motion_parser.parse_all_subjects(derivatives_dir)
         if motion_results:
@@ -1491,6 +1516,7 @@ Examples:
                 )
         else:
             safe_print("  No confounds files found (fMRIPrep may not have completed).", flush=True)
+        report.record_phase_end("Motion Analysis")
 
     # Layer 4: Connectivity QC (runs automatically when fMRIPrep output exists)
     censoring_results = []
@@ -1505,6 +1531,7 @@ Examples:
             safe_print("Running connectivity quality assessment...", flush=True)
 
             # 5a: Volume censoring analysis
+            report.record_phase_start("Volume Censoring")
             safe_print("  Analyzing volume censoring...", flush=True)
             censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, bids_dir)
             if censoring_results:
@@ -1521,8 +1548,10 @@ Examples:
                         f"{c.pct_censored_02mm:.0f}% censored, {c.usable_minutes_02mm:.1f}min usable",
                         flush=True,
                     )
+            report.record_phase_end("Volume Censoring")
 
             # 5b: DM-FC analysis (computationally expensive)
+            report.record_phase_start("Connectivity (DM-FC)")
             safe_print("  Computing connectivity metrics (DM-FC)...", flush=True)
             connectivity_results = connectivity_qc.analyze_all_subjects(
                 derivatives_dir,
@@ -1546,6 +1575,7 @@ Examples:
                         f"{r.plain_message}",
                         flush=True,
                     )
+            report.record_phase_end("Connectivity (DM-FC)")
         else:
             safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
             safe_print("  Install with: pip install nilearn nibabel", flush=True)
@@ -1579,6 +1609,7 @@ Examples:
     # Layer 5: Generate HTML QC report
     # Only generate the full pipeline report when fMRIPrep actually ran;
     # when fMRIPrep is skipped the early MRIQC report is sufficient.
+    report.record_phase_start("Report Generation")
     if not args.skip_fmriprep:
         html_path = generate_html_report(
             str(output_folder),
@@ -1590,18 +1621,20 @@ Examples:
             mriqc_reports=mriqc_reports,
             censoring_results=censoring_results,
             connectivity_results=connectivity_results,
+            researcher_comments=researcher_comments,
         )
         safe_print(f"QC report: {html_path}", flush=True)
 
     # Save report
     report_text = report.generate_report()
-    report_path = output_folder / "conversion_report.txt"
+    report_path = output_folder / "execution_report.txt"
     try:
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report_text)
-        safe_print(f"\nConversion report saved to: {report_path}", flush=True)
+        safe_print(f"\nExecution report saved to: {report_path}", flush=True)
     except Exception as e:
         safe_print(f"Warning: Could not save report: {e}", flush=True)
+    report.record_phase_end("Report Generation")
     
     # Structured summary — separate file alongside the raw log
     _write_structured_summary(

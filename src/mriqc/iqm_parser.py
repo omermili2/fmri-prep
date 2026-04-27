@@ -142,9 +142,14 @@ def parse_all_subjects(mriqc_dir) -> List[IQMResult]:
     if not mriqc_path.exists():
         return results
 
-    # Only match IQM files (T1w, T2w, bold); skip timeseries/confounds
+    # Only match IQM files (T1w, T2w, bold); skip timeseries/confounds.
+    # Use rglob to find files in both flat layout (older MRIQC) and
+    # BIDS-derivatives layout (MRIQC ≥22.x: sub-XXX/ses-YYY/anat|func/).
+    # Exclude the work/ directory which contains intermediate files.
     for suffix in ("_T1w.json", "_T2w.json", "_bold.json"):
-        for json_file in sorted(mriqc_path.glob(f"sub-*{suffix}")):
+        for json_file in sorted(mriqc_path.rglob(f"sub-*{suffix}")):
+            if "work" in json_file.parts:
+                continue
             result = _parse_iqm_file(json_file)
             if result is not None:
                 results.append(result)

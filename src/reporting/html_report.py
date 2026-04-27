@@ -29,6 +29,7 @@ def generate(
     mriqc_reports=None,
     censoring_results=None,
     connectivity_results=None,
+    researcher_comments: str = "",
 ) -> str:
     """
     Write full_pipeline_report.html to output_folder.
@@ -43,6 +44,7 @@ def generate(
         mriqc_reports:          Dict from mriqc_runner.collect_mriqc_reports (optional)
         censoring_results:      List[CensoringResult] from volume_censoring (optional)
         connectivity_results:   List[ConnectivityQCResult] from connectivity_qc (optional)
+        researcher_comments:    Free-text notes from the researcher (optional)
 
     Returns:
         Path to the generated HTML file as a string.
@@ -51,7 +53,8 @@ def generate(
         output_folder, qc_findings, motion_results,
         conversion_successes, conversion_failures,
         iqm_results or [], mriqc_reports or {},
-        censoring_results or [], connectivity_results or []
+        censoring_results or [], connectivity_results or [],
+        researcher_comments=researcher_comments,
     )
     out_path = Path(output_folder) / "full_pipeline_report.html"
     try:
@@ -63,7 +66,8 @@ def generate(
 
 
 def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
-                          qc_findings=None, output_folder: str = None) -> str:
+                          qc_findings=None, output_folder: str = None,
+                          researcher_comments: str = "") -> str:
     """
     Write a standalone MRIQC-only HTML report.
 
@@ -73,12 +77,13 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
     gets maximum information at the earliest stage.
 
     Args:
-        mriqc_dir:      Path to MRIQC derivatives directory.
-        iqm_results:    List of IQMResult from iqm_parser.
-        mriqc_reports:  Dict from mriqc_runner.collect_mriqc_reports.
-        qc_findings:    List of QCFinding from BIDSQualityChecker (optional).
-        output_folder:  Top-level output directory for the report file.
-                        If None, falls back to mriqc_dir.
+        mriqc_dir:              Path to MRIQC derivatives directory.
+        iqm_results:            List of IQMResult from iqm_parser.
+        mriqc_reports:          Dict from mriqc_runner.collect_mriqc_reports.
+        qc_findings:            List of QCFinding from BIDSQualityChecker (optional).
+        output_folder:          Top-level output directory for the report file.
+                                If None, falls back to mriqc_dir.
+        researcher_comments:    Free-text notes from the researcher (optional).
     """
     iqm_results = iqm_results or []
     mriqc_reports = mriqc_reports or {}
@@ -113,6 +118,7 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
 
     parts.extend([
         _section_mriqc(iqm_results, mriqc_reports),
+        _section_researcher_comments(researcher_comments),
         _html_footer(),
         "</body></html>",
     ])
@@ -149,7 +155,8 @@ def _section_header_mriqc(now: str, mriqc_dir: str) -> str:
 def _build_html(output_folder, qc_findings, motion_results,
                 conversion_successes, conversion_failures,
                 iqm_results=None, mriqc_reports=None,
-                censoring_results=None, connectivity_results=None) -> str:
+                censoring_results=None, connectivity_results=None,
+                researcher_comments: str = "") -> str:
     iqm_results = iqm_results or []
     mriqc_reports = mriqc_reports or {}
     censoring_results = censoring_results or []
@@ -194,7 +201,7 @@ def _build_html(output_folder, qc_findings, motion_results,
     if errors or warnings:
         parts.append(_section_bids_findings(errors, warnings))
 
-    if iqm_results:
+    if iqm_results or mriqc_reports:
         parts.append(_section_mriqc(iqm_results, mriqc_reports))
 
     if motion_results:
@@ -205,6 +212,8 @@ def _build_html(output_folder, qc_findings, motion_results,
 
     if conversion_failures:
         parts.append(_section_pipeline_failures(conversion_failures))
+
+    parts.append(_section_researcher_comments(researcher_comments))
 
     parts.append(_html_footer())
     parts.append("</body></html>")
@@ -608,6 +617,20 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
         )
     rows_html = "\n".join(rows)
 
+    if rows_html:
+        table_html = f"""<table>
+  <thead><tr>
+    <th>Scan</th><th>Status</th><th>Metrics</th>
+  </tr></thead>
+  <tbody>{rows_html}</tbody>
+</table>"""
+    else:
+        table_html = (
+            '<div class="section-explainer" style="color:#999;font-style:italic;">'
+            'MRIQC ran but no IQM metrics were parsed. '
+            'Check the MRIQC logs and derivatives/mriqc/ folder for details.</div>'
+        )
+
     return f"""<hr class="sep">
 <h2>MRIQC - Image Quality Metrics</h2>
 <div class="section-explainer">
@@ -631,12 +654,7 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
   <span class="badge badge-warning" style="font-size:11px;">Borderline</span>
   <span class="badge badge-error" style="font-size:11px;">Out of range</span>
 </div>
-<table>
-  <thead><tr>
-    <th>Scan</th><th>Status</th><th>Metrics</th>
-  </tr></thead>
-  <tbody>{rows_html}</tbody>
-</table>"""
+{table_html}"""
 
 
 def _fd_bar(pct: float) -> str:
@@ -829,6 +847,37 @@ def _section_connectivity_qc(censoring_results, connectivity_results) -> str:
 
     sections.append("</div>")  # close .nilearn-section
     return "\n".join(sections)
+
+
+def _section_researcher_comments(comments: str = "") -> str:
+    """Generate the Researcher Comments section for HTML reports."""
+    comments = (comments or "").strip()
+    if comments:
+        # Escape HTML special characters
+        safe = (
+            comments
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+        )
+        # Convert newlines to <br> for display
+        safe = safe.replace("\n", "<br>")
+        body_html = safe
+    else:
+        body_html = (
+            '<span style="color:#999;font-style:italic;">'
+            'No comments were entered by the researcher.</span>'
+        )
+
+    return (
+        '<hr class="sep">\n'
+        '<h2 style="border-left-color:#5c6bc0;">Researcher Comments</h2>\n'
+        '<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-left:4px solid #5c6bc0;'
+        'border-radius:6px;padding:16px 20px;margin-bottom:24px;'
+        f'font-size:14px;line-height:1.7;color:#333;white-space:pre-wrap;">{body_html}</div>'
+    )
 
 
 def _html_footer() -> str:

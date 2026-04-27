@@ -183,6 +183,11 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
 
         datatype, suffix, entities = modality_info
 
+        # Skip DWI/diffusion scans — this pipeline only processes T1w and BOLD
+        if datatype == "dwi":
+            skipped_count += 1
+            continue
+
         # --- Drop BOLD fragments with too few volumes ---
         n_vols = None
         if datatype == "func":
@@ -296,6 +301,32 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
                     flush=True,
                 )
 
+    # --- Strip run numbers when only one run of a task remains ---
+    # BIDS convention: run-XX is only needed when there are multiple runs
+    # of the same task in a session.  If duplicates were excluded (or only
+    # one run existed in the first place), rename to remove the run entity
+    # so fMRIPrep and downstream tools don't show a misleading run number.
+    final_kept = [n for n in bold_notes if n["action"] == "kept"]
+    final_task_counts = Counter(n["task"] for n in final_kept)
+    for task_name, count in final_task_counts.items():
+        if count != 1:
+            continue
+        note = next(n for n in final_kept if n["task"] == task_name)
+        nii_path = Path(note["bids_nii_path"])
+        json_path = Path(note["bids_json_path"])
+        new_nii_name = re.sub(r'_run-\d+', '', nii_path.name)
+        new_json_name = re.sub(r'_run-\d+', '', json_path.name)
+        # Only rename if the name actually changed (has a run entity)
+        if new_nii_name != nii_path.name:
+            new_nii = nii_path.parent / new_nii_name
+            new_json = json_path.parent / new_json_name
+            if nii_path.exists():
+                nii_path.rename(new_nii)
+            if json_path.exists():
+                json_path.rename(new_json)
+            note["bids_nii_path"] = str(new_nii)
+            note["bids_json_path"] = str(new_json)
+
     # Log summary of BOLD disposition
     dropped = [n for n in bold_notes if n["action"] == "dropped"]
     excluded = [n for n in bold_notes if n["action"] == "kept_excluded"]
@@ -375,14 +406,20 @@ def _classify_scan(metadata, series_desc):
         return ("anat", "FLAIR", "")
     
     # Check for diffusion BEFORE fieldmaps — DWI series may contain "ap"/"pa"
-    # in their SeriesDescription (e.g. "dwi_AP") and must not be misclassified
-    # as fieldmap EPIs.
+    # in their SeriesDescription (e.g. "dwi_AP", "cmrr_mbep2d_diff_ap") and
+    # must not be misclassified as fieldmap EPIs.
     _DIFFUSION_KEYS = (
         "bValue", "bValues", "bval",
         "DiffusionGradientOrientation",
         "DiffusionBValue", "DiffusionDirection",
     )
+    # Substring check for full keywords
     is_diffusion = any(x in series_desc for x in ["dwi", "dti", "diffusion", "hardi"])
+    # Segment check for "diff" — catches CMRR/Siemens naming (e.g.
+    # "mbep2d_diff_ap") without false-positives from "phase_difference".
+    if not is_diffusion:
+        _desc_segments = set(re.split(r'[_\-\(\)]', series_desc))
+        is_diffusion = "diff" in _desc_segments
     has_diffusion_meta = any(k in metadata for k in _DIFFUSION_KEYS)
     if is_diffusion or has_diffusion_meta:
         return ("dwi", "dwi", "")

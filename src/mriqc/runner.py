@@ -424,8 +424,15 @@ def collect_mriqc_reports(mriqc_dir) -> dict:
                 "path": html,
             })
 
-    for json_file in sorted(mriqc_path.glob("sub-*.json")):
+    # Use rglob to find IQM JSON files in both flat layout (older MRIQC) and
+    # BIDS-derivatives layout (MRIQC ≥22.x: sub-XXX/ses-YYY/anat|func/).
+    for json_file in sorted(mriqc_path.rglob("sub-*.json")):
+        if "work" in json_file.parts:
+            continue
         stem = json_file.stem
+        # Skip non-IQM JSON files (e.g., timeseries, confounds)
+        if not any(stem.endswith(s) for s in ("_T1w", "_T2w", "_bold")):
+            continue
         sub_id = stem.split("_")[0].replace("sub-", "")
         modality = "bold" if "bold" in stem else "T1w" if "T1w" in stem else "other"
         out["iqm_files"].append({

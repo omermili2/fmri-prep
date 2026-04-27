@@ -1,8 +1,7 @@
 """
-Report generation for BIDS conversion.
+Report generation for pipeline execution.
 """
 
-from .report import ConversionReport
+from .report import ExecutionReport, ConversionReport
 
-__all__ = ['ConversionReport']
-
+__all__ = ['ExecutionReport', 'ConversionReport']

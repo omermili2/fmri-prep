@@ -1,8 +1,8 @@
 """
-Conversion report generation for non-technical users.
+Execution report generation for non-technical users.
 
 This module creates human-readable reports explaining what happened
-during BIDS conversion, what succeeded, what failed, and next steps.
+during pipeline execution, what succeeded, what failed, and next steps.
 """
 
 import threading
@@ -10,36 +10,38 @@ from datetime import datetime
 from typing import Optional
 
 
-class ConversionReport:
+class ExecutionReport:
     """
-    Tracks conversion results and generates human-readable reports.
-    
+    Tracks pipeline execution results and generates human-readable reports.
+
     Thread-safe: can be updated from multiple parallel worker threads.
-    
+
     Usage:
-        report = ConversionReport()
+        report = ExecutionReport()
         report.input_folder = "/path/to/input"
         report.output_folder = "/path/to/output"
-        
+
         # During processing:
+        report.record_phase_start("BIDS Conversion")
         report.add_success("001", "01", 45.2)
+        report.record_phase_end("BIDS Conversion")
         report.add_failure("002", "01", "No DICOM files found", "BIDS")
-        
+
         # After processing:
         report_text = report.generate_report()
     """
-    
+
     def __init__(self):
         self._lock = threading.Lock()
         self.start_time: datetime = datetime.now()
         self.end_time: Optional[datetime] = None
-        
+
         # Results tracking
         self.successful = []   # List of {sub_id, ses_id, duration, details, output_files}
         self.failed = []       # List of {sub_id, ses_id, error, stage}
         self.warnings = []     # List of warning messages
         self.skipped = []      # List of skipped items with reasons
-        
+
         # Configuration
         self.total_tasks: int = 0
         self.config_file: Optional[str] = None
@@ -47,7 +49,7 @@ class ConversionReport:
         self.output_folder: Optional[str] = None
         self.skip_bids: bool = False
         self.skip_fmriprep: bool = False
-        
+
         # Statistics
         self.output_stats = {}   # Scan type counts
         self.cleanup_info = {}   # Info about cleanup
@@ -55,6 +57,13 @@ class ConversionReport:
         # QC results (Layer 1 + Layer 3)
         self.qc_findings = []    # List of QCFinding objects
         self.motion_results = [] # List of MotionResult objects
+
+        # Phase timing — ordered list of {name, start, end}
+        self.phase_times: list = []
+        self._active_phases: dict = {}  # name -> start datetime
+
+        # User-provided researcher comments (free text)
+        self.researcher_comments: str = ""
     
     def add_success(self, sub_id, ses_id, duration, details="", output_files=None):
         """
@@ -123,7 +132,28 @@ class ConversionReport:
         with self._lock:
             self.qc_findings = list(qc_findings)
             self.motion_results = list(motion_results)
-    
+
+    def record_phase_start(self, name):
+        """Record the start of a pipeline phase. Thread-safe."""
+        with self._lock:
+            self._active_phases[name] = datetime.now()
+
+    def record_phase_end(self, name):
+        """Record the end of a pipeline phase. Thread-safe."""
+        with self._lock:
+            start = self._active_phases.pop(name, None)
+            if start is not None:
+                self.phase_times.append({
+                    'name': name,
+                    'start': start,
+                    'end': datetime.now(),
+                })
+
+    def set_researcher_comments(self, comments):
+        """Store free-text researcher comments for inclusion in reports."""
+        with self._lock:
+            self.researcher_comments = (comments or "").strip()
+
     def finalize(self):
         """Mark the report as complete with end time."""
         self.end_time = datetime.now()
@@ -163,7 +193,57 @@ class ConversionReport:
             hours = int(seconds // 3600)
             mins = int((seconds % 3600) // 60)
             return f"{hours} hr {mins} min"
-    
+
+    def _format_phase_timeline(self, total_duration):
+        """Build the EXECUTION TIMELINE text block from recorded phase times."""
+        if not self.phase_times:
+            return []
+
+        lines = []
+        lines.append("-" * 70)
+        lines.append("  EXECUTION TIMELINE")
+        lines.append("-" * 70)
+        lines.append("")
+
+        # Column headers
+        hdr_phase = "Phase"
+        hdr_start = "Start"
+        hdr_dur = "Duration"
+        lines.append(f"  {hdr_phase:<30s} {hdr_start:<11s} {hdr_dur}")
+        lines.append(f"  {'─' * 30} {'─' * 10} {'─' * 14}")
+
+        for entry in self.phase_times:
+            name = entry['name']
+            start_str = entry['start'].strftime("%H:%M:%S")
+            dur_secs = (entry['end'] - entry['start']).total_seconds()
+            dur_str = self._format_duration(dur_secs)
+
+            # Sub-phases are indented with tree characters
+            if name.startswith("  "):
+                is_last = True
+                # Check if a subsequent sub-phase follows
+                idx = self.phase_times.index(entry)
+                for later in self.phase_times[idx + 1:]:
+                    if later['name'].startswith("  "):
+                        is_last = False
+                        break
+                    break  # stop at first non-sub-phase or next entry
+                prefix = "└ " if is_last else "├ "
+                display_name = prefix + name.strip()
+                lines.append(f"    {display_name:<28s} {start_str:<11s} {dur_str}")
+            else:
+                lines.append(f"  {name:<30s} {start_str:<11s} {dur_str}")
+
+        # Total row
+        assert self.end_time is not None
+        total_start = self.start_time.strftime("%H:%M:%S")
+        total_dur = self._format_duration(total_duration)
+        lines.append(f"  {'─' * 30} {'─' * 10} {'─' * 14}")
+        lines.append(f"  {'Total':<30s} {total_start:<11s} {total_dur}")
+        lines.append("")
+
+        return lines
+
     def generate_report(self):
         """
         Generate a comprehensive human-readable report.
@@ -188,7 +268,7 @@ class ConversionReport:
         lines.append("")
         lines.append("+" + "=" * 68 + "+")
         lines.append("|" + " " * 68 + "|")
-        lines.append("|" + "BIDS CONVERSION REPORT".center(68) + "|")
+        lines.append("|" + "PIPELINE EXECUTION REPORT".center(68) + "|")
         lines.append("|" + "fMRI Preprocessing Assistant".center(68) + "|")
         lines.append("|" + " " * 68 + "|")
         lines.append("+" + "=" * 68 + "+")
@@ -249,7 +329,10 @@ class ConversionReport:
             success_rate = (success_count / self.total_tasks) * 100
             lines.append(f"  Success rate:                 {success_rate:.0f}%")
         lines.append("")
-        
+
+        # ===== EXECUTION TIMELINE =====
+        lines.extend(self._format_phase_timeline(total_duration))
+
         # ===== WHAT WAS CREATED =====
         if success_count > 0:
             lines.append("-" * 70)
@@ -338,7 +421,7 @@ class ConversionReport:
             lines.append("          sub-001_ses-01_task-rest_bold.nii.gz")
             lines.append("          sub-001_ses-01_task-rest_bold.json")
             lines.append("")
-            lines.append("    conversion_report.txt       <- This report file")
+            lines.append("    execution_report.txt        <- This report file")
             lines.append("")
             lines.append("  File naming explained:")
             lines.append("    - sub-XXX: participant/subject ID")
@@ -400,6 +483,26 @@ class ConversionReport:
             lines.append("  See full_pipeline_report.html for the full visual report.")
             lines.append("")
 
+        # ===== RESEARCHER COMMENTS =====
+        lines.append("-" * 70)
+        lines.append("  RESEARCHER COMMENTS")
+        lines.append("-" * 70)
+        lines.append("")
+        if self.researcher_comments:
+            import textwrap
+            for paragraph in self.researcher_comments.split("\n"):
+                if paragraph.strip():
+                    wrapped = textwrap.fill(
+                        paragraph, width=64,
+                        initial_indent="    ", subsequent_indent="    "
+                    )
+                    lines.append(wrapped)
+                else:
+                    lines.append("")
+        else:
+            lines.append("    No comments were entered by the researcher.")
+        lines.append("")
+
         # ===== NEXT STEPS =====
         lines.append("-" * 70)
         lines.append("  WHAT TO DO NEXT")
@@ -455,4 +558,8 @@ class ConversionReport:
         lines.append("")
         
         return "\n".join(lines)
+
+
+# Backward-compatible alias
+ConversionReport = ExecutionReport
 

@@ -258,9 +258,57 @@ class App(ctk.CTk):
         )
         self.label_fmriprep_warning.grid(row=8, column=0, columnspan=2, padx=15, pady=(0, 10), sticky="w")
 
+        # --- Researcher Comments ---
+        self.frame_comments = ctk.CTkFrame(self.main_scroll)
+        self.frame_comments.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        self.frame_comments.grid_columnconfigure(0, weight=1)
+
+        self.label_comments = ctk.CTkLabel(
+            self.frame_comments,
+            text="Researcher Comments (optional):",
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.label_comments.grid(row=0, column=0, padx=15, pady=(15, 5), sticky="w")
+
+        self.text_researcher_comments = ctk.CTkTextbox(
+            self.frame_comments,
+            height=90,
+            wrap="word",
+            font=ctk.CTkFont(size=13),
+        )
+        self.text_researcher_comments.grid(row=1, column=0, padx=15, pady=(0, 5), sticky="ew")
+
+        # Placeholder text — shown while the textbox is empty and unfocused
+        self._comments_placeholder = (
+            "Enter session notes (e.g., excessive motion, technical issues, "
+            "task performance, participant alertness, or any deviations from protocol)"
+        )
+        self._comments_placeholder_active = True
+        self.text_researcher_comments.insert("1.0", self._comments_placeholder)
+        self.text_researcher_comments.configure(text_color="#888888")
+        self.text_researcher_comments.bind("<FocusIn>", self._comments_focus_in)
+        self.text_researcher_comments.bind("<FocusOut>", self._comments_focus_out)
+
+        # Save button + saved-state tracking
+        self._saved_comments_text = ""  # Last saved text
+
+        self.btn_save_comments = ctk.CTkButton(
+            self.frame_comments,
+            text="Save Comments",
+            width=140,
+            height=30,
+            fg_color="#555555",
+            state="disabled",
+            command=self._save_researcher_comments,
+        )
+        self.btn_save_comments.grid(row=2, column=0, padx=15, pady=(2, 12), sticky="e")
+
+        # Re-evaluate Save button whenever text changes
+        self.text_researcher_comments.bind("<KeyRelease>", self._on_comments_changed)
+
         # --- Action Buttons ---
         self.frame_actions = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
-        self.frame_actions.grid(row=4, column=0, padx=20, pady=10, sticky="ew")
+        self.frame_actions.grid(row=5, column=0, padx=20, pady=10, sticky="ew")
         self.frame_actions.grid_columnconfigure((0, 1, 2, 3, 4), weight=1, uniform="btn")
 
         # Dataset summary label (above buttons, hidden until a folder is selected)
@@ -386,7 +434,7 @@ class App(ctk.CTk):
 
         # --- Progress Indicator ---
         self.frame_progress = ctk.CTkFrame(self.main_scroll, fg_color="transparent")
-        self.frame_progress.grid(row=5, column=0, padx=20, pady=(10, 5), sticky="ew")
+        self.frame_progress.grid(row=6, column=0, padx=20, pady=(10, 5), sticky="ew")
         self.frame_progress.grid_columnconfigure(0, weight=1)
         self.frame_progress.grid_remove()  # Hide initially
         
@@ -408,14 +456,14 @@ class App(ctk.CTk):
 
         # --- Log Area ---
         self.label_logs = ctk.CTkLabel(
-            self.main_scroll, 
+            self.main_scroll,
             text="Execution Logs",
             font=ctk.CTkFont(size=12, weight="bold")
         )
-        self.label_logs.grid(row=6, column=0, padx=20, pady=(10, 0), sticky="w")
-        
+        self.label_logs.grid(row=7, column=0, padx=20, pady=(10, 0), sticky="w")
+
         self.console = ConsoleLog(self.main_scroll, height=250)
-        self.console.grid(row=7, column=0, padx=20, pady=(5, 20), sticky="ew")
+        self.console.grid(row=8, column=0, padx=20, pady=(5, 20), sticky="ew")
 
         self.is_running = False
         
@@ -462,6 +510,47 @@ class App(ctk.CTk):
             self.label_output_info.grid()  # Show the label
         else:
             self.label_output_info.grid_remove()  # Hide when empty
+
+    # --- Researcher Comments helpers ---
+
+    def _comments_focus_in(self, _event=None):
+        """Remove placeholder text when the user clicks into the comments box."""
+        if self._comments_placeholder_active:
+            self.text_researcher_comments.delete("1.0", "end")
+            self.text_researcher_comments.configure(text_color="#DCDCDC")
+            self._comments_placeholder_active = False
+
+    def _comments_focus_out(self, _event=None):
+        """Restore placeholder if the comments box is empty when focus leaves."""
+        content = self.text_researcher_comments.get("1.0", "end-1c").strip()
+        if not content:
+            self._comments_placeholder_active = True
+            self.text_researcher_comments.insert("1.0", self._comments_placeholder)
+            self.text_researcher_comments.configure(text_color="#888888")
+
+    def _get_researcher_comments(self) -> str:
+        """Return the current comments text, ignoring the placeholder."""
+        if self._comments_placeholder_active:
+            return ""
+        return self.text_researcher_comments.get("1.0", "end-1c").strip()
+
+    def _on_comments_changed(self, _event=None):
+        """Enable the Save button only if text differs from last saved version."""
+        current = self._get_researcher_comments()
+        if current and current != self._saved_comments_text:
+            self.btn_save_comments.configure(
+                state="normal", fg_color="#1565C0", hover_color="#0D47A1"
+            )
+        else:
+            self.btn_save_comments.configure(
+                state="disabled", fg_color="#555555"
+            )
+
+    def _save_researcher_comments(self):
+        """Save the current comments and disable the button until text changes."""
+        self._saved_comments_text = self._get_researcher_comments()
+        self.btn_save_comments.configure(state="disabled", fg_color="#555555")
+        self.console.log("Researcher comments saved.", "success")
 
     # --- Time-estimate constants (minutes) ---
     _BIDS_MIN_PER_SESSION = 2        # BIDS conversion + QC per session
@@ -1105,6 +1194,14 @@ class App(ctk.CTk):
             if fmriprep_opts:
                 encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
                 cmd.extend(["--fmriprep-opts", encoded_opts])
+
+        # Pass researcher comments (base64-encoded for safe transport)
+        comments = self._saved_comments_text
+        if comments:
+            encoded_comments = base64.b64encode(
+                comments.encode('utf-8')
+            ).decode('ascii')
+            cmd.extend(["--researcher-comments", encoded_comments])
 
         try:
             popen_kwargs = {
