@@ -72,6 +72,38 @@ def _pick_mni_space(output_spaces):
     return "MNI152NLin2009cAsym"
 
 
+def _collect_coreg_plots(derivatives_dir):
+    """Collect fMRIPrep coregistration overlay SVGs from the derivatives directory.
+
+    Searches both ``derivatives/sub-*/figures/`` and ``derivatives/fmriprep/sub-*/figures/``
+    for ``*_desc-coreg_bold.svg`` files.
+
+    Returns:
+        dict mapping run key (e.g. ``"sub-010_ses-02_task-rest_run-01"``) to Path.
+    """
+    import re
+    _coreg_re = re.compile(r"_desc-coreg_bold$")
+    deriv_path = Path(derivatives_dir)
+
+    search_roots = [deriv_path, deriv_path / "fmriprep"]
+    seen_paths = set()
+    coreg_plots = {}
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for svg in sorted(root.glob("sub-*/figures/*_desc-coreg_bold.svg")):
+            resolved = svg.resolve()
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            key = _coreg_re.sub("", svg.stem)
+            if key not in coreg_plots:
+                coreg_plots[key] = svg
+
+    return coreg_plots
+
+
 def _write_structured_summary(
     summary_path,
     report,
@@ -784,6 +816,11 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         else:
             safe_print("  No IQM JSON files found in mriqc/.", flush=True)
 
+    # Collect fMRIPrep coregistration figures
+    coreg_plots = _collect_coreg_plots(derivatives_dir)
+    if coreg_plots:
+        safe_print(f"  Found {len(coreg_plots)} coregistration overlay(s)", flush=True)
+
     # HTML QC report
     html_path = generate_html_report(
         str(output_folder),
@@ -794,6 +831,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         iqm_results=iqm_results,
         mriqc_reports=mriqc_reports,
         connectivity_results=connectivity_results,
+        coreg_plots=coreg_plots,
     )
     safe_print(f"\nQC report saved to: {html_path}", flush=True)
 
@@ -1174,6 +1212,20 @@ Examples:
                         flush=True,
                     )
 
+    # Hide shorter duplicate BOLD runs immediately after BIDS conversion.
+    # This ensures consistency checks, MRIQC, and fMRIPrep only see the
+    # final kept runs — preventing duplicate entries in reports.
+    renamed_bold = []
+    if fmriprep_exclude_pairs:
+        from bids.converter import hide_excluded_bold
+        renamed_bold = hide_excluded_bold(fmriprep_exclude_pairs)
+        if renamed_bold:
+            safe_print(
+                f"  Hidden {len(renamed_bold)} duplicate BOLD file(s) "
+                f"from further processing",
+                flush=True,
+            )
+
     # Cross-session run consistency check
     if not args.skip_bids:
         consistency_findings = qc_checker.check_run_consistency(bids_dir, subjects_tasks)
@@ -1387,58 +1439,45 @@ Examples:
             safe_print(f"\n=== Phase 3: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
             safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
 
-            # Temporarily hide shorter duplicate BOLD runs so fMRIPrep
-            # only processes the longest run per task.
-            renamed_bold = []
-            if fmriprep_exclude_pairs:
-                from bids.converter import hide_excluded_bold
-                renamed_bold = hide_excluded_bold(fmriprep_exclude_pairs)
-                if renamed_bold:
-                    safe_print(
-                        f"  Hidden {len(renamed_bold)} duplicate BOLD file(s) "
-                        f"from fMRIPrep",
-                        flush=True,
-                    )
-
             fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
-            try:
-                with ThreadPoolExecutor(max_workers=fmriprep_workers) as executor:
-                    futures = {
-                        executor.submit(
-                            run_fmriprep_for_subject,
-                            sub_id, session_ids, bids_dir, derivatives_dir,
-                            fmriprep_script, fmriprep_opts, report, debug_log_file
-                        ): sub_id for sub_id, session_ids in fmriprep_subjects
-                    }
+            with ThreadPoolExecutor(max_workers=fmriprep_workers) as executor:
+                futures = {
+                    executor.submit(
+                        run_fmriprep_for_subject,
+                        sub_id, session_ids, bids_dir, derivatives_dir,
+                        fmriprep_script, fmriprep_opts, report, debug_log_file
+                    ): sub_id for sub_id, session_ids in fmriprep_subjects
+                }
 
-                    for future in as_completed(futures):
-                        sub_id = futures[future]
-                        try:
-                            error = future.result()
-                            if error:
-                                errors.append(error)
-                        except Exception as e:
-                            error_msg = f"sub-{sub_id} (Unexpected fMRIPrep error: {e})"
-                            errors.append(error_msg)
-                            for t in subjects_tasks[sub_id]:
-                                report.add_failure(sub_id, t['ses_id'], str(e), "fMRIPrep")
-                            safe_print(
-                                f"[FAIL] Unexpected error for sub-{sub_id}: {e}",
-                                flush=True,
-                            )
-            finally:
-                # Always restore hidden files, even if fMRIPrep fails
-                if renamed_bold:
-                    from bids.converter import restore_excluded_bold
-                    restore_excluded_bold(renamed_bold)
-                    safe_print(
-                        f"  Restored {len(renamed_bold)} hidden BOLD file(s)",
-                        flush=True,
-                    )
+                for future in as_completed(futures):
+                    sub_id = futures[future]
+                    try:
+                        error = future.result()
+                        if error:
+                            errors.append(error)
+                    except Exception as e:
+                        error_msg = f"sub-{sub_id} (Unexpected fMRIPrep error: {e})"
+                        errors.append(error_msg)
+                        for t in subjects_tasks[sub_id]:
+                            report.add_failure(sub_id, t['ses_id'], str(e), "fMRIPrep")
+                        safe_print(
+                            f"[FAIL] Unexpected error for sub-{sub_id}: {e}",
+                            flush=True,
+                        )
             report.record_phase_end("fMRIPrep")
 
     safe_print(f"[PROGRESS:COMPLETE]", flush=True)
-    
+
+    # Restore hidden duplicate BOLD files so the final BIDS directory
+    # contains all original files (both kept and excluded runs).
+    if renamed_bold:
+        from bids.converter import restore_excluded_bold
+        restore_excluded_bold(renamed_bold)
+        safe_print(
+            f"  Restored {len(renamed_bold)} hidden BOLD file(s)",
+            flush=True,
+        )
+
     # Cleanup (skip if --keep-temp was specified)
     if args.keep_temp:
         safe_print("\nKeeping temporary files for debugging (--keep-temp)", flush=True)
@@ -1549,6 +1588,11 @@ Examples:
     # Attach QC + motion to the report
     report.set_qc_results(qc_checker.get_all(), motion_results)
 
+    # Collect fMRIPrep coregistration figures
+    coreg_plots = _collect_coreg_plots(derivatives_dir)
+    if coreg_plots:
+        safe_print(f"  Found {len(coreg_plots)} coregistration overlay(s)", flush=True)
+
     # Layer 5: Generate HTML QC report
     # Only generate the full pipeline report when fMRIPrep actually ran;
     # when fMRIPrep is skipped the early MRIQC report is sufficient.
@@ -1564,6 +1608,7 @@ Examples:
             mriqc_reports=mriqc_reports,
             connectivity_results=connectivity_results,
             researcher_comments=researcher_comments,
+            coreg_plots=coreg_plots,
         )
         safe_print(f"QC report: {html_path}", flush=True)
 

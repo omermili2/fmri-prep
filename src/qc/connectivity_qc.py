@@ -159,6 +159,29 @@ def analyze_all_subjects(
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _find_confounds_tsv(bold_path: Path) -> Optional[Path]:
+    """Derive the confounds TSV path from a preprocessed BOLD NIfTI path.
+
+    fMRIPrep places them in the same directory with the pattern:
+        sub-*_ses-*_task-*_run-*_desc-confounds_timeseries.tsv
+    """
+    # Strip space/desc/suffix entities to get the BIDS prefix
+    stem = bold_path.name.split("_space-")[0]
+    tsv_name = f"{stem}_desc-confounds_timeseries.tsv"
+    tsv_path = bold_path.parent / tsv_name
+    if tsv_path.exists():
+        return tsv_path
+    # Fallback: search for any confounds TSV with the same prefix
+    prefix = stem.rsplit("_", 1)[0]  # drop last entity for safety
+    for candidate in bold_path.parent.glob(f"{prefix}*_desc-confounds_timeseries.tsv"):
+        return candidate
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Per-run analysis
 # ---------------------------------------------------------------------------
 
@@ -203,14 +226,20 @@ def _analyze_single_run(
         pct_censored = (censored_volumes / total_volumes * 100.0) if total_volumes > 0 else 0.0
         usable_minutes = (usable_volumes * tr_sec) / 60.0
 
-        # --- Mean FD from the confounds DataFrame ---
-        if "framewise_displacement" in confounds.columns:
-            fd = pd.to_numeric(
-                confounds["framewise_displacement"], errors="coerce"
-            ).fillna(0)
-            mean_fd = float(fd.mean())
-        else:
-            mean_fd = 0.0
+        # --- Mean FD from the raw confounds TSV ---
+        # load_confounds_strategy returns only selected regressors, which
+        # typically does not include framewise_displacement.  Read FD
+        # directly from the sibling confounds TSV instead.
+        mean_fd = 0.0
+        confounds_tsv = _find_confounds_tsv(bold_path)
+        if confounds_tsv is not None:
+            raw_df = pd.read_csv(confounds_tsv, sep="\t", low_memory=False)
+            if "framewise_displacement" in raw_df.columns:
+                fd = pd.to_numeric(
+                    raw_df["framewise_displacement"], errors="coerce"
+                ).dropna()
+                if not fd.empty:
+                    mean_fd = float(fd.mean())
 
         # --- Denoising complexity ---
         n_regressors = confounds.shape[1]

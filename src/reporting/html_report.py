@@ -30,6 +30,7 @@ def generate(
     mriqc_reports=None,
     connectivity_results=None,
     researcher_comments: str = "",
+    coreg_plots=None,
 ) -> str:
     """
     Write full_pipeline_report.html to output_folder.
@@ -44,6 +45,7 @@ def generate(
         mriqc_reports:          Dict from mriqc_runner.collect_mriqc_reports (optional)
         connectivity_results:   List[ConnectivityQCResult] from connectivity_qc (optional)
         researcher_comments:    Free-text notes from the researcher (optional)
+        coreg_plots:            Dict mapping run keys to SVG file paths (optional)
 
     Returns:
         Path to the generated HTML file as a string.
@@ -54,6 +56,7 @@ def generate(
         iqm_results or [], mriqc_reports or {},
         connectivity_results or [],
         researcher_comments=researcher_comments,
+        coreg_plots=coreg_plots or {},
     )
     out_path = Path(output_folder) / "full_pipeline_report.html"
     try:
@@ -155,10 +158,12 @@ def _build_html(output_folder, qc_findings, motion_results,
                 conversion_successes, conversion_failures,
                 iqm_results=None, mriqc_reports=None,
                 connectivity_results=None,
-                researcher_comments: str = "") -> str:
+                researcher_comments: str = "",
+                coreg_plots=None) -> str:
     iqm_results = iqm_results or []
     mriqc_reports = mriqc_reports or {}
     connectivity_results = connectivity_results or []
+    coreg_plots = coreg_plots or {}
 
     errors = [f for f in qc_findings if f.severity.value == "ERROR"]
     warnings = [f for f in qc_findings if f.severity.value == "WARNING"]
@@ -202,6 +207,9 @@ def _build_html(output_folder, qc_findings, motion_results,
 
     if motion_results:
         parts.append(_section_motion(motion_results))
+
+    if coreg_plots:
+        parts.append(_section_fmriprep_registration(coreg_plots))
 
     if connectivity_results:
         parts.append(_section_connectivity_qc(connectivity_results))
@@ -293,25 +301,13 @@ def _html_head(accent_color: str, title: str = "fMRI-Prep Full Pipeline Report")
   .section-explainer {{ background: #f8f9fa; border-left: 3px solid #b0bec5;
                           padding: 10px 14px; border-radius: 4px; margin-bottom: 16px;
                           font-size: 13px; color: #555; line-height: 1.65; }}
-  /* Nilearn / Connectivity QC section */
-  .nilearn-section {{ background: #f0f4ff; border: 1.5px solid #7c83d6;
-                       border-radius: 10px; padding: 20px 24px 12px;
-                       margin: 32px 0 24px; }}
-  .nilearn-header {{ display: flex; align-items: center; gap: 10px;
-                      margin-bottom: 10px; }}
-  .nilearn-tag {{ background: #5c6bc0; color: #fff; font-size: 11px;
-                   font-weight: 800; letter-spacing: .06em; padding: 3px 9px;
-                   border-radius: 20px; text-transform: uppercase; }}
-  .nilearn-title {{ font-size: 1.15rem; font-weight: 700; color: #1a237e; }}
-  .nilearn-legend {{ background: #e8eaf6; border-left: 3px solid #5c6bc0;
-                      padding: 8px 14px; border-radius: 4px; margin: 10px 0 14px;
-                      font-size: 12px; color: #3949ab; line-height: 1.7; }}
-  .nilearn-section h3 {{ font-size: .95rem; font-weight: 700; color: #283593;
-                          margin: 18px 0 8px; border-left: 3px solid #7986cb;
-                          padding-left: 8px; }}
-  .nilearn-section table {{ box-shadow: 0 1px 6px rgba(92,107,192,.15); }}
-  .nilearn-section th {{ background: #e8eaf6; color: #3949ab; text-align: center; }}
-  .nilearn-section .th-hint {{ color: #7986cb; }}
+  /* Collapsible heatmaps toggle */
+  .heatmap-toggle {{ background: none; border: 1px solid #b0bec5; border-radius: 6px;
+                      padding: 6px 14px; font-size: 13px; font-weight: 600;
+                      color: #555; cursor: pointer; margin: 12px 0 8px; }}
+  .heatmap-toggle:hover {{ background: #f0f2f5; }}
+  .heatmap-content {{ overflow: hidden; transition: max-height 0.3s ease; }}
+  .heatmap-content.collapsed {{ max-height: 0; }}
   .metric-ok    {{ font-weight: 700; color: #155724; }}
   .metric-warn  {{ font-weight: 700; color: #856404; }}
   .metric-error {{ font-weight: 700; color: #c0392b; }}
@@ -432,7 +428,7 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
                 conn_badge = _check
 
         row_content = (
-            f"<tr><td><b>sub-{sub_id}/ses-{ses_id}</b></td>"
+            f"<tr><td><b>sub-{sub_id}</b><br><span class='meta'>ses-{ses_id}</span></td>"
             f"<td>{qc_badge}</td>"
             f"<td>{iqm_badge}</td><td>{motion_badge}</td>"
         )
@@ -467,7 +463,7 @@ def _section_bids_findings(errors, warnings) -> str:
         badge = f'<span class="badge {sev_class}">{sev_label}</span>'
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{f.sub_id}/ses-{f.ses_id}</b></td>"
+            f"<td><b>sub-{f.sub_id}</b><br><span class='meta'>ses-{f.ses_id}</span></td>"
             f"<td>{badge}</td>"
             f"<td><span class='meta'>{f.category.replace('_', ' ').title()}</span></td>"
             f"<td class='details-left'><span class='plain-msg'>{f.plain_message}</span></td>"
@@ -507,7 +503,8 @@ def _section_motion(motion_results) -> str:
         fd_bar = _fd_bar(m.pct_high_motion)
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{m.sub_id}/ses-{m.ses_id}</b><br>"
+            f"<td><b>sub-{m.sub_id}</b><br>"
+            f"<span class='meta'>ses-{m.ses_id}</span><br>"
             f"<span class='meta'>{m.run_label}</span></td>"
             f"<td>{badge}</td>"
             f"<td>{m.mean_fd:.2f} mm</td>"
@@ -544,12 +541,109 @@ def _section_motion(motion_results) -> str:
 </table>"""
 
 
+def _section_fmriprep_registration(coreg_plots) -> str:
+    """Generate the fMRIPrep coregistration quality section with per-run SVG overlays."""
+    import re
+
+    if not coreg_plots:
+        return ""
+
+    # Group coreg plots by (sub_id, ses_id)
+    grouped = {}
+    for key, svg_path in sorted(coreg_plots.items()):
+        # Key format: sub-010_ses-02_task-rest_run-01
+        sub_match = re.search(r"sub-([^_]+)", key)
+        ses_match = re.search(r"ses-([^_]+)", key)
+        sub_id = sub_match.group(1) if sub_match else "unknown"
+        ses_id = ses_match.group(1) if ses_match else "unknown"
+        # Build a readable run label from the remaining BIDS entities
+        run_label = key
+        for prefix in [f"sub-{sub_id}_", f"ses-{ses_id}_"]:
+            run_label = run_label.replace(prefix, "")
+        grouped.setdefault((sub_id, ses_id), []).append((run_label, svg_path))
+
+    # Build collapsible blocks per subject/session
+    blocks = []
+    for (sub_id, ses_id), runs in sorted(grouped.items()):
+        run_items = []
+        for run_label, svg_path in runs:
+            svg_file = Path(svg_path)
+            if not svg_file.is_file():
+                continue
+            try:
+                svg_data = svg_file.read_bytes()
+                b64 = base64.b64encode(svg_data).decode("ascii")
+                run_items.append(
+                    f'<div style="margin-bottom:12px;">'
+                    f'<div class="carpet-header">'
+                    f'<span style="display:inline-block;width:14px;height:14px;'
+                    f'background:linear-gradient(135deg,#e74c3c 0%,#95a5a6 50%,#ecf0f1 100%);'
+                    f'border-radius:2px;flex-shrink:0;"></span> {run_label}'
+                    f'</div>'
+                    f'<img class="carpet-img" '
+                    f'src="data:image/svg+xml;base64,{b64}" '
+                    f'alt="Coregistration overlay for {run_label}">'
+                    f'</div>'
+                )
+            except Exception:
+                pass
+
+        if not run_items:
+            continue
+
+        label = f"sub-{sub_id}/ses-{ses_id}"
+        n_runs = len(run_items)
+        runs_html = "\n".join(run_items)
+        blocks.append(
+            f'<details class="carpet-details">'
+            f'<summary>{label} &mdash; {n_runs} run{"s" if n_runs != 1 else ""}</summary>'
+            f'<div class="carpet-container">'
+            f'{runs_html}'
+            f'<div class="carpet-caption">'
+            f'The BOLD reference image (warm/red tones) is overlaid on the T1-weighted '
+            f'anatomical scan (grayscale). Cortical boundaries in the BOLD should align '
+            f'with the T1w edges. Misalignment (shifted, rotated, or distorted outlines) '
+            f'indicates a registration failure.'
+            f'</div></div></details>'
+        )
+
+    if not blocks:
+        return ""
+
+    blocks_html = "\n".join(blocks)
+
+    return f"""<hr class="sep">
+<h2>fMRIPrep Registration Quality</h2>
+<div class="section-explainer">
+  After preprocessing, <a href="https://fmriprep.org/" target="_blank"
+  style="color:#5c6bc0;">fMRIPrep</a> aligns each BOLD run's reference volume
+  to the subject's T1-weighted anatomical scan (<b>coregistration</b>).
+  This is a critical step &mdash; if the functional and anatomical images are
+  misaligned, all downstream analyses (activation maps, connectivity, etc.)
+  will be unreliable.
+  <br><br>
+  Each overlay below shows the BOLD reference superimposed on the T1w.
+  <b>What to check:</b> the cortical surface outline from the BOLD should
+  closely follow the gray/white matter boundaries visible in the T1w.
+  If you see a clear shift, rotation, or distortion between the two, that
+  run's coregistration failed and the data should be reviewed.
+  <br><br>
+  <b>Note:</b> fMRIPrep also generates additional diagnostic figures
+  (confound correlation matrices, component-variance plots, tissue
+  segmentation overlays). These are available in fMRIPrep's own per-subject
+  HTML reports under <code>derivatives/sub-*/figures/</code> but are not
+  included here because they address preprocessing strategy decisions rather
+  than the scan-quality question this report targets.
+</div>
+{blocks_html}"""
+
+
 def _section_pipeline_failures(failures) -> str:
     rows = []
     for item in sorted(failures, key=lambda x: (x["sub_id"], x["ses_id"])):
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{item['sub_id']}/ses-{item['ses_id']}</b></td>"
+            f"<td><b>sub-{item['sub_id']}</b><br><span class='meta'>ses-{item['ses_id']}</span></td>"
             f"<td>{item.get('stage','?')}</td>"
             f"<td><span class='meta'>{item.get('error','')[:200]}</span></td>"
             f"</tr>"
@@ -609,12 +703,12 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
             )
         metrics_html = "<br>".join(metric_lines)
 
-        # --- Run column: subject/session bold, scan label gray ---
+        # --- Run column: subject bold, session meta, scan label meta ---
         scan_label = r.scan_label if hasattr(r, 'scan_label') else r.modality
-        ses_part = f"/ses-{r.ses_id}" if r.ses_id else ""
+        ses_part = f"<br><span class='meta'>ses-{r.ses_id}</span>" if r.ses_id else ""
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{r.sub_id}{ses_part}</b><br>"
+            f"<td><b>sub-{r.sub_id}</b>{ses_part}<br>"
             f"<span class='meta'>{scan_label}</span></td>"
             f"<td>{badge}</td>"
             f"<td>{metrics_html}</td>"
@@ -692,6 +786,50 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
   <span class="badge badge-ok" style="font-size:11px;">Normal</span>
   <span class="badge badge-warning" style="font-size:11px;">Borderline</span>
   <span class="badge badge-error" style="font-size:11px;">Out of range</span>
+  <br><br>
+  <b>How metrics are evaluated (two layers):</b>
+  <ol style="margin:6px 0 8px 22px;line-height:1.8;">
+    <li><b>Primary &mdash; within-study comparison (IQR-based).</b>
+      Each scan&rsquo;s metrics are compared to all other scans of the same type
+      in this dataset using the Interquartile Range (IQR) method.
+      A metric that falls <b>&gt;1.5&times;&nbsp;IQR</b> beyond the study&rsquo;s
+      &ldquo;worse&rdquo; quartile is flagged as
+      <span class="badge badge-warning" style="font-size:10px;">Borderline</span>;
+      <b>&gt;3&times;&nbsp;IQR</b> is flagged as
+      <span class="badge badge-error" style="font-size:10px;">Out of range</span>.
+      This adapts automatically to any acquisition protocol &mdash; no manual
+      threshold tuning required. Requires &ge;3 scans of the same type.</li>
+    <li><b>Safety net &mdash; absolute thresholds for extreme values.</b>
+      Protocol-independent ERROR thresholds catch values so extreme they indicate
+      a definite problem regardless of protocol (e.g.&nbsp;tSNR&nbsp;&lt;&nbsp;5,
+      mean&nbsp;FD&nbsp;&gt;&nbsp;1.0&nbsp;mm).
+      When fewer than 3 scans of the same type are available (IQR cannot run),
+      moderate absolute thresholds are applied as a WARNING-level fallback.</li>
+  </ol>
+  <b>Absolute safety-net thresholds (ERROR &mdash; always applied):</b><br>
+  <b>T1w:</b>&ensp;
+  SNR&nbsp;&lt;&nbsp;2.0 &nbsp;|&nbsp;
+  CNR&nbsp;&lt;&nbsp;0.8 &nbsp;|&nbsp;
+  CJV&nbsp;&gt;&nbsp;1.50 &nbsp;|&nbsp;
+  INU&nbsp;&gt;&nbsp;1.00 &nbsp;|&nbsp;
+  QI1&nbsp;&gt;&nbsp;0.10<br>
+  <b>BOLD:</b>&ensp;
+  tSNR&nbsp;&lt;&nbsp;5 &nbsp;|&nbsp;
+  FD&nbsp;&gt;&nbsp;1.00&nbsp;mm &nbsp;|&nbsp;
+  GSR&nbsp;&gt;&nbsp;0.30 &nbsp;|&nbsp;
+  AOR&nbsp;&gt;&nbsp;0.30<br>
+  <b>Fallback WARNING thresholds (used when &lt;3 scans):</b><br>
+  <b>T1w:</b>&ensp;
+  SNR&nbsp;&lt;&nbsp;6.0 &nbsp;|&nbsp;
+  CNR&nbsp;&lt;&nbsp;2.0 &nbsp;|&nbsp;
+  CJV&nbsp;&gt;&nbsp;0.60 &nbsp;|&nbsp;
+  INU&nbsp;&gt;&nbsp;0.50 &nbsp;|&nbsp;
+  QI1&nbsp;&gt;&nbsp;0.02<br>
+  <b>BOLD:</b>&ensp;
+  tSNR&nbsp;&lt;&nbsp;20 &nbsp;|&nbsp;
+  FD&nbsp;&gt;&nbsp;0.30&nbsp;mm &nbsp;|&nbsp;
+  GSR&nbsp;&gt;&nbsp;0.10 &nbsp;|&nbsp;
+  AOR&nbsp;&gt;&nbsp;0.10
 </div>
 {table_html}"""
 
@@ -721,12 +859,8 @@ def _section_connectivity_qc(connectivity_results) -> str:
         return ""
 
     intro = """<hr class="sep">
-<div class="nilearn-section">
-<div class="nilearn-header">
-  <span class="nilearn-tag">Nilearn</span>
-  <span class="nilearn-title">Functional Connectivity Quality Assessment</span>
-</div>
-<div class="section-explainer" style="background:#e8eaf6;border-color:#5c6bc0;color:#3949ab;">
+<h2>Functional Connectivity Quality Assessment</h2>
+<div class="section-explainer">
   This section evaluates whether each BOLD run has sufficient data quality for
   <b>functional connectivity analysis</b> (e.g., seed-based correlation, network parcellation,
   or graph-theoretic measures).
@@ -744,8 +878,7 @@ def _section_connectivity_qc(connectivity_results) -> str:
   Thresholds follow recommendations from
   <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/" target="_blank"
      style="color:#5c6bc0;">Parkes et al.</a>
-</div>
-<div class="nilearn-legend">
+  <br><br>
   <b>Metrics at a glance:</b><br>
   &#9679; <b>Mean FD</b> &mdash;
   Average framewise displacement across all volumes.
@@ -772,7 +905,7 @@ def _section_connectivity_qc(connectivity_results) -> str:
     rows = []
     for c in sorted(connectivity_results, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
         if c.worst_severity == "OK":
-            badge = '<span class="badge badge-ok">OK</span>'
+            badge = '<span class="badge-check">&#10003;</span>'
         elif c.worst_severity == "WARNING":
             badge = '<span class="badge badge-warning">WARNING</span>'
         elif c.worst_severity == "ERROR":
@@ -801,12 +934,12 @@ def _section_connectivity_qc(connectivity_results) -> str:
 
         action_box = ""
         if c.action:
-            action_box = (f"<div class='action-box' style='border-color:#5c6bc0;"
-                          f"background:#e8eaf6;color:#283593;'>{c.action}</div>")
+            action_box = f"<div class='action-box'>{c.action}</div>"
 
         rows.append(
             f"<tr>"
-            f"<td><b>sub-{c.sub_id}/ses-{c.ses_id}</b><br>"
+            f"<td><b>sub-{c.sub_id}</b><br>"
+            f"<span class='meta'>ses-{c.ses_id}</span><br>"
             f"<span class='meta'>{c.run_label}</span></td>"
             f"<td>{badge}</td>"
             f"<td><span class='{fd_cls}'>{c.mean_fd:.2f}&nbsp;mm</span></td>"
@@ -837,11 +970,22 @@ def _section_connectivity_qc(connectivity_results) -> str:
   <tbody>{rows_html}</tbody>
 </table>""")
 
-    # Connectivity Heatmaps
+    # Connectivity Heatmaps (collapsible)
     heatmap_runs = [c for c in connectivity_results
                     if getattr(c, 'heatmap_base64', None)]
     if heatmap_runs:
-        heatmap_parts = ['<h3>Connectivity Heatmaps (scrubbed data)</h3>']
+        heatmap_parts = [
+            '<h3>Connectivity Heatmaps (scrubbed data)</h3>',
+            '<button class="heatmap-toggle" onclick="'
+            "var c=this.nextElementSibling;"
+            "if(c.classList.contains('collapsed')){"
+            "c.classList.remove('collapsed');c.style.maxHeight=c.scrollHeight+'px';"
+            "this.textContent='Hide heatmaps'}"
+            "else{c.classList.add('collapsed');c.style.maxHeight='0';"
+            "this.textContent='Show heatmaps'}"
+            '">Show heatmaps</button>',
+            '<div class="heatmap-content collapsed">',
+        ]
         for c in sorted(heatmap_runs, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
             label = f"sub-{c.sub_id}/ses-{c.ses_id} — {c.run_label}"
             heatmap_parts.append(
@@ -861,9 +1005,9 @@ def _section_connectivity_qc(connectivity_results) -> str:
                     f'alt="Network summary">'
                 )
             heatmap_parts.append('</div>')
+        heatmap_parts.append('</div>')  # close .heatmap-content
         sections.append("\n".join(heatmap_parts))
 
-    sections.append("</div>")  # close .nilearn-section
     return "\n".join(sections)
 
 

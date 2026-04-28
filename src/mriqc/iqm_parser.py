@@ -1,8 +1,21 @@
 """
 MRIQC Image Quality Metrics (IQM) Parser - Layer 2 companion
 
-Parses the JSON files produced by MRIQC and flags subjects whose metrics
-fall outside acceptable ranges.
+Parses the JSON files produced by MRIQC and classifies metric quality using
+a two-layer approach:
+
+  **Primary: Within-study IQR-based outlier detection**
+  Each scan's metrics are compared to all other scans of the same modality
+  (T1w or BOLD) in the dataset.  Values falling >1.5× IQR from the
+  "worse" quartile are flagged as WARNING; >3× IQR are flagged as ERROR.
+  This adapts automatically to any acquisition protocol.
+
+  **Safety net: Absolute thresholds for extreme values**
+  Protocol-independent ERROR thresholds catch values so extreme that they
+  indicate a definite problem (e.g. sensor failure, severe artifact,
+  aborted scan) regardless of protocol.  When the dataset has fewer than
+  3 scans of the same modality (too few for IQR), moderate absolute
+  thresholds are used as a WARNING-level fallback.
 
 MRIQC writes one JSON per scan:
   <mriqc_dir>/sub-001_T1w.json
@@ -11,18 +24,18 @@ MRIQC writes one JSON per scan:
 Key metrics (see https://mriqc.readthedocs.io/en/stable/measures.html):
 
   Anatomical (T1w / T2w):
-    cjv      Coefficient of Joint Variation      lower = better  (>0.60 = warn)
-    cnr      Contrast-to-Noise Ratio             higher = better (<2.0 = warn)
-    snr_gm   SNR in gray matter                  higher = better (<6.0 = warn)
-    inu_range Intensity Non-Uniformity range      lower = better  (>0.50 = warn)
-    qi_1     Artifact presence (foreground)       lower = better  (>0.02 = warn)
+    cjv      Coefficient of Joint Variation      lower = better
+    cnr      Contrast-to-Noise Ratio             higher = better
+    snr_gm   SNR in gray matter                  higher = better
+    inu_range Intensity Non-Uniformity range      lower = better
+    qi_1     Artifact presence (foreground)       lower = better
 
   Functional (BOLD):
-    fd_mean  Mean Framewise Displacement (mm)    lower = better  (>0.3 = warn)
-    tsnr     Temporal SNR                        higher = better (<40  = warn)
-    gsr_x    Ghost-to-Signal Ratio X-direction   lower = better  (>0.1 = warn)
-    gsr_y    Ghost-to-Signal Ratio Y-direction   lower = better  (>0.1 = warn)
-    aor      AFNI outlier ratio                  lower = better  (>0.1 = warn)
+    fd_mean  Mean Framewise Displacement (mm)    lower = better
+    tsnr     Temporal SNR                        higher = better
+    gsr_x    Ghost-to-Signal Ratio X-direction   lower = better
+    gsr_y    Ghost-to-Signal Ratio Y-direction   lower = better
+    aor      AFNI outlier ratio                  lower = better
 """
 
 import json
@@ -33,25 +46,31 @@ from typing import Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Thresholds
-# Each entry: (warn_threshold, error_threshold, direction)
-# direction = "high"  means higher values are worse (flag when value > threshold)
-# direction = "low"   means lower values are worse  (flag when value < threshold)
+#
+# Each entry: (fallback_warn, safety_net_error, direction)
+#
+#   fallback_warn      — WARNING threshold applied when IQR detection is
+#                         unavailable (fewer than 3 scans of this modality).
+#   safety_net_error   — Absolute ERROR threshold, always applied.  Catches
+#                         extreme values regardless of protocol or dataset.
+#   direction          — "high" means higher values are worse;
+#                         "low"  means lower  values are worse.
 # ---------------------------------------------------------------------------
 
 THRESHOLDS_ANAT: Dict[str, tuple] = {
-    "cjv":       (0.60, 1.00, "high"),
-    "cnr":       (2.00, 1.20, "low"),
-    "snr_gm":    (6.00, 4.00, "low"),
-    "inu_range": (0.50, 0.70, "high"),
-    "qi_1":      (0.02, 0.05, "high"),
+    "cjv":       (0.60, 1.50, "high"),
+    "cnr":       (2.00, 0.80, "low"),
+    "snr_gm":    (6.00, 2.00, "low"),
+    "inu_range": (0.50, 1.00, "high"),
+    "qi_1":      (0.02, 0.10, "high"),
 }
 
 THRESHOLDS_BOLD: Dict[str, tuple] = {
-    "fd_mean": (0.30, 0.55, "high"),
-    "tsnr":    (40.0, 20.0, "low"),
-    "gsr_x":   (0.10, 0.20, "high"),
-    "gsr_y":   (0.10, 0.20, "high"),
-    "aor":     (0.10, 0.20, "high"),
+    "fd_mean": (0.30, 1.00, "high"),
+    "tsnr":    (20.0, 5.0,  "low"),
+    "gsr_x":   (0.10, 0.30, "high"),
+    "gsr_y":   (0.10, 0.30, "high"),
+    "aor":     (0.10, 0.30, "high"),
 }
 
 METRIC_LABELS: Dict[str, str] = {
@@ -132,9 +151,12 @@ class IQMResult:
 
 def parse_all_subjects(mriqc_dir) -> List[IQMResult]:
     """
-    Parse all MRIQC JSON IQM files in mriqc_dir.
+    Parse all MRIQC JSON IQM files in mriqc_dir and classify quality.
 
-    Returns one IQMResult per scan (JSON file) found.
+    Returns one IQMResult per scan (JSON file) found, with flags from:
+      1. Absolute safety-net ERROR thresholds (always applied)
+      2. IQR-based within-study outlier detection (primary method, 3+ scans)
+      3. Absolute fallback WARNING thresholds (when <3 scans per modality)
     """
     mriqc_path = Path(mriqc_dir)
     results: List[IQMResult] = []
@@ -144,7 +166,7 @@ def parse_all_subjects(mriqc_dir) -> List[IQMResult]:
 
     # Only match IQM files (T1w, T2w, bold); skip timeseries/confounds.
     # Use rglob to find files in both flat layout (older MRIQC) and
-    # BIDS-derivatives layout (MRIQC ≥22.x: sub-XXX/ses-YYY/anat|func/).
+    # BIDS-derivatives layout (MRIQC >=22.x: sub-XXX/ses-YYY/anat|func/).
     # Exclude the work/ directory which contains intermediate files.
     for suffix in ("_T1w.json", "_T2w.json", "_bold.json"):
         for json_file in sorted(mriqc_path.rglob(f"sub-*{suffix}")):
@@ -154,11 +176,192 @@ def parse_all_subjects(mriqc_dir) -> List[IQMResult]:
             if result is not None:
                 results.append(result)
 
+    # Apply the full classification pipeline
+    _classify_results(results)
+
     return results
 
 
+# ---------------------------------------------------------------------------
+# Classification pipeline
+# ---------------------------------------------------------------------------
+
+def _classify_results(results: List[IQMResult]) -> None:
+    """
+    Apply the two-layer quality classification to all parsed results.
+
+    Called automatically by ``parse_all_subjects``.  Mutates ``results``
+    in place by appending flags to each IQMResult.
+
+    Layer 1 (safety-net absolute ERROR) is already applied during parsing.
+    This function adds:
+      - Layer 2: IQR-based within-study outlier detection (primary)
+      - Layer 3: Fallback WARNING thresholds for small groups
+    """
+    _flag_iqr_outliers(results)
+    _flag_small_dataset_fallback(results)
+
+
+def _flag_iqr_outliers(results: List[IQMResult]) -> None:
+    """
+    Primary quality detector: within-study IQR-based outlier flagging.
+
+    For each modality group (T1w / bold) and each metric, computes Q1, Q3,
+    and IQR across all scans.  Flags scans whose metric falls beyond the
+    "worse" quartile:
+
+      >1.5 IQR  →  WARNING  (standard outlier)
+      >3.0 IQR  →  ERROR    (extreme outlier)
+
+    Only runs when there are 3+ scans of the same modality.  Flags are
+    appended to each IQMResult's existing ``flags`` list.
+    """
+    from collections import defaultdict
+
+    # Group results by modality category
+    groups: Dict[str, List[IQMResult]] = defaultdict(list)
+    for r in results:
+        mod_key = "bold" if r.modality == "bold" else "anat"
+        groups[mod_key].append(r)
+
+    for mod_key, group in groups.items():
+        if len(group) < 3:
+            continue
+
+        thresholds = THRESHOLDS_BOLD if mod_key == "bold" else THRESHOLDS_ANAT
+        for metric, (_fallback, _safety, direction) in thresholds.items():
+            values = [(r, r.metrics.get(metric)) for r in group]
+            valid = [(r, v) for r, v in values if v is not None]
+            if len(valid) < 3:
+                continue
+
+            nums = sorted(v for _, v in valid)
+            q1 = nums[len(nums) // 4]
+            q3 = nums[3 * len(nums) // 4]
+            iqr = q3 - q1
+            if iqr == 0:
+                continue
+
+            for r, v in valid:
+                # Determine outlier level
+                if direction == "high":
+                    deviation = v - q3
+                else:
+                    deviation = q1 - v
+
+                if deviation <= 0:
+                    continue  # within IQR — not an outlier
+
+                # Skip if already flagged for this metric (e.g. safety-net)
+                already = any(f.metric == metric for f in r.flags)
+                if already:
+                    continue
+
+                if deviation > 3.0 * iqr:
+                    severity = "ERROR"
+                    iqr_label = ">3.0 IQR"
+                elif deviation > 1.5 * iqr:
+                    severity = "WARNING"
+                    iqr_label = ">1.5 IQR"
+                else:
+                    continue
+
+                label = METRIC_LABELS.get(metric, metric)
+                better = "lower" if direction == "high" else "higher"
+                r.flags.append(IQMFlag(
+                    sub_id=r.sub_id,
+                    ses_id=r.ses_id,
+                    scan_file=r.scan_file,
+                    modality=r.modality,
+                    metric=metric,
+                    metric_label=label,
+                    value=v,
+                    severity=severity,
+                    plain_message=(
+                        f"{label} = {v:.3f} is a dataset outlier "
+                        f"({iqr_label} from peers). "
+                        f"Expected {better} values indicate better quality."
+                    ),
+                    action=(
+                        "Review raw scan images. Compare with other scans "
+                        "in the dataset."
+                        if severity == "ERROR"
+                        else "Review MRIQC visual report for this subject."
+                    ),
+                ))
+
+
+def _flag_small_dataset_fallback(results: List[IQMResult]) -> None:
+    """
+    Fallback WARNING flags for modality groups with <3 scans.
+
+    When there are too few scans for IQR-based detection, moderate
+    absolute thresholds are applied as WARNING-level flags so that
+    borderline values are not silently ignored.
+    """
+    from collections import defaultdict
+
+    groups: Dict[str, List[IQMResult]] = defaultdict(list)
+    for r in results:
+        mod_key = "bold" if r.modality == "bold" else "anat"
+        groups[mod_key].append(r)
+
+    for mod_key, group in groups.items():
+        if len(group) >= 3:
+            continue  # IQR detection handles this group
+
+        thresholds = THRESHOLDS_BOLD if mod_key == "bold" else THRESHOLDS_ANAT
+        for r in group:
+            for metric, (fallback_warn, _safety, direction) in thresholds.items():
+                value = r.metrics.get(metric)
+                if value is None:
+                    continue
+
+                # Skip if already flagged for this metric (e.g. safety-net)
+                already = any(f.metric == metric for f in r.flags)
+                if already:
+                    continue
+
+                crosses = (
+                    (direction == "high" and value >= fallback_warn) or
+                    (direction == "low" and value <= fallback_warn)
+                )
+                if not crosses:
+                    continue
+
+                label = METRIC_LABELS.get(metric, metric)
+                better = "lower" if direction == "high" else "higher"
+                r.flags.append(IQMFlag(
+                    sub_id=r.sub_id,
+                    ses_id=r.ses_id,
+                    scan_file=r.scan_file,
+                    modality=r.modality,
+                    metric=metric,
+                    metric_label=label,
+                    value=value,
+                    severity="WARNING",
+                    plain_message=(
+                        f"{label} = {value:.3f} "
+                        f"({'above' if direction == 'high' else 'below'} "
+                        f"warning threshold of {fallback_warn}). "
+                        f"Expected {better} values indicate better quality. "
+                        f"(Too few scans for within-study comparison.)"
+                    ),
+                    action="Review MRIQC visual report for this subject.",
+                ))
+
+
+# ---------------------------------------------------------------------------
+# Single-file parsing
+# ---------------------------------------------------------------------------
+
 def _parse_iqm_file(json_path: Path) -> Optional[IQMResult]:
-    """Parse a single MRIQC IQM JSON file."""
+    """
+    Parse a single MRIQC IQM JSON file.
+
+    Applies only the safety-net absolute ERROR thresholds.  IQR-based
+    detection and fallback warnings are added later by ``_classify_results``.
+    """
     try:
         with open(json_path, encoding="utf-8") as f:
             data = json.load(f)
@@ -187,14 +390,19 @@ def _parse_iqm_file(json_path: Path) -> Optional[IQMResult]:
     if not metrics:
         return None
 
+    # Apply safety-net absolute ERROR thresholds only.
+    # These catch extreme values regardless of protocol or dataset size.
     flags: List[IQMFlag] = []
-    for metric, (warn_thresh, err_thresh, direction) in thresholds.items():
+    for metric, (_fallback, safety_net, direction) in thresholds.items():
         value = metrics.get(metric)
         if value is None:
             continue
 
-        severity = _classify(value, warn_thresh, err_thresh, direction)
-        if severity == "OK":
+        crosses = (
+            (direction == "high" and value >= safety_net) or
+            (direction == "low" and value <= safety_net)
+        )
+        if not crosses:
             continue
 
         label = METRIC_LABELS.get(metric, metric)
@@ -207,18 +415,15 @@ def _parse_iqm_file(json_path: Path) -> Optional[IQMResult]:
             metric=metric,
             metric_label=label,
             value=value,
-            severity=severity,
+            severity="ERROR",
             plain_message=(
-                f"{label} = {value:.3f} "
-                f"({'above' if direction == 'high' else 'below'} "
-                f"{'warning' if severity == 'WARNING' else 'critical'} threshold). "
-                f"Expected {better} values indicate better image quality."
+                f"{label} = {value:.3f} crosses the absolute safety-net "
+                f"threshold ({safety_net}). This indicates a likely problem "
+                f"regardless of protocol. "
+                f"Expected {better} values indicate better quality."
             ),
-            action=(
-                "Review raw scan images. Consider excluding this subject or re-scanning."
-                if severity == "ERROR"
-                else "Review MRIQC visual report for this subject."
-            ),
+            action="Review raw scan images. Consider excluding this "
+                   "subject or re-scanning.",
         ))
 
     return IQMResult(
@@ -231,94 +436,14 @@ def _parse_iqm_file(json_path: Path) -> Optional[IQMResult]:
     )
 
 
-def _classify(value: float, warn: float, error: float, direction: str) -> str:
-    if direction == "high":
-        if value >= error:
-            return "ERROR"
-        if value >= warn:
-            return "WARNING"
-    else:
-        if value <= error:
-            return "ERROR"
-        if value <= warn:
-            return "WARNING"
-    return "OK"
-
+# ---------------------------------------------------------------------------
+# Legacy API — kept for backwards compatibility
+# ---------------------------------------------------------------------------
 
 def flag_dataset_outliers(results: List[IQMResult]) -> List[IQMResult]:
-    """
-    Add within-dataset outlier flags using IQR-based detection.
-
-    For each modality group (T1w / bold) and each metric, computes Q1, Q3,
-    and IQR across all scans.  A scan whose metric falls >1.5*IQR beyond
-    the "worse" quartile (Q3 for "high-is-bad", Q1 for "low-is-bad") is
-    flagged as a WARNING dataset outlier.
-
-    Only runs when there are 3+ scans of the same modality.  Flags are
-    appended to each IQMResult's existing ``flags`` list and will appear in
-    the report alongside absolute-threshold flags.
-    """
-    from collections import defaultdict
-
-    # Group results by modality category
-    groups: Dict[str, List[IQMResult]] = defaultdict(list)
-    for r in results:
-        mod_key = "bold" if r.modality == "bold" else "anat"
-        groups[mod_key].append(r)
-
-    for mod_key, group in groups.items():
-        if len(group) < 3:
-            continue
-
-        thresholds = THRESHOLDS_BOLD if mod_key == "bold" else THRESHOLDS_ANAT
-        for metric, (_warn, _err, direction) in thresholds.items():
-            values = [(r, r.metrics.get(metric)) for r in group]
-            valid = [(r, v) for r, v in values if v is not None]
-            if len(valid) < 3:
-                continue
-
-            nums = sorted(v for _, v in valid)
-            q1 = nums[len(nums) // 4]
-            q3 = nums[3 * len(nums) // 4]
-            iqr = q3 - q1
-            if iqr == 0:
-                continue
-
-            for r, v in valid:
-                is_outlier = False
-                if direction == "high" and v > q3 + 1.5 * iqr:
-                    is_outlier = True
-                elif direction == "low" and v < q1 - 1.5 * iqr:
-                    is_outlier = True
-
-                if not is_outlier:
-                    continue
-
-                # Skip if already flagged at WARNING or worse for this metric
-                already = any(f.metric == metric for f in r.flags)
-                if already:
-                    continue
-
-                label = METRIC_LABELS.get(metric, metric)
-                better = "lower" if direction == "high" else "higher"
-                r.flags.append(IQMFlag(
-                    sub_id=r.sub_id,
-                    ses_id=r.ses_id,
-                    scan_file=r.scan_file,
-                    modality=r.modality,
-                    metric=metric,
-                    metric_label=label,
-                    value=v,
-                    severity="WARNING",
-                    plain_message=(
-                        f"{label} = {v:.3f} is a dataset outlier "
-                        f"(>1.5 IQR from peers). "
-                        f"Expected {better} values indicate better image quality."
-                    ),
-                    action="Compare with other scans in the dataset. "
-                           "Review MRIQC visual report for this subject.",
-                ))
-
+    """Add within-dataset outlier flags.  Now called automatically by
+    ``parse_all_subjects``; this wrapper is kept for direct callers."""
+    _flag_iqr_outliers(results)
     return results
 
 

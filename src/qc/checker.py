@@ -184,12 +184,14 @@ class BIDSQualityChecker:
         """
         Compare scan profiles across sessions within the same subject.
 
-        For each subject with 2+ sessions, the first session (sorted) is
-        treated as the baseline.  Any subsequent session whose scan counts
-        differ produces a WARNING-level finding.
+        For each subject with 2+ sessions, the most common scan count per
+        scan type (mode) is treated as the expected value.  Any session
+        whose count deviates from the mode produces a WARNING-level finding.
 
         Returns the list of new findings (also stored internally).
         """
+        from collections import Counter as _Counter
+
         bids_path = Path(bids_dir)
         new_findings: List[QCFinding] = []
 
@@ -210,22 +212,23 @@ class BIDSQualityChecker:
             if len(profiles) < 2:
                 continue
 
-            baseline_ses = ses_ids[0]
-            baseline = profiles.get(baseline_ses)
-            if baseline is None:
-                continue
+            # Determine the expected count per scan type using the mode
+            # (most common value) across all sessions.
+            all_keys: set = set()
+            for p in profiles.values():
+                all_keys.update(p.keys())
 
-            for ses_id in ses_ids[1:]:
-                profile = profiles.get(ses_id)
-                if profile is None:
-                    continue
+            expected: Dict[str, int] = {}
+            for key in all_keys:
+                counts = [p.get(key, 0) for p in profiles.values()]
+                expected[key] = _Counter(counts).most_common(1)[0][0]
 
-                # Compare all keys present in either profile
-                all_keys = sorted(set(baseline) | set(profile))
-                for key in all_keys:
-                    b_count = baseline.get(key, 0)
-                    s_count = profile.get(key, 0)
-                    if b_count != s_count:
+            # Flag any session that deviates from the expected profile
+            for ses_id, profile in sorted(profiles.items()):
+                for key in sorted(all_keys):
+                    actual = profile.get(key, 0)
+                    exp = expected.get(key, 0)
+                    if actual != exp:
                         new_findings.append(
                             QCFinding(
                                 severity=Severity.WARNING,
@@ -233,13 +236,13 @@ class BIDSQualityChecker:
                                 ses_id=ses_id,
                                 category="run_consistency",
                                 message=(
-                                    f"ses-{ses_id} has {s_count} {key} file(s) "
-                                    f"but ses-{baseline_ses} has {b_count}"
+                                    f"ses-{ses_id} has {actual} {key} file(s) "
+                                    f"but {exp} expected"
                                 ),
                                 plain_message=(
-                                    f"Session ses-{ses_id} has {s_count} {key} "
-                                    f"file(s) while the baseline session "
-                                    f"ses-{baseline_ses} has {b_count}. "
+                                    f"Session ses-{ses_id} has {actual} {key} "
+                                    f"file(s), but most sessions for this "
+                                    f"subject have {exp}. "
                                     f"The scan protocol may differ."
                                 ),
                                 action="",
