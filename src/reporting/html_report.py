@@ -374,7 +374,7 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
 
     iqm_by_sub = {}
     for r in (iqm_results or []):
-        iqm_by_sub.setdefault(r.sub_id, []).append(r)
+        iqm_by_sub.setdefault((r.sub_id, r.ses_id), []).append(r)
 
     connectivity_by_sub = {}
     for c in (connectivity_results or []):
@@ -396,7 +396,7 @@ def _section_summary_table(subjects, qc_findings, motion_results, iqm_results=No
         else:
             qc_badge = _check
 
-        sub_iqm = iqm_by_sub.get(sub_id, [])
+        sub_iqm = iqm_by_sub.get((sub_id, ses_id), [])
         if any(r.worst_severity == "ERROR" for r in sub_iqm):
             iqm_badge = '<span class="badge badge-error">Error</span>'
         elif any(r.worst_severity == "WARNING" for r in sub_iqm):

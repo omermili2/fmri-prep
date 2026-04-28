@@ -104,6 +104,24 @@ def _collect_coreg_plots(derivatives_dir):
     return coreg_plots
 
 
+def _read_researcher_comments(output_folder):
+    """Read the latest researcher comments from the comments file.
+
+    The GUI (or CLI) writes comments to
+    ``<output_folder>/execution_logs/.researcher_comments.txt`` and may
+    update the file while the pipeline is running.  This helper is called
+    just before each report is generated so the reports always contain the
+    most recent version of the comments.
+    """
+    comments_path = Path(output_folder) / "execution_logs" / ".researcher_comments.txt"
+    try:
+        if comments_path.exists():
+            return comments_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass  # Best-effort
+    return ""
+
+
 def _write_structured_summary(
     summary_path,
     report,
@@ -656,8 +674,11 @@ def cleanup_work_dirs(output_folder, report):
     cleanup_size = 0
     output_path = Path(output_folder)
 
+    mriqc_root = output_path / "derivatives" / "mriqc"
     targets = [
-        output_path / "derivatives" / "mriqc" / "work",
+        mriqc_root / "work",       # nipype workflow cache (heaviest)
+        mriqc_root / ".bids_db",   # BIDS layout SQLite index
+        mriqc_root / "logs",       # MRIQC runtime logs
     ]
 
     for target in targets:
@@ -1012,14 +1033,22 @@ Examples:
     safe_print(f"Execution logs: {logs_folder}", flush=True)
 
     # Decode researcher comments (base64-encoded from GUI, or plain text from CLI)
-    researcher_comments = args.researcher_comments or ""
-    if researcher_comments:
+    # and seed the comments file.  The GUI (or user) may update this file while
+    # the pipeline runs; reports will re-read it just before generation.
+    researcher_comments_initial = args.researcher_comments or ""
+    if researcher_comments_initial:
         try:
-            researcher_comments = base64.b64decode(
-                researcher_comments.encode('ascii')
+            researcher_comments_initial = base64.b64decode(
+                researcher_comments_initial.encode('ascii')
             ).decode('utf-8')
         except Exception:
             pass  # Not base64 — use as-is (plain text from CLI)
+    # Seed the comments file so that even CLI-provided comments are stored
+    comments_file = logs_folder / ".researcher_comments.txt"
+    try:
+        comments_file.write_text(researcher_comments_initial, encoding="utf-8")
+    except Exception:
+        pass
 
     # Initialize report
     report = ExecutionReport()
@@ -1027,7 +1056,7 @@ Examples:
     report.output_folder = str(output_folder)
     report.skip_bids = args.skip_bids
     report.skip_fmriprep = args.skip_fmriprep
-    report.set_researcher_comments(researcher_comments)
+    report.set_researcher_comments(researcher_comments_initial)
     
     safe_print(f"Output folder: {output_folder}", flush=True)
     
@@ -1374,7 +1403,7 @@ Examples:
             str(mriqc_dir), early_iqm, early_reports,
             qc_findings=qc_checker.get_all(),
             output_folder=str(output_folder),
-            researcher_comments=researcher_comments,
+            researcher_comments=_read_researcher_comments(output_folder),
         )
         safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
         safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
@@ -1597,6 +1626,12 @@ Examples:
     # Only generate the full pipeline report when fMRIPrep actually ran;
     # when fMRIPrep is skipped the early MRIQC report is sufficient.
     report.record_phase_start("Report Generation")
+
+    # Re-read researcher comments right before report generation so the
+    # user's latest edits (made while the pipeline was running) are included.
+    researcher_comments = _read_researcher_comments(output_folder)
+    report.set_researcher_comments(researcher_comments)
+
     if not args.skip_fmriprep:
         html_path = generate_html_report(
             str(output_folder),

@@ -550,7 +550,22 @@ class App(ctk.CTk):
         """Save the current comments and disable the button until text changes."""
         self._saved_comments_text = self._get_researcher_comments()
         self.btn_save_comments.configure(state="disabled", fg_color="#555555")
+        # Write to the comments file so the running pipeline picks up changes
+        self._write_comments_file()
         self.console.log("Researcher comments saved.", "success")
+
+    def _write_comments_file(self):
+        """Write current comments to the output folder so the orchestrator
+        can read the latest version just before generating reports."""
+        folder = self.current_output_folder
+        if not folder:
+            return  # Pipeline hasn't started yet or folder unknown
+        try:
+            comments_path = Path(folder) / "execution_logs" / ".researcher_comments.txt"
+            comments_path.parent.mkdir(parents=True, exist_ok=True)
+            comments_path.write_text(self._saved_comments_text or "", encoding="utf-8")
+        except Exception:
+            pass  # Best-effort; don't disrupt the user
 
     # --- Time-estimate constants (minutes) ---
     _BIDS_MIN_PER_SESSION = 2        # BIDS conversion + QC per session
@@ -1195,7 +1210,10 @@ class App(ctk.CTk):
                 encoded_opts = self._encode_fmriprep_options(fmriprep_opts)
                 cmd.extend(["--fmriprep-opts", encoded_opts])
 
-        # Pass researcher comments (base64-encoded for safe transport)
+        # Researcher comments are written to a file in the output folder
+        # once the orchestrator prints the output path (see _write_comments_file).
+        # Pass initial comments via CLI so the orchestrator can seed the file,
+        # but the orchestrator will always re-read the file before report generation.
         comments = self._saved_comments_text
         if comments:
             encoded_comments = base64.b64encode(
@@ -1225,9 +1243,10 @@ class App(ctk.CTk):
             for line in self.current_process.stdout:
                 stripped_line = line.strip()
                 
-                # Capture output folder path
+                # Capture output folder path and seed the comments file
                 if stripped_line.startswith("Output folder:"):
                     self.current_output_folder = stripped_line.replace("Output folder:", "").strip()
+                    self._write_comments_file()
                 
                 # Parse progress markers
                 if stripped_line.startswith("[PROGRESS:"):
