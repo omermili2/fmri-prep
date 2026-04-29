@@ -494,9 +494,9 @@ def _section_motion(motion_results) -> str:
     rows = []
     for m in sorted(motion_results, key=lambda x: (x.sub_id, x.ses_id)):
         if m.flag == "RESCAN":
-            badge = '<span class="badge badge-rescan">RE-SCAN</span>'
+            badge = '<span class="badge badge-rescan">Error</span>'
         elif m.flag == "WARNING":
-            badge = '<span class="badge badge-warning">WARNING</span>'
+            badge = '<span class="badge badge-warning">Warning</span>'
         else:
             badge = _check
 
@@ -529,8 +529,8 @@ def _section_motion(motion_results) -> str:
   functional-connectivity estimates.
   <br><br>
   <b>Thresholds used here:</b>&ensp;
-  RE-SCAN: &ge;20% high-motion frames <i>or</i> mean&nbsp;FD &ge; 1.0&nbsp;mm &nbsp;|&nbsp;
-  WARNING: &ge;10% high-motion frames <i>or</i> mean&nbsp;FD &ge; 0.5&nbsp;mm.
+  Error: &ge;20% high-motion frames <i>or</i> mean&nbsp;FD &ge; 1.0&nbsp;mm &nbsp;|&nbsp;
+  Warning: &ge;10% high-motion frames <i>or</i> mean&nbsp;FD &ge; 0.5&nbsp;mm.
 </div>
 <table>
   <thead><tr>
@@ -907,9 +907,9 @@ def _section_connectivity_qc(connectivity_results) -> str:
         if c.worst_severity == "OK":
             badge = '<span class="badge-check">&#10003;</span>'
         elif c.worst_severity == "WARNING":
-            badge = '<span class="badge badge-warning">WARNING</span>'
+            badge = '<span class="badge badge-warning">Warning</span>'
         elif c.worst_severity == "ERROR":
-            badge = '<span class="badge badge-error">EXCLUDE</span>'
+            badge = '<span class="badge badge-error">Error</span>'
         else:
             badge = '<span class="metric-unknown">UNKNOWN</span>'
 
