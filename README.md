@@ -27,7 +27,7 @@ flowchart TD
     C --> E
 
     subgraph PHASE3 ["Phase 3: fMRIPrep  (per subject, parallel, via Docker)"]
-        E["runner.py\n• Motion correction\n• Slice-timing correction\n• Susceptibility distortion correction\n• Brain extraction & registration\n• ICA-AROMA denoising (optional)\n→ outputs confounds TSV + preprocessed BOLD"]
+        E["runner.py\n• Motion correction\n• Slice-timing correction\n• Susceptibility distortion correction\n• Brain extraction & registration\n→ outputs confounds TSV + preprocessed BOLD"]
     end
 
     D2 --> F
@@ -82,13 +82,17 @@ Requires Docker. One-time image pull: `docker pull nipreps/mriqc:24.0.2`
 
 MRIQC sessions are independent — each session's quality metrics are computed from that session's images alone. The pipeline automatically detects available Docker VM resources (CPU / RAM) and distributes them across parallel containers.
 
-| Metric | Meaning | Red flag |
-|---|---|---|
-| **SNR / CNR** (T1w) | Structural signal quality | Very low — poor image quality |
-| **CJV** (T1w) | Coefficient of joint variation | > 0.7 — motion or B1 artifact |
-| **tSNR** (BOLD) | Temporal signal stability | < 30 — noisy data |
-| **FD mean** (BOLD) | Average head motion per TR | > 0.5 mm — elevated motion |
-| **GSR x/y** (BOLD) | EPI ghosting artifact | > 0.1 — check phase-encode direction |
+Metrics are evaluated using **within-study IQR-based outlier detection** (primary) and **absolute safety-net thresholds** (catch extreme values regardless of protocol).
+
+| Metric | Meaning | Warning (IQR or fallback) | Error (safety net) |
+|---|---|---|---|
+| **SNR** (T1w) | Signal-to-noise in gray matter | < 6.0 | < 2.0 |
+| **CNR** (T1w) | Contrast-to-noise ratio | < 2.0 | < 0.8 |
+| **CJV** (T1w) | Coefficient of joint variation | > 0.60 | > 1.50 |
+| **tSNR** (BOLD) | Temporal signal stability | < 20.0 | < 5.0 |
+| **FD mean** (BOLD) | Average head motion per TR | > 0.30 mm | > 1.00 mm |
+| **GSR x/y** (BOLD) | EPI ghosting artifact | > 0.10 | > 0.30 |
+| **AOR** (BOLD) | AFNI outlier ratio | > 0.10 | > 0.30 |
 
 After MRIQC completes, a **standalone MRIQC report** (`mriqc_report.html`) is generated automatically in the main output folder. This provides early feedback on image quality before the longer fMRIPrep step begins.
 
@@ -145,9 +149,10 @@ Sections in the report:
 3. BIDS quality findings
 4. MRIQC Image Quality Metrics (unless `--skip-mriqc` was used)
 5. Motion analysis
-6. Connectivity QC (if enabled)
-7. Pipeline failures (if any)
-8. Researcher comments
+6. fMRIPrep Registration Quality — coregistration overlay SVGs (if fMRIPrep ran)
+7. Connectivity QC (if enabled)
+8. Pipeline failures (if any)
+9. Researcher comments
 
 ---
 
@@ -155,6 +160,8 @@ Sections in the report:
 
 ```
 output_YYYYMMDD_HHMMSS/
+├── dataset_description.json     ← BIDS dataset metadata (auto-generated)
+├── .bidsignore                  ← Tells BIDS validators to skip non-BIDS files
 ├── sub-001/ses-01/              ← BIDS data (anat/, func/, etc.)
 ├── sub-002/ses-01/
 ├── ...
@@ -162,9 +169,9 @@ output_YYYYMMDD_HHMMSS/
 │   ├── fmriprep/
 │   │   └── sub-001/            ← Preprocessed BOLD + confounds TSV files
 │   ├── mriqc/
-│   │   ├── group_T1w.html
+│   │   ├── group_T1w.html      ← Interactive group-level outlier scatter plots
 │   │   ├── group_bold.html
-│   │   └── sub-001/anat/*.html
+│   │   └── sub-001/*.html      ← Per-scan visual quality reports
 │   └── fmriprep_debug.log      ← Detailed error log for failed fMRIPrep runs
 ├── full_pipeline_report.html    ← Final QC report — open this in a browser
 ├── mriqc_report.html            ← Early MRIQC report (available before fMRIPrep)
@@ -223,11 +230,23 @@ python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output -
 # Full pipeline + connectivity QC (requires nilearn)
 python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --connectivity-qc
 
+# Process a single subject (with optional session filter)
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --subject 010 --session 01
+
+# Run fMRIPrep on an existing BIDS folder
+python -m src.orchestrator --bids-folder /path/to/output_YYYYMMDD_HHMMSS
+
 # Re-run QC only on an existing output folder (no reprocessing)
 python -m src.orchestrator --qc-only --bids-folder /path/to/output_YYYYMMDD_HHMMSS
 
 # With DICOM metadata anonymization
 python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --anonymize
+
+# Control parallelism (default: auto-detected, 4–12 workers)
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --parallel 6
+
+# Keep intermediate work directories for debugging
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output --keep-temp
 
 # Long FreeSurfer recon-all run (adds ~6+ hours per subject)
 python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output \
@@ -248,7 +267,8 @@ PY
 | `dcm2niix` | BIDS conversion (bundled in `tools/` or system-installed) |
 | Docker Desktop | fMRIPrep and MRIQC (both run in containers) |
 | [FreeSurfer License](https://surfer.nmr.mgh.harvard.edu/registration.html) | Required by fMRIPrep (free registration) |
-| `nilearn`, `nibabel` | Connectivity QC only (`pip install -r requirements.txt`) |
+
+All Python dependencies (including `nilearn`, `nibabel`, `matplotlib` for connectivity QC) are listed in `requirements.txt` and installed automatically on first run.
 
 ### Docker Desktop Performance
 
@@ -282,7 +302,8 @@ fMRI_Masters/
 │   │   ├── checker.py          # BIDS quality checks (missing scans, corruption)
 │   │   ├── motion_parser.py    # Motion analysis from fMRIPrep confounds
 │   │   ├── connectivity_qc.py  # Nilearn-based connectivity QC (scrubbing, heatmaps)
-│   │   └── connectivity_thresholds.py  # Thresholds from literature
+│   │   ├── connectivity_thresholds.py  # Thresholds from literature
+│   │   └── atlas_data/         # Bundled Schaefer+Tian brain parcellation atlas
 │   └── reporting/
 │       ├── html_report.py      # HTML QC report generator (full + standalone MRIQC)
 │       └── report.py           # Text execution report
@@ -290,7 +311,9 @@ fMRI_Masters/
 │   ├── BIDS_CONVERSION_GUIDE.md
 │   ├── FMRIPREP_GUIDE.md
 │   ├── FREESURFER_LICENSE.md
-│   └── MRIQC_REPORT_GUIDE.md
+│   ├── MRIQC_REPORT_GUIDE.md
+│   ├── researcher_guide.html   # Visual step-by-step researcher guide
+│   └── guide/                  # Multi-page HTML guide source
 ├── test/                       # Test suite (69 tests)
 └── tools/                      # Bundled dcm2niix binary
 ```
@@ -301,6 +324,7 @@ fMRI_Masters/
 
 | Guide | Description |
 |---|---|
+| [Researcher Guide](docs/researcher_guide.html) | Visual step-by-step guide: setup, running, interpreting results |
 | [BIDS Conversion Guide](docs/BIDS_CONVERSION_GUIDE.md) | Input folder format, conversion steps, output layout |
 | [fMRIPrep Guide](docs/FMRIPREP_GUIDE.md) | Preprocessing steps, output files, confounds |
 | [FreeSurfer License](docs/FREESURFER_LICENSE.md) | How to obtain and configure the FreeSurfer license |
