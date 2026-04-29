@@ -503,36 +503,6 @@ class ExecutionReport:
             lines.append("    No comments were entered by the researcher.")
         lines.append("")
 
-        # ===== NEXT STEPS =====
-        lines.append("-" * 70)
-        lines.append("  WHAT TO DO NEXT")
-        lines.append("-" * 70)
-        lines.append("")
-        
-        step = 1
-        if fail_count > 0:
-            lines.append(f"  {step}. FIX THE FAILED CONVERSIONS (see problems section above)")
-            step += 1
-        
-        if success_count > 0:
-            lines.append(f"  {step}. VERIFY YOUR DATA")
-            lines.append("     Open a few .nii.gz files in a viewer like FSLeyes or ITK-SNAP")
-            lines.append("     to make sure the brain images look correct.")
-            lines.append("")
-            step += 1
-            
-            lines.append(f"  {step}. RUN IMAGE QUALITY CHECK (MRIQC)")
-            lines.append("     Use the 'BIDS + MRIQC' button to run MRIQC on your data.")
-            lines.append("     MRIQC checks image quality (SNR, motion, ghosting) before")
-            lines.append("     preprocessing. Review the MRIQC report in derivatives/mriqc/.")
-            lines.append("")
-            step += 1
-
-            lines.append(f"  {step}. PREPROCESS YOUR DATA")
-            lines.append("     Use the 'Full Pipeline' button in the fMRI Preprocessing")
-            lines.append("     Assistant to run BIDS conversion, MRIQC, and fMRIPrep.")
-            lines.append("")
-        
         # ===== TECHNICAL DETAILS =====
         lines.append("-" * 70)
         lines.append("  TECHNICAL DETAILS (for troubleshooting)")
