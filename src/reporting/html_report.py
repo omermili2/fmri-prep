@@ -1036,7 +1036,7 @@ def _section_researcher_comments(comments: str = "") -> str:
     return (
         '<hr class="sep">\n'
         '<h2 style="border-left-color:#5c6bc0;">Researcher Comments</h2>\n'
-        '<div style="background:#f8f9fa;border:1px solid #e0e0e0;border-left:4px solid #5c6bc0;'
+        '<div dir="auto" style="background:#f8f9fa;border:1px solid #e0e0e0;border-left:4px solid #5c6bc0;'
         'border-radius:6px;padding:16px 20px;margin-bottom:24px;'
         f'font-size:14px;line-height:1.7;color:#333;white-space:pre-wrap;">{body_html}</div>'
     )
