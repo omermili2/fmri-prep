@@ -74,8 +74,6 @@ class ConnectivityQCResult:
     # Overall assessment
     connectivity_ready: bool = False
     worst_severity: str = "UNKNOWN"
-    plain_message: str = ""
-    action: str = ""
     rescan_warning: bool = False
 
     # Atlas used
@@ -249,7 +247,7 @@ def _analyze_single_run(
         n_rois = len(atlas_labels) if atlas_labels else 0
 
         # --- Quality assessment ---
-        severity, ready, rescan, message, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=mean_fd,
             pct_censored=pct_censored,
             usable_minutes=usable_minutes,
@@ -271,8 +269,6 @@ def _analyze_single_run(
             loss_of_dof_pct=loss_of_dof_pct,
             connectivity_ready=ready,
             worst_severity=severity,
-            plain_message=message,
-            action=action,
             rescan_warning=rescan,
             atlas_name=atlas_name,
             n_rois=n_rois,
@@ -339,7 +335,7 @@ def _assess_quality(
     loss_of_dof_pct: float,
 ) -> tuple:
     """
-    Apply thresholds and return (severity, ready, rescan, message, action).
+    Apply thresholds and return (severity, ready, rescan).
     """
     fails_fd = mean_fd > thresh.CONNECTIVITY_MEAN_FD_FAIL
     fails_censor = pct_censored > thresh.MAX_CENSORED_PCT_FAIL
@@ -351,38 +347,12 @@ def _assess_quality(
     warns_dof = loss_of_dof_pct > (thresh.LOSS_DOF_WARN * 100.0)
 
     if fails_fd or fails_censor or fails_duration:
-        reasons = []
-        if fails_fd:
-            reasons.append(f"mean FD={mean_fd:.2f}mm (>{thresh.CONNECTIVITY_MEAN_FD_FAIL}mm)")
-        if fails_censor:
-            reasons.append(f"{pct_censored:.0f}% censored (>{thresh.MAX_CENSORED_PCT_FAIL:.0f}%)")
-        if fails_duration:
-            reasons.append(f"only {usable_minutes:.1f}min usable (<{thresh.MIN_USABLE_MINUTES_FAIL}min)")
-        message = f"NOT suitable: {'; '.join(reasons)}"
-        action = "Consider excluding this run or re-scanning."
-        return ("ERROR", False, True, message, action)
+        return ("ERROR", False, True)
 
     if warns_fd or warns_censor or warns_duration or warns_dof:
-        concerns = []
-        if warns_fd:
-            concerns.append(f"elevated FD ({mean_fd:.2f}mm)")
-        if warns_censor:
-            concerns.append(f"{pct_censored:.0f}% censored")
-        if warns_duration:
-            concerns.append(f"short usable time ({usable_minutes:.1f}min)")
-        if warns_dof:
-            concerns.append(f"high DoF loss ({loss_of_dof_pct:.0f}%)")
-        message = f"Marginal: {'; '.join(concerns)}"
-        action = "Usable but verify with sensitivity analyses."
-        return ("WARNING", True, False, message, action)
+        return ("WARNING", True, False)
 
-    message = (
-        f"OK: mean FD={mean_fd:.2f}mm, "
-        f"{pct_censored:.0f}% censored, "
-        f"{usable_minutes:.1f}min usable"
-    )
-    action = "Suitable for connectivity analysis."
-    return ("OK", True, False, message, action)
+    return ("OK", True, False)
 
 
 # ---------------------------------------------------------------------------
@@ -524,8 +494,42 @@ def _generate_heatmap(
             interpolation="nearest",
         )
         ax.set_title("Connectivity Matrix (Pearson r) — scrubbed data", fontsize=12)
-        ax.set_xlabel("ROI")
-        ax.set_ylabel("ROI")
+
+        # --- Network boundary lines and labels ---
+        networks = _parse_network_assignments(atlas_labels)
+        # Build ordered list of (network_name, start_idx, end_idx)
+        # by scanning labels in order to preserve atlas ROI ordering.
+        seen_order: List[str] = []
+        for label in atlas_labels:
+            if label.startswith("Tian_") or label.startswith("tian_"):
+                net = "Subcortical"
+            else:
+                parts = label.split("_")
+                net = parts[2] if len(parts) >= 3 else "Unknown"
+            if net not in seen_order:
+                seen_order.append(net)
+
+        n_rois = len(atlas_labels)
+        tick_positions = []
+        tick_labels = []
+        offset = 0
+        for net_name in seen_order:
+            count = len(networks.get(net_name, []))
+            if count == 0:
+                continue
+            # Boundary line before this group (skip first)
+            if offset > 0:
+                ax.axhline(y=offset - 0.5, color="black", linewidth=0.5, alpha=0.6)
+                ax.axvline(x=offset - 0.5, color="black", linewidth=0.5, alpha=0.6)
+            tick_positions.append(offset + count / 2.0 - 0.5)
+            tick_labels.append(net_name)
+            offset += count
+
+        ax.set_xticks(tick_positions)
+        ax.set_yticks(tick_positions)
+        ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
+        ax.set_yticklabels(tick_labels, fontsize=8)
+
         fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation")
         fig.tight_layout()
 

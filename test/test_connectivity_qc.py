@@ -199,7 +199,7 @@ class TestQualityAssessment:
 
     def test_ok_run(self):
         from qc.connectivity_qc import _assess_quality
-        severity, ready, rescan, msg, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=0.10, pct_censored=5.0, usable_minutes=4.5, loss_of_dof_pct=15.0
         )
         assert severity == "OK"
@@ -208,24 +208,22 @@ class TestQualityAssessment:
 
     def test_warning_high_fd(self):
         from qc.connectivity_qc import _assess_quality
-        severity, ready, rescan, msg, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=0.35, pct_censored=10.0, usable_minutes=4.0, loss_of_dof_pct=20.0
         )
         assert severity == "WARNING"
         assert ready is True
-        assert "elevated FD" in msg
 
     def test_warning_high_dof_loss(self):
         from qc.connectivity_qc import _assess_quality
-        severity, ready, rescan, msg, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=0.10, pct_censored=10.0, usable_minutes=4.0, loss_of_dof_pct=65.0
         )
         assert severity == "WARNING"
-        assert "DoF loss" in msg
 
     def test_error_high_fd(self):
         from qc.connectivity_qc import _assess_quality
-        severity, ready, rescan, msg, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=0.60, pct_censored=10.0, usable_minutes=4.0, loss_of_dof_pct=20.0
         )
         assert severity == "ERROR"
@@ -234,7 +232,7 @@ class TestQualityAssessment:
 
     def test_error_too_much_censored(self):
         from qc.connectivity_qc import _assess_quality
-        severity, ready, rescan, msg, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=0.20, pct_censored=85.0, usable_minutes=0.5, loss_of_dof_pct=90.0
         )
         assert severity == "ERROR"
@@ -242,7 +240,7 @@ class TestQualityAssessment:
 
     def test_error_too_short(self):
         from qc.connectivity_qc import _assess_quality
-        severity, ready, rescan, msg, action = _assess_quality(
+        severity, ready, rescan = _assess_quality(
             mean_fd=0.15, pct_censored=30.0, usable_minutes=0.8, loss_of_dof_pct=40.0
         )
         assert severity == "ERROR"

@@ -313,7 +313,7 @@ def _build_structured_summary(
                     label = c.run_label or ""
                     out(
                         f"      Connectivity [{label:14s}] : {c.worst_severity}  "
-                        f"({c.plain_message[:60]})"
+                        f"(FD={c.mean_fd:.2f}mm, {c.pct_censored:.0f}% censored, {c.usable_minutes:.1f}min usable)"
                     )
 
     out()
@@ -1600,7 +1600,7 @@ Examples:
                 for r in failed:
                     safe_print(
                         f"    [CONN-ERROR] sub-{r.sub_id}/ses-{r.ses_id} [{r.run_label}]: "
-                        f"{r.plain_message}",
+                        f"FD={r.mean_fd:.2f}mm, {r.pct_censored:.0f}% censored, {r.usable_minutes:.1f}min usable",
                         flush=True,
                     )
             report.record_phase_end("Connectivity QC")

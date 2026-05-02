@@ -292,9 +292,6 @@ def _html_head(accent_color: str, title: str = "fMRI-Prep Full Pipeline Report")
                    padding: 2px 9px; border-radius: 12px; font-size: 14px;
                    font-weight: 700; white-space: nowrap; }}
   .th-hint {{ font-size: 10px; font-weight: 400; color: #999; letter-spacing: .01em; }}
-  .action-box {{ background: #fff8e1; border-left: 3px solid #f39c12;
-                  padding: 6px 10px; border-radius: 4px; margin-top: 4px;
-                  font-size: 13px; color: #7d6608; }}
   .plain-msg {{ color: #444; }}
   .meta {{ color: #888; font-size: 12px; }}
   .sep {{ border: none; border-top: 1px solid #e8eaed; margin: 28px 0; }}
@@ -927,15 +924,6 @@ def _section_connectivity_qc(connectivity_results) -> str:
         # DoF loss
         dof_cls = ("metric-warn" if c.loss_of_dof_pct > 60.0 else "metric-ok")
 
-        error_msg = ""
-        if c.error_message:
-            error_msg = (f"<br><span class='meta' style='color:#c0392b;'>"
-                         f"Error: {c.error_message[:120]}</span>")
-
-        action_box = ""
-        if c.action:
-            action_box = f"<div class='action-box'>{c.action}</div>"
-
         rows.append(
             f"<tr>"
             f"<td><b>sub-{c.sub_id}</b><br>"
@@ -949,13 +937,11 @@ def _section_connectivity_qc(connectivity_results) -> str:
             f"<td>{c.n_regressors}</td>"
             f"<td><span class='{dof_cls}'>{c.loss_of_dof}</span><br>"
             f"<span class='meta'>({c.loss_of_dof_pct:.0f}% of {c.total_volumes})</span></td>"
-            f"<td class='details-left' style='font-size:12px'>"
-            f"{c.plain_message}{error_msg}{action_box}</td>"
             f"</tr>"
         )
 
-    rows_html = "\n".join(rows) if rows else "<tr><td colspan='8'>No results</td></tr>"
-    sections.append(f"""<h3>Per-Run Quality Metrics</h3>
+    rows_html = "\n".join(rows) if rows else "<tr><td colspan='7'>No results</td></tr>"
+    sections.append(f"""<h3>Quality Metrics</h3>
 <table>
   <thead><tr>
     <th>Run</th>
@@ -965,7 +951,6 @@ def _section_connectivity_qc(connectivity_results) -> str:
     <th>Usable Time<br><span class="th-hint">&#10007; &lt;1 min</span></th>
     <th># Regressors</th>
     <th>Loss of DoF<br><span class="th-hint">&#9888; &gt;60%</span></th>
-    <th>Notes</th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>""")
