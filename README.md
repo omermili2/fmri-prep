@@ -82,13 +82,15 @@ Requires Docker. One-time image pull: `docker pull nipreps/mriqc:24.0.2`
 
 MRIQC sessions are independent — each session's quality metrics are computed from that session's images alone. The pipeline automatically detects available Docker VM resources (CPU / RAM) and distributes them across parallel containers.
 
-Metrics are evaluated using **within-study IQR-based outlier detection** (primary) and **absolute safety-net thresholds** (catch extreme values regardless of protocol).
+Metrics are evaluated using **within-study IQR-based outlier detection** (primary) and **absolute safety-net thresholds** (catch extreme values regardless of protocol). All thresholds below are defaults and can be adjusted per-run via the GUI or `--qc-thresholds` CLI argument.
 
 | Metric | Meaning | Warning (IQR or fallback) | Error (safety net) |
 |---|---|---|---|
 | **SNR** (T1w) | Signal-to-noise in gray matter | < 6.0 | < 2.0 |
 | **CNR** (T1w) | Contrast-to-noise ratio | < 2.0 | < 0.8 |
 | **CJV** (T1w) | Coefficient of joint variation | > 0.60 | > 1.50 |
+| **INU range** (T1w) | Intensity non-uniformity range | > 0.50 | > 1.00 |
+| **QI1** (T1w) | Artifact presence in foreground | > 0.02 | > 0.10 |
 | **tSNR** (BOLD) | Temporal signal stability | < 20.0 | < 5.0 |
 | **FD mean** (BOLD) | Average head motion per TR | > 0.30 mm | > 1.00 mm |
 | **GSR x/y** (BOLD) | EPI ghosting artifact | > 0.10 | > 0.30 |
@@ -116,9 +118,9 @@ Performs:
 ### Post-processing
 
 #### Motion Analysis (`src/qc/motion_parser.py`)
-Runs **after all fMRIPrep jobs complete**. Reads the confounds TSV files fMRIPrep produces.
+Runs **after all fMRIPrep jobs complete**. Reads the confounds TSV files fMRIPrep produces. Thresholds are configurable.
 
-| Flag | Condition |
+| Flag | Condition (defaults) |
 |---|---|
 | OK | Mean FD < 0.5 mm and < 10% high-motion frames |
 | WARNING | Mean FD >= 0.5 mm or >= 10% high-motion frames |
@@ -127,14 +129,14 @@ Runs **after all fMRIPrep jobs complete**. Reads the confounds TSV files fMRIPre
 #### Connectivity QC (`src/qc/connectivity_qc.py`) — *optional*
 Runs **after motion analysis**, only with `--connectivity-qc` flag. Requires `nilearn` and `nibabel`.
 Uses Nilearn's `load_confounds_strategy` with the `"scrubbing"` preset to handle confound selection and volume censoring.
-Thresholds follow recommendations from [Parkes et al. / PMC10977879](https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/).
+Thresholds follow recommendations from [Parkes et al. / PMC10977879](https://pmc.ncbi.nlm.nih.gov/articles/PMC10977879/) and are configurable.
 
-| Metric | What it means | Warning | Fail |
+| Metric | What it means | Warning (default) | Fail (default) |
 |---|---|---|---|
 | Mean FD | Average framewise displacement | > 0.25 mm | > 0.50 mm |
-| % volumes censored | Timepoints removed by scrubbing | > 50% | > 80% |
-| Usable scan time | Clean data remaining after censoring | < 2 minutes | < 1 minute |
-| Loss of DoF | Regressors + censored volumes as % of total | > 60% | — |
+| Censored volumes | Timepoints removed by scrubbing | > 50% | > 80% |
+| Usable time | Clean data remaining after censoring | < 2 minutes | < 1 minute |
+| Loss of DoF | Regressors + censored volumes as fraction of total | > 60% | — |
 
 Additionally computes full (116x116) and network-level (~8x8) connectivity heatmaps on scrubbed data.
 
@@ -203,8 +205,10 @@ pip install -r requirements.txt
 
 1. **Select Source Folder** — your DICOM data (organized by subject/session)
 2. **Select Output Folder** — where to save results
-3. (Optional) Expand **fMRIPrep Options** to configure preprocessing and anonymization
-4. Click a button:
+3. (Optional) Add **Researcher Comments** — free-text notes about the session (saved with the report)
+4. (Optional) Expand **fMRIPrep Options** to configure preprocessing and anonymization
+5. (Optional) Expand **Quality Check Thresholds** to adjust Warning/Error thresholds for any QC metric before launching a run (see below)
+6. Click a button:
    - **BIDS Only** — DICOM to BIDS conversion only
    - **BIDS + MRIQC** — Conversion + image quality assessment (generates early MRIQC report)
    - **fMRIPrep Only** — Run fMRIPrep on existing BIDS data
@@ -212,6 +216,21 @@ pip install -r requirements.txt
    - **Full Pipeline** — BIDS + MRIQC + fMRIPrep + all QC layers
 
 > **Note:** Action buttons remain disabled until both Source and Output folders are selected (BIDS Only, BIDS + MRIQC, Full Pipeline), or until the Source folder contains the appropriate data (fMRIPrep Only requires BIDS NIfTI data; Connectivity QC requires fMRIPrep confounds output).
+
+### 3. Configurable QC Thresholds
+
+All QC thresholds (MRIQC, Motion, Connectivity) can be adjusted per-run without editing source code. In the GUI, expand the **Quality Check Thresholds** collapsible section to see four cards:
+
+| Card | Metrics |
+|---|---|
+| **MRIQC - Anatomical** | Coeff. of Joint Variation, Contrast-to-Noise Ratio, Signal-to-Noise Ratio, Intensity Non-Uniformity Range, Artifact presence (QI1) |
+| **MRIQC - BOLD** | Mean FD (mm), Temporal SNR, Ghost-to-Signal Ratio X/Y, AFNI Outlier Ratio |
+| **Motion Analysis** | Mean FD (mm), High-Motion Frames (%) |
+| **Connectivity Quality Check** | Mean FD (mm), Censored Volumes (%), Usable Time (min), Loss of Degrees of Freedom |
+
+Each metric has editable **Warning** and **Error** value fields pre-filled with the defaults. Changes are validated live (non-numeric values are highlighted red). Click **Save** to confirm your overrides, or **Reset to Defaults** to revert.
+
+When a run starts, any modified thresholds are passed to the pipeline via the `--qc-thresholds` CLI argument (base64-encoded JSON). The defaults remain unchanged when no overrides are set.
 
 ---
 
@@ -255,6 +274,29 @@ import base64, json
 print(base64.b64encode(json.dumps({'fs_reconall': True}).encode()).decode())
 PY
 )"
+
+# Override QC thresholds (e.g. stricter motion warning)
+python -m src.orchestrator --input /path/to/dicom --output_dir /path/to/output \
+  --qc-thresholds "$(python - << 'PY'
+import base64, json
+overrides = {
+    "motion": {"warn_mean_fd": 0.3, "rescan_mean_fd": 0.7},
+    "iqm_bold": {"tsnr": [25.0, 8.0, "low"]}
+}
+print(base64.b64encode(json.dumps(overrides).encode()).decode())
+PY
+)"
+```
+
+The `--qc-thresholds` argument accepts a base64-encoded JSON object. Only keys that differ from defaults need to be included. The JSON schema:
+
+```json
+{
+  "iqm_anat": { "<metric>": [warn, error, "high"|"low"] },
+  "iqm_bold": { "<metric>": [warn, error, "high"|"low"] },
+  "motion": { "warn_mean_fd": 0.3, "rescan_mean_fd": 0.7, ... },
+  "connectivity": { "connectivity_mean_fd_warn": 0.20, ... }
+}
 ```
 
 ---

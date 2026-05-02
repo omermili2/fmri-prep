@@ -62,6 +62,7 @@ pyright                        # Uses pyrightconfig.json (basic mode, Python 3.9
 - **Parallelization**: `ThreadPoolExecutor` processes subjects/sessions concurrently. Thread-safe output via `safe_print()` with `_print_lock`.
 - **Progress tracking**: `ProgressTracker` emits `[PROGRESS:...]` markers that the GUI parses to update its progress bar.
 - **fMRIPrep options**: Passed as base64-encoded JSON for cross-platform compatibility.
+- **QC threshold overrides**: Passed as base64-encoded JSON via `--qc-thresholds`. Each QC module (`iqm_parser`, `motion_parser`, `connectivity_thresholds`) has an `apply_overrides()` function that updates module-level globals before any QC code runs. The GUI builds the override dict from its editable threshold table.
 - **Dual import style**: `orchestrator.py` uses try/except for both package (`from .core...`) and script (`from core...`) imports.
 - **Docker integration**: Both fMRIPrep and MRIQC mount BIDS/derivatives dirs into containers with cross-platform path handling. Fallback to local `.tar` images if online pull fails.
 

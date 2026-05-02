@@ -41,6 +41,7 @@ try:
     from .reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from .qc.checker import BIDSQualityChecker
     from .qc import motion_parser
+    from .qc import connectivity_thresholds
     from .mriqc import iqm_parser
     from .mriqc import runner as mriqc_runner
 except ImportError:
@@ -54,6 +55,7 @@ except ImportError:
     from reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from qc.checker import BIDSQualityChecker
     from qc import motion_parser
+    from qc import connectivity_thresholds
     from mriqc import iqm_parser
     from mriqc import runner as mriqc_runner
 
@@ -928,8 +930,23 @@ Examples:
                         help="Run QC analysis only on an existing output folder (use with --bids-folder)")
     parser.add_argument("--researcher-comments", type=str, default="",
                         help="Base64-encoded researcher comments (free text)")
+    parser.add_argument("--qc-thresholds", type=str, default="",
+                        help="Base64-encoded JSON with QC threshold overrides")
 
     args = parser.parse_args()
+
+    # Apply QC threshold overrides (before any QC code runs)
+    if args.qc_thresholds:
+        try:
+            qc_overrides = json.loads(
+                base64.b64decode(args.qc_thresholds).decode('utf-8')
+            )
+            iqm_parser.apply_overrides(qc_overrides)
+            motion_parser.apply_overrides(qc_overrides)
+            connectivity_thresholds.apply_overrides(qc_overrides)
+            safe_print("Applied custom QC threshold overrides.", flush=True)
+        except Exception as e:
+            safe_print(f"Warning: Could not apply QC threshold overrides: {e}", flush=True)
 
     # QC-only mode: analyse an existing output folder, no re-processing
     if args.qc_only:

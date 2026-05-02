@@ -23,6 +23,28 @@ RESCAN_MEAN_FD = 1.0
 WARN_MEAN_FD = 0.5
 
 
+def apply_overrides(overrides: dict) -> None:
+    """Update module-level motion constants from user-supplied overrides.
+
+    Expected key in *overrides*: ``"motion"`` mapping constant names
+    (lower-case) to numeric values.
+    """
+    global FD_THRESHOLD, RESCAN_MOTION_PERCENT, WARN_MOTION_PERCENT
+    global RESCAN_MEAN_FD, WARN_MEAN_FD
+
+    motion = overrides.get("motion", {})
+    if "fd_threshold" in motion:
+        FD_THRESHOLD = float(motion["fd_threshold"])
+    if "warn_mean_fd" in motion:
+        WARN_MEAN_FD = float(motion["warn_mean_fd"])
+    if "rescan_mean_fd" in motion:
+        RESCAN_MEAN_FD = float(motion["rescan_mean_fd"])
+    if "warn_motion_percent" in motion:
+        WARN_MOTION_PERCENT = float(motion["warn_motion_percent"])
+    if "rescan_motion_percent" in motion:
+        RESCAN_MOTION_PERCENT = float(motion["rescan_motion_percent"])
+
+
 @dataclass
 class MotionResult:
     sub_id: str

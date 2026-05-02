@@ -73,6 +73,22 @@ THRESHOLDS_BOLD: Dict[str, tuple] = {
     "aor":     (0.10, 0.30, "high"),
 }
 
+
+def apply_overrides(overrides: dict) -> None:
+    """Update THRESHOLDS_ANAT / THRESHOLDS_BOLD from user-supplied overrides.
+
+    Expected keys in *overrides*: ``"iqm_anat"`` and/or ``"iqm_bold"``.
+    Each value is a dict mapping metric name to ``[warn, error, direction]``.
+    """
+    global THRESHOLDS_ANAT, THRESHOLDS_BOLD
+    for metric, vals in overrides.get("iqm_anat", {}).items():
+        if metric in THRESHOLDS_ANAT and len(vals) == 3:
+            THRESHOLDS_ANAT[metric] = (float(vals[0]), float(vals[1]), vals[2])
+    for metric, vals in overrides.get("iqm_bold", {}).items():
+        if metric in THRESHOLDS_BOLD and len(vals) == 3:
+            THRESHOLDS_BOLD[metric] = (float(vals[0]), float(vals[1]), vals[2])
+
+
 METRIC_LABELS: Dict[str, str] = {
     "cjv":       "Coeff. of Joint Variation",
     "cnr":       "Contrast-to-Noise Ratio",
