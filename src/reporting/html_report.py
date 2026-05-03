@@ -593,7 +593,7 @@ def _section_fmriprep_registration(coreg_plots) -> str:
         runs_html = "\n".join(run_items)
         blocks.append(
             f'<details class="carpet-details">'
-            f'<summary>{label} &mdash; {n_runs} run{"s" if n_runs != 1 else ""}</summary>'
+            f'<summary>{label} -{n_runs} run{"s" if n_runs != 1 else ""}</summary>'
             f'<div class="carpet-container">'
             f'{runs_html}'
             f'<div class="carpet-caption">'
@@ -615,7 +615,7 @@ def _section_fmriprep_registration(coreg_plots) -> str:
   After preprocessing, <a href="https://fmriprep.org/" target="_blank"
   style="color:#5c6bc0;">fMRIPrep</a> aligns each BOLD run's reference volume
   to the subject's T1-weighted anatomical scan (<b>coregistration</b>).
-  This is a critical step &mdash; if the functional and anatomical images are
+  This is a critical step -if the functional and anatomical images are
   misaligned, all downstream analyses (activation maps, connectivity, etc.)
   will be unreliable.
   <br><br>
@@ -722,7 +722,7 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
                 rows.append(
                     f'<tr class="carpet-row"><td colspan="3">'
                     f'<details class="carpet-details">'
-                    f'<summary>Carpet plot &mdash; {scan_label}</summary>'
+                    f'<summary>Carpet plot -{scan_label}</summary>'
                     f'<div class="carpet-container">'
                     f'<div class="carpet-header">'
                     f'<span class="carpet-icon"></span> Carpet plot'
@@ -775,7 +775,7 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
     <li><b>AOR</b> - AFNI outlier ratio; fraction of volumes flagged as outliers</li>
   </ul>
   <b>Carpet plots</b> (BOLD runs only): The carpet plot shows signal intensity across all brain
-  voxels (rows) over time (columns). Vertical stripes indicate whole-brain signal shifts — usually
+  voxels (rows) over time (columns). Vertical stripes indicate whole-brain signal shifts - usually
   from head motion or scanner artifacts. The traces above the carpet show framewise displacement
   and DVARS. Click the toggle below each BOLD row to expand.
   <br><br>
@@ -786,7 +786,7 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
   <br><br>
   <b>How metrics are evaluated (two layers):</b>
   <ol style="margin:6px 0 8px 22px;line-height:1.8;">
-    <li><b>Primary &mdash; within-study comparison (IQR-based).</b>
+    <li><b>Primary -within-study comparison (IQR-based).</b>
       Each scan&rsquo;s metrics are compared to all other scans of the same type
       in this dataset using the Interquartile Range (IQR) method.
       A metric that falls <b>&gt;1.5&times;&nbsp;IQR</b> beyond the study&rsquo;s
@@ -794,16 +794,16 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
       <span class="badge badge-warning" style="font-size:10px;">Borderline</span>;
       <b>&gt;3&times;&nbsp;IQR</b> is flagged as
       <span class="badge badge-error" style="font-size:10px;">Out of range</span>.
-      This adapts automatically to any acquisition protocol &mdash; no manual
+      This adapts automatically to any acquisition protocol -no manual
       threshold tuning required. Requires &ge;3 scans of the same type.</li>
-    <li><b>Safety net &mdash; absolute thresholds for extreme values.</b>
+    <li><b>Safety net -absolute thresholds for extreme values.</b>
       Protocol-independent ERROR thresholds catch values so extreme they indicate
       a definite problem regardless of protocol (e.g.&nbsp;tSNR&nbsp;&lt;&nbsp;5,
       mean&nbsp;FD&nbsp;&gt;&nbsp;1.0&nbsp;mm).
       When fewer than 3 scans of the same type are available (IQR cannot run),
       moderate absolute thresholds are applied as a WARNING-level fallback.</li>
   </ol>
-  <b>Absolute safety-net thresholds (ERROR &mdash; always applied):</b><br>
+  <b>Absolute safety-net thresholds (ERROR -always applied):</b><br>
   <b>T1w:</b>&ensp;
   SNR&nbsp;&lt;&nbsp;2.0 &nbsp;|&nbsp;
   CNR&nbsp;&lt;&nbsp;0.8 &nbsp;|&nbsp;
@@ -877,20 +877,20 @@ def _section_connectivity_qc(connectivity_results) -> str:
      style="color:#5c6bc0;">Parkes et al.</a>
   <br><br>
   <b>Metrics at a glance:</b><br>
-  &#9679; <b>Mean FD</b> &mdash;
+  &#9679; <b>Mean FD</b> -
   Average framewise displacement across all volumes.
   <span class="metric-ok">&lt;0.25&nbsp;mm</span>,
-  <span class="metric-warn">0.25&ndash;0.50&nbsp;mm</span>,
+  <span class="metric-warn">0.25-0.50&nbsp;mm</span>,
   <span class="metric-error">&gt;0.50&nbsp;mm</span>.<br>
-  &#9679; <b>Censored Volumes</b> &mdash;
+  &#9679; <b>Censored Volumes</b> -
   Volumes flagged by the scrubbing strategy and removed before time-series extraction.
   <span class="metric-error">&gt;80% censored = not suitable</span>.<br>
-  &#9679; <b>Usable Time</b> &mdash;
+  &#9679; <b>Usable Time</b> -
   Clean scan duration remaining after censoring (in minutes).
   <span class="metric-error">&lt;1&nbsp;min = not suitable</span>.<br>
-  &#9679; <b># Regressors</b> &mdash;
+  &#9679; <b># Regressors</b> -
   Number of confound columns selected by the scrubbing strategy.<br>
-  &#9679; <b>Loss of DoF</b> &mdash;
+  &#9679; <b>Loss of DoF</b> -
   Total temporal degrees of freedom consumed (regressors + censored volumes).
   High values reduce statistical power and can inflate connectivity estimates.
   <span class="metric-warn">&gt;60% = caution</span>.
@@ -972,7 +972,7 @@ def _section_connectivity_qc(connectivity_results) -> str:
             '<div class="heatmap-content collapsed">',
         ]
         for c in sorted(heatmap_runs, key=lambda x: (x.sub_id, x.ses_id, x.run_label)):
-            label = f"sub-{c.sub_id}/ses-{c.ses_id} — {c.run_label}"
+            label = f"sub-{c.sub_id}/ses-{c.ses_id} - {c.run_label}"
             heatmap_parts.append(
                 f'<p style="font-weight:700;margin:12px 0 6px;">{label}</p>'
                 f'<div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px;">'

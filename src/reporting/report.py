@@ -445,7 +445,7 @@ class ExecutionReport:
             lines.append("")
 
             if qc_errors:
-                lines.append(f"  [!] SCAN ERRORS — action required ({len(qc_errors)}):")
+                lines.append(f"  [!] SCAN ERRORS - action required ({len(qc_errors)}):")
                 lines.append("")
                 for f in sorted(qc_errors, key=lambda x: (x.sub_id, x.ses_id)):
                     lines.append(f"    Subject {f.sub_id}, Session {f.ses_id}")
@@ -454,7 +454,7 @@ class ExecutionReport:
                     lines.append("")
 
             if motion_rescans:
-                lines.append(f"  [!] HIGH MOTION — re-scan recommended ({len(motion_rescans)} run(s)):")
+                lines.append(f"  [!] HIGH MOTION - re-scan recommended ({len(motion_rescans)} run(s)):")
                 lines.append("")
                 for m in sorted(motion_rescans, key=lambda x: (x.sub_id, x.ses_id)):
                     lines.append(f"    Subject {m.sub_id}, Session {m.ses_id} [{m.run_label}]")
