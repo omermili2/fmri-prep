@@ -15,8 +15,10 @@ from datetime import datetime
 
 try:
     from ..core.utils import safe_print
+    from .fieldmap_intendedfor import populate_intended_for
 except ImportError:
     from core.utils import safe_print
+    from bids.fieldmap_intendedfor import populate_intended_for
 
 
 def run_bids_conversion(
@@ -338,6 +340,13 @@ def _organize_to_bids(temp_dir, bids_dir, sub_id, ses_id):
         parts.append(f"{len(dropped)} fragment(s) dropped")
     if excluded or dropped:
         safe_print(f"  BOLD summary: {', '.join(parts)}", flush=True)
+
+    # Populate IntendedFor in fieldmap sidecars so fMRIPrep applies SDC
+    session_dir = bids_path / f"sub-{sub_id}" / f"ses-{ses_id}"
+    try:
+        populate_intended_for(session_dir)
+    except Exception as e:
+        safe_print(f"  Warning: IntendedFor population failed: {e}", flush=True)
 
     return organized_count, bold_notes
 

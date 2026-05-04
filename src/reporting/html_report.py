@@ -324,6 +324,8 @@ def _html_head(accent_color: str, title: str = "fMRI-Prep Full Pipeline Report")
     border-radius: 2px; flex-shrink: 0;
   }}
   .carpet-img {{ width: 100%; border: 1px solid #e0e0e0; border-radius: 6px; background: #fff; }}
+  .coreg-svg-container {{ width: 100%; border: 1px solid #e0e0e0; border-radius: 6px; background: #fff; overflow: hidden; }}
+  .coreg-svg-container svg {{ width: 100%; height: auto; display: block; }}
   .carpet-caption {{ font-size: 11px; color: #999; margin-top: 4px; line-height: 1.5; }}
   details.carpet-details {{ margin: 0; }}
   details.carpet-details summary {{
@@ -568,8 +570,7 @@ def _section_fmriprep_registration(coreg_plots) -> str:
             if not svg_file.is_file():
                 continue
             try:
-                svg_data = svg_file.read_bytes()
-                b64 = base64.b64encode(svg_data).decode("ascii")
+                svg_content = svg_file.read_text(encoding="utf-8", errors="replace")
                 run_items.append(
                     f'<div style="margin-bottom:12px;">'
                     f'<div class="carpet-header">'
@@ -577,9 +578,9 @@ def _section_fmriprep_registration(coreg_plots) -> str:
                     f'background:linear-gradient(135deg,#e74c3c 0%,#95a5a6 50%,#ecf0f1 100%);'
                     f'border-radius:2px;flex-shrink:0;"></span> {run_label}'
                     f'</div>'
-                    f'<img class="carpet-img" '
-                    f'src="data:image/svg+xml;base64,{b64}" '
-                    f'alt="Coregistration overlay for {run_label}">'
+                    f'<div class="coreg-svg-container">'
+                    f'{svg_content}'
+                    f'</div>'
                     f'</div>'
                 )
             except Exception:

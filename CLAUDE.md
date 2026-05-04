@@ -41,7 +41,7 @@ pyright                        # Uses pyrightconfig.json (basic mode, Python 3.9
 - `src/orchestrator.py` — CLI entry point and pipeline coordinator. **Start here to understand the code.**
 
 ### Pipeline Flow (sequential phases)
-1. **Phase 1: BIDS Conversion** (`src/bids/converter.py`) — dcm2niix converts DICOM→NIfTI, parallelized per subject
+1. **Phase 1: BIDS Conversion** (`src/bids/converter.py`) — dcm2niix converts DICOM→NIfTI, parallelized per subject; `fieldmap_intendedfor.py` auto-populates `IntendedFor` in field map sidecars
 2. **BIDS QC** (`src/qc/checker.py`) — Validates immediately after each subject's conversion (missing scans, truncated runs, parameter drift)
 3. **Phase 2: MRIQC** (`src/mriqc/runner.py`) — Docker-based image quality metrics (SNR, tSNR, CJV, FD, GSR); parallel per session; generates early standalone report
 4. **Phase 3: fMRIPrep** (`src/fmriprep/runner.py`) — Docker-based preprocessing, parallel per subject
@@ -51,7 +51,7 @@ pyright                        # Uses pyrightconfig.json (basic mode, Python 3.9
 
 ### Module Responsibilities
 - `src/core/` — Subject/session discovery (`discovery.py`), thread-safe progress tracking (`progress.py`), encoding utilities (`utils.py`)
-- `src/bids/` — BIDS conversion (`converter.py`) and output file counting (`analyzer.py`)
+- `src/bids/` — BIDS conversion (`converter.py`), field map IntendedFor linking (`fieldmap_intendedfor.py`), and output file counting (`analyzer.py`)
 - `src/mriqc/` — MRIQC Docker runner (`runner.py`) and IQM metrics parser (`iqm_parser.py`); handles image pull with local tar fallback
 - `src/fmriprep/` — fMRIPrep Docker runner; handles dynamic image pull with local tar fallback
 - `src/qc/` — Quality control layers: BIDS validation (`checker.py`), motion analysis (`motion_parser.py`), connectivity QC (`connectivity_qc.py`, `volume_censoring.py`); `connectivity_thresholds.py` holds literature-derived threshold constants

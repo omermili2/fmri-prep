@@ -14,7 +14,8 @@ flowchart TD
 
     subgraph PHASE1 ["Phase 1: BIDS Conversion  (per subject, parallel)"]
         B[dcm2niix\nDICOM → NIfTI + JSON]
-        B --> C
+        B --> B2["Fieldmap IntendedFor\nfieldmap_intendedfor.py\n• Auto-link fmaps to BOLD runs\n• Enables susceptibility distortion correction"]
+        B2 --> C
         C["BIDS Quality Checks\nchecker.py\n• Missing T1w / BOLD\n• Truncated runs\n• Small/corrupt files\n• Parameter drift across subjects"]
     end
 
@@ -60,8 +61,9 @@ flowchart TD
 #### BIDS Conversion
 - **Tool:** `dcm2niix` (bundled in `tools/` or system-installed)
 - **Input:** DICOM folders organized as `<subject>/<session>/`
-- **Output:** NIfTI (`.nii.gz`) + sidecar JSON files in BIDS layout under `sub-<id>/ses-<id>/anat|func/`
+- **Output:** NIfTI (`.nii.gz`) + sidecar JSON files in BIDS layout under `sub-<id>/ses-<id>/anat|func|fmap/`
 - **Runs:** In parallel across all subjects
+- **Field map linking:** When field maps are present (AP/PA EPI pairs or GRE phasediff), the pipeline automatically populates the `IntendedFor` field in each field map's JSON sidecar, matching field maps to BOLD runs by acquisition-time proximity. This enables fMRIPrep to apply susceptibility distortion correction without manual editing.
 
 #### BIDS Quality Checks (`src/qc/checker.py`)
 Runs **immediately after each subject's BIDS conversion**, before any further processing.
@@ -107,7 +109,7 @@ The core preprocessing step. Runs **per subject via Docker**, in parallel.
 
 Performs:
 - Motion correction & slice-timing correction
-- Susceptibility distortion correction (fieldmap-based)
+- Susceptibility distortion correction (automatic when field maps are present; optional SyN SDC fallback when they are not)
 - Brain extraction & MNI registration
 - Confound time series extraction (motion params, WM/CSF signals, CompCor)
 
@@ -334,6 +336,7 @@ fMRI_Masters/
 │   ├── core/                   # Subject discovery, progress tracking, utilities
 │   ├── bids/                   # BIDS conversion using dcm2niix
 │   │   ├── converter.py        # DICOM → NIfTI conversion (parallel per subject)
+│   │   ├── fieldmap_intendedfor.py  # Auto-populate IntendedFor in fmap sidecars
 │   │   └── analyzer.py         # Count output files by modality
 │   ├── mriqc/                  # MRIQC image quality assessment (dedicated module)
 │   │   ├── runner.py           # MRIQC Docker runner (parallel per session)
@@ -354,9 +357,8 @@ fMRI_Masters/
 │   ├── FMRIPREP_GUIDE.md
 │   ├── FREESURFER_LICENSE.md
 │   ├── MRIQC_REPORT_GUIDE.md
-│   ├── researcher_guide.html   # Visual step-by-step researcher guide
-│   └── guide/                  # Multi-page HTML guide source
-├── test/                       # Test suite (69 tests)
+│   └── researcher_guide.html   # Visual step-by-step researcher guide
+├── test/                       # Test suite (80 tests)
 └── tools/                      # Bundled dcm2niix binary
 ```
 
