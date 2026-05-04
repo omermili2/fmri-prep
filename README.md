@@ -357,7 +357,7 @@ fMRI_Masters/
 │   ├── FMRIPREP_GUIDE.md
 │   ├── FREESURFER_LICENSE.md
 │   ├── MRIQC_REPORT_GUIDE.md
-│   └── researcher_guide.html   # Visual step-by-step researcher guide
+│   └── DOCS_ONLINE.html        # Visual step-by-step researcher guide
 ├── test/                       # Test suite (80 tests)
 └── tools/                      # Bundled dcm2niix binary
 ```
@@ -366,13 +366,13 @@ fMRI_Masters/
 
 ## Documentation
 
-| Guide | Description |
-|---|---|
-| [Researcher Guide](docs/researcher_guide.html) | Visual step-by-step guide: setup, running, interpreting results |
+| Guide                                                  | Description |
+|--------------------------------------------------------|---|
+| [Researcher Guide](docs/DOCS_ONLINE.html)              | Visual step-by-step guide: setup, running, interpreting results |
 | [BIDS Conversion Guide](docs/BIDS_CONVERSION_GUIDE.md) | Input folder format, conversion steps, output layout |
-| [fMRIPrep Guide](docs/FMRIPREP_GUIDE.md) | Preprocessing steps, output files, confounds |
-| [FreeSurfer License](docs/FREESURFER_LICENSE.md) | How to obtain and configure the FreeSurfer license |
-| [MRIQC Report Guide](docs/MRIQC_REPORT_GUIDE.md) | Understanding MRIQC output and image quality metrics |
+| [fMRIPrep Guide](docs/FMRIPREP_GUIDE.md)               | Preprocessing steps, output files, confounds |
+| [FreeSurfer License](docs/FREESURFER_LICENSE.md)       | How to obtain and configure the FreeSurfer license |
+| [MRIQC Report Guide](docs/MRIQC_REPORT_GUIDE.md)       | Understanding MRIQC output and image quality metrics |
 
 ---
 

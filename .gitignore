@@ -8,6 +8,7 @@ __pycache__/
 *.swp
 *.swo
 dummy_data/
+local_docs/
 tmp_dcm2bids/
 *.log
 debug/
@@ -22,5 +23,3 @@ license.txt
 # Output artifacts that may land in root
 *.html
 Conversion Report.txt
-
-thesis/
