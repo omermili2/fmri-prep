@@ -214,6 +214,7 @@ def run_mriqc_participant(
     omp_nthreads: int = None,
     mem_gb: int = 16,
     modalities=None,
+    no_work_dir: bool = True,
 ):
     """
     Run MRIQC at the participant level for one subject (optionally one session).
@@ -233,6 +234,10 @@ def run_mriqc_participant(
                            None = same as nprocs.
         mem_gb:            Memory limit in GB (default: 16)
         modalities:        e.g. ['T1w', 'bold'] — None means auto-detect
+        no_work_dir:       If True (default), MRIQC work files stay inside the
+                           container via --tmpfs and are discarded on exit.
+                           Set to False to mount a host directory for
+                           resumability of failed runs.
 
     Returns: (success: bool, error: str or None)
     """
@@ -247,24 +252,28 @@ def run_mriqc_participant(
     mriqc_output_dir = Path(mriqc_output_dir).resolve()
     mriqc_output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Use per-session work dirs to avoid file collisions between parallel
-    # containers writing to the same MRIQC work tree.
-    if session_id:
-        work_dir = mriqc_output_dir / "work" / f"sub-{participant_label}_ses-{session_id}"
-    else:
-        work_dir = mriqc_output_dir / "work" / f"sub-{participant_label}"
-    work_dir.mkdir(parents=True, exist_ok=True)
-
     bids_mount = to_docker_path(bids_dir)
     out_mount  = to_docker_path(mriqc_output_dir)
-    work_mount = to_docker_path(work_dir)
 
     docker_cmd = [
         "docker", "run", "-t", "--rm",
         "-v", f"{bids_mount}:/data:ro",
         "-v", f"{out_mount}:/out",
-        "-v", f"{work_mount}:/work",
     ]
+
+    if no_work_dir:
+        # Work files stay inside the container and are discarded on exit.
+        # Using --tmpfs avoids writing to the container's overlay layer.
+        docker_cmd.extend(["--tmpfs", "/work:exec,size=10g"])
+    else:
+        # Mount a host directory so intermediate files persist for resumability.
+        if session_id:
+            work_dir = mriqc_output_dir / "work" / f"sub-{participant_label}_ses-{session_id}"
+        else:
+            work_dir = mriqc_output_dir / "work" / f"sub-{participant_label}"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        work_mount = to_docker_path(work_dir)
+        docker_cmd.extend(["-v", f"{work_mount}:/work"])
 
     if sys.platform == "win32":
         docker_cmd.extend([
@@ -331,7 +340,7 @@ def run_mriqc_participant(
         return False, f"Exception running MRIQC: {e}"
 
 
-def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None):
+def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None, no_work_dir: bool = True):
     """
     Run MRIQC group-level report across all subjects.
 
@@ -350,24 +359,31 @@ def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None):
 
     bids_dir = Path(bids_dir).resolve()
     mriqc_output_dir = Path(mriqc_output_dir).resolve()
-    work_dir = mriqc_output_dir / "work"
-    work_dir.mkdir(parents=True, exist_ok=True)
 
     bids_mount = to_docker_path(bids_dir)
     out_mount  = to_docker_path(mriqc_output_dir)
-    work_mount = to_docker_path(work_dir)
 
     docker_cmd = [
         "docker", "run", "-t", "--rm",
         "-v", f"{bids_mount}:/data:ro",
         "-v", f"{out_mount}:/out",
-        "-v", f"{work_mount}:/work",
+    ]
+
+    if no_work_dir:
+        docker_cmd.extend(["--tmpfs", "/work:exec,size=10g"])
+    else:
+        work_dir = mriqc_output_dir / "work"
+        work_dir.mkdir(parents=True, exist_ok=True)
+        work_mount = to_docker_path(work_dir)
+        docker_cmd.extend(["-v", f"{work_mount}:/work"])
+
+    docker_cmd.extend([
         MRIQC_IMAGE,
         "/data", "/out",
         "group",
         "-w", "/work",
         "--no-sub",
-    ]
+    ])
 
     if modalities:
         docker_cmd.extend(["--modalities"] + modalities)

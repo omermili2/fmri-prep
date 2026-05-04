@@ -932,6 +932,9 @@ Examples:
                         help="Base64-encoded researcher comments (free text)")
     parser.add_argument("--qc-thresholds", type=str, default="",
                         help="Base64-encoded JSON with QC threshold overrides")
+    parser.add_argument("--mriqc-keep-work", action="store_true",
+                        help="Mount MRIQC work dir on host (enables resume of failed runs; "
+                             "default: work stays in container and is discarded on exit)")
 
     args = parser.parse_args()
 
@@ -1375,6 +1378,7 @@ Examples:
                     nprocs=nprocs_per,
                     omp_nthreads=omp_per,
                     mem_gb=mem_per,
+                    no_work_dir=not args.mriqc_keep_work,
                 ): (sub_id, ses_id) for sub_id, ses_id in mriqc_tasks
             }
             for future in as_completed(futures):
@@ -1398,7 +1402,9 @@ Examples:
     if run_mriqc and mriqc_dir is not None:
         report.record_phase_start("  Group report")
         safe_print("Running MRIQC group-level report...", flush=True)
-        grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
+        grp_ok, grp_err = mriqc_runner.run_mriqc_group(
+            bids_dir, mriqc_dir, no_work_dir=not args.mriqc_keep_work,
+        )
         if grp_ok:
             safe_print(
                 f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
