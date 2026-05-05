@@ -1404,6 +1404,7 @@ Examples:
         safe_print("Running MRIQC group-level report...", flush=True)
         grp_ok, grp_err = mriqc_runner.run_mriqc_group(
             bids_dir, mriqc_dir, no_work_dir=not args.mriqc_keep_work,
+            experiment_dir=base_output,
         )
         if grp_ok:
             safe_print(

@@ -18,8 +18,10 @@ MRIQC outputs (written to <output_folder>/mriqc/):
   sub-001_task-rest_bold.json              raw BOLD IQMs
 """
 
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 try:
@@ -340,7 +342,71 @@ def run_mriqc_participant(
         return False, f"Exception running MRIQC: {e}"
 
 
-def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None, no_work_dir: bool = True):
+def _prepare_group_staging(experiment_dir, current_mriqc_dir):
+    """Scan all output_*/derivatives/mriqc/ dirs under *experiment_dir* for IQM JSONs.
+
+    Deduplicates by filename (same BIDS filename = same scan); keeps the
+    newest file by mtime when duplicates are found.  Copies the deduplicated
+    set into a temporary staging directory that MRIQC group can be pointed at.
+
+    Returns:
+        (staging_dir, n_total, duplicates)
+        - staging_dir : Path  – temp dir with deduplicated IQMs (caller cleans up)
+        - n_total     : int   – total IQM files found before dedup
+        - duplicates  : list[tuple[str, Path]] – (filename, dropped_path) pairs
+    """
+    experiment_dir = Path(experiment_dir).resolve()
+    current_mriqc_dir = Path(current_mriqc_dir).resolve()
+
+    # Collect all mriqc directories
+    mriqc_dirs = set()
+    for d in sorted(experiment_dir.glob("output_*/derivatives/mriqc")):
+        if d.is_dir():
+            mriqc_dirs.add(d.resolve())
+    mriqc_dirs.add(current_mriqc_dir)
+
+    # filename -> list of (path, mtime)
+    file_map: dict[str, list[tuple[Path, float]]] = {}
+    for mdir in mriqc_dirs:
+        for json_file in mdir.rglob("sub-*.json"):
+            if "work" in json_file.parts:
+                continue
+            stem = json_file.stem
+            if not any(stem.endswith(s) for s in ("_T1w", "_T2w", "_bold")):
+                continue
+            fname = json_file.name
+            file_map.setdefault(fname, []).append(
+                (json_file, json_file.stat().st_mtime)
+            )
+
+    # Deduplicate: keep newest per filename
+    kept: dict[str, Path] = {}
+    duplicates: list[tuple[str, Path]] = []
+    for fname, entries in file_map.items():
+        entries.sort(key=lambda x: x[1], reverse=True)  # newest first
+        kept[fname] = entries[0][0]
+        for path, _ in entries[1:]:
+            duplicates.append((fname, path))
+
+    n_total = sum(len(v) for v in file_map.values())
+
+    # Create staging dir and copy files (flat layout)
+    staging_dir = Path(tempfile.mkdtemp(prefix="mriqc_group_staging_"))
+    for fname, src_path in kept.items():
+        shutil.copy2(src_path, staging_dir / fname)
+
+    # Copy dataset_description.json if available (MRIQC group may expect it)
+    for mdir in mriqc_dirs:
+        dd = mdir / "dataset_description.json"
+        if dd.exists():
+            shutil.copy2(dd, staging_dir / "dataset_description.json")
+            break
+
+    return staging_dir, n_total, duplicates
+
+
+def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None,
+                    no_work_dir: bool = True, experiment_dir=None):
     """
     Run MRIQC group-level report across all subjects.
 
@@ -351,6 +417,11 @@ def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None, no_work_dir: bo
 
     Must be called AFTER all participant-level runs have completed.
 
+    When *experiment_dir* is provided, IQM JSONs from **all**
+    ``output_*/derivatives/mriqc/`` folders under that directory are
+    aggregated (with deduplication) so the group report reflects the
+    full experiment — not just the current run.
+
     Returns: (success: bool, error: str or None)
     """
     docker_ok, docker_err = check_docker()
@@ -360,8 +431,48 @@ def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None, no_work_dir: bo
     bids_dir = Path(bids_dir).resolve()
     mriqc_output_dir = Path(mriqc_output_dir).resolve()
 
+    # --- Aggregate IQMs from all runs when experiment_dir is given ----------
+    staging_dir = None
+    if experiment_dir is not None:
+        try:
+            staging_dir, n_total, duplicates = _prepare_group_staging(
+                experiment_dir, mriqc_output_dir,
+            )
+            # Discover how many output folders contributed
+            exp = Path(experiment_dir).resolve()
+            n_folders = len([
+                d for d in exp.glob("output_*/derivatives/mriqc") if d.is_dir()
+            ])
+            # Count current dir separately if it wasn't matched by the glob
+            if mriqc_output_dir.resolve() not in {
+                d.resolve() for d in exp.glob("output_*/derivatives/mriqc")
+            }:
+                n_folders += 1
+            n_kept = n_total - len(duplicates)
+            print(f"  Aggregating IQMs from {n_folders} output folder(s): "
+                  f"{n_total} scan(s) found, {n_kept} unique")
+            if duplicates:
+                print(f"  Deduplicated: dropped {len(duplicates)} duplicate(s) "
+                      f"(keeping newest)")
+                for fname, dropped_path in duplicates:
+                    # Show which output folder was dropped
+                    parts = dropped_path.parts
+                    folder = next(
+                        (p for p in parts if p.startswith("output_")), str(dropped_path.parent)
+                    )
+                    print(f"    - {fname} (dropped from: {folder})")
+        except Exception as e:
+            print(f"  Warning: IQM aggregation failed ({e}), "
+                  f"falling back to current run only")
+            if staging_dir is not None:
+                shutil.rmtree(staging_dir, ignore_errors=True)
+            staging_dir = None
+
+    # Decide which directory to mount as /out for the Docker container
+    effective_out = Path(staging_dir) if staging_dir else mriqc_output_dir
+
     bids_mount = to_docker_path(bids_dir)
-    out_mount  = to_docker_path(mriqc_output_dir)
+    out_mount  = to_docker_path(effective_out)
 
     docker_cmd = [
         "docker", "run", "-t", "--rm",
@@ -396,12 +507,23 @@ def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None, no_work_dir: bo
             capture_output=True, text=True,
             encoding="utf-8", errors="replace",
         )
-        if result.returncode == 0:
+        success = result.returncode == 0
+
+        # Copy group outputs from staging back to the current run's mriqc dir
+        if success and staging_dir is not None:
+            for pattern in ("group_*.html", "group_*.tsv"):
+                for f in Path(staging_dir).glob(pattern):
+                    shutil.copy2(f, mriqc_output_dir / f.name)
+
+        if success:
             return True, None
         combined = (result.stdout or "") + (result.stderr or "")
         return False, f"MRIQC group failed (code {result.returncode}):\n{combined[-1000:]}"
     except Exception as e:
         return False, f"Exception running MRIQC group: {e}"
+    finally:
+        if staging_dir is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
 
 def collect_mriqc_reports(mriqc_dir) -> dict:

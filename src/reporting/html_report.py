@@ -19,6 +19,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import List
 
+try:
+    from ..qc import motion_parser as _mp
+    from ..qc import connectivity_thresholds as _ct
+    from ..mriqc import iqm_parser as _iqm
+except ImportError:
+    from qc import motion_parser as _mp
+    from qc import connectivity_thresholds as _ct
+    from mriqc import iqm_parser as _iqm
+
 
 def generate(
     output_folder: str,
@@ -513,6 +522,12 @@ def _section_motion(motion_results) -> str:
         )
     rows_html = "\n".join(rows)
 
+    fd_thr = _mp.FD_THRESHOLD
+    warn_fd = _mp.WARN_MEAN_FD
+    rescan_fd = _mp.RESCAN_MEAN_FD
+    warn_pct = _mp.WARN_MOTION_PERCENT
+    rescan_pct = _mp.RESCAN_MOTION_PERCENT
+
     return f"""<hr class="sep">
 <h2>Motion Analysis</h2>
 <div class="section-explainer">
@@ -523,18 +538,18 @@ def _section_motion(motion_results) -> str:
   <br><br>
   <b>Framewise displacement</b> (Power et al., 2012) summarizes volume-to-volume head
   movement by combining translational and rotational displacement into a single number
-  (in mm). A frame with FD &gt; {0.5}&nbsp;mm is considered a <i>high-motion frame</i>.
+  (in mm). A frame with FD &gt; {fd_thr}&nbsp;mm is considered a <i>high-motion frame</i>.
   Runs with many high-motion frames yield unreliable activation maps and inflated
   functional-connectivity estimates.
   <br><br>
   <b>Thresholds used here:</b>&ensp;
-  Error: &ge;20% high-motion frames <i>or</i> mean&nbsp;FD &ge; 1.0&nbsp;mm &nbsp;|&nbsp;
-  Warning: &ge;10% high-motion frames <i>or</i> mean&nbsp;FD &ge; 0.5&nbsp;mm.
+  Error: &ge;{rescan_pct:g}% high-motion frames <i>or</i> mean&nbsp;FD &ge; {rescan_fd}&nbsp;mm &nbsp;|&nbsp;
+  Warning: &ge;{warn_pct:g}% high-motion frames <i>or</i> mean&nbsp;FD &ge; {warn_fd}&nbsp;mm.
 </div>
 <table>
   <thead><tr>
     <th>Run</th><th>Status</th>
-    <th>Mean FD<br><span class="th-hint">&#9888; &ge;0.5mm &nbsp; &#10007; &ge;1.0mm</span></th><th>High-motion frames<br><span class="th-hint">FD &gt;0.5mm &nbsp;|&nbsp; &#9888; &ge;10% &nbsp; &#10007; &ge;20%</span></th>
+    <th>Mean FD<br><span class="th-hint">&#9888; &ge;{warn_fd}mm &nbsp; &#10007; &ge;{rescan_fd}mm</span></th><th>High-motion frames<br><span class="th-hint">FD &gt;{fd_thr}mm &nbsp;|&nbsp; &#9888; &ge;{warn_pct:g}% &nbsp; &#10007; &ge;{rescan_pct:g}%</span></th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>"""
@@ -799,43 +814,64 @@ def _section_mriqc(iqm_results, mriqc_reports) -> str:
       threshold tuning required. Requires &ge;3 scans of the same type.</li>
     <li><b>Safety net -absolute thresholds for extreme values.</b>
       Protocol-independent ERROR thresholds catch values so extreme they indicate
-      a definite problem regardless of protocol (e.g.&nbsp;tSNR&nbsp;&lt;&nbsp;5,
-      mean&nbsp;FD&nbsp;&gt;&nbsp;1.0&nbsp;mm).
+      a definite problem regardless of protocol (e.g.&nbsp;tSNR&nbsp;&lt;&nbsp;{_iqm.THRESHOLDS_BOLD['tsnr'][1]:g},
+      mean&nbsp;FD&nbsp;&gt;&nbsp;{_iqm.THRESHOLDS_BOLD['fd_mean'][1]:g}&nbsp;mm).
       When fewer than 3 scans of the same type are available (IQR cannot run),
       moderate absolute thresholds are applied as a WARNING-level fallback.</li>
   </ol>
-  <b>Absolute safety-net thresholds (ERROR -always applied):</b><br>
-  <b>T1w:</b>&ensp;
-  SNR&nbsp;&lt;&nbsp;2.0 &nbsp;|&nbsp;
-  CNR&nbsp;&lt;&nbsp;0.8 &nbsp;|&nbsp;
-  CJV&nbsp;&gt;&nbsp;1.50 &nbsp;|&nbsp;
-  INU&nbsp;&gt;&nbsp;1.00 &nbsp;|&nbsp;
-  QI1&nbsp;&gt;&nbsp;0.10<br>
-  <b>BOLD:</b>&ensp;
-  tSNR&nbsp;&lt;&nbsp;5 &nbsp;|&nbsp;
-  FD&nbsp;&gt;&nbsp;1.00&nbsp;mm &nbsp;|&nbsp;
-  GSR&nbsp;&gt;&nbsp;0.30 &nbsp;|&nbsp;
-  AOR&nbsp;&gt;&nbsp;0.30<br>
-  <b>Fallback WARNING thresholds (used when &lt;3 scans):</b><br>
-  <b>T1w:</b>&ensp;
-  SNR&nbsp;&lt;&nbsp;6.0 &nbsp;|&nbsp;
-  CNR&nbsp;&lt;&nbsp;2.0 &nbsp;|&nbsp;
-  CJV&nbsp;&gt;&nbsp;0.60 &nbsp;|&nbsp;
-  INU&nbsp;&gt;&nbsp;0.50 &nbsp;|&nbsp;
-  QI1&nbsp;&gt;&nbsp;0.02<br>
-  <b>BOLD:</b>&ensp;
-  tSNR&nbsp;&lt;&nbsp;20 &nbsp;|&nbsp;
-  FD&nbsp;&gt;&nbsp;0.30&nbsp;mm &nbsp;|&nbsp;
-  GSR&nbsp;&gt;&nbsp;0.10 &nbsp;|&nbsp;
-  AOR&nbsp;&gt;&nbsp;0.10
+  {_iqm_threshold_text()}
 </div>
 {table_html}"""
 
 
-def _fd_bar(pct: float) -> str:
+def _iqm_threshold_text() -> str:
+    """Build the IQM threshold summary from the current iqm_parser globals."""
+    # Display names for metrics
+    _anat_labels = {
+        "snr_gm": "SNR", "cnr": "CNR", "cjv": "CJV",
+        "inu_range": "INU", "qi_1": "QI1",
+    }
+    _bold_labels = {
+        "tsnr": "tSNR", "fd_mean": "FD", "gsr_x": "GSR",
+        "gsr_y": "GSR Y", "aor": "AOR",
+    }
+    # Metrics with units
+    _units = {"fd_mean": "&nbsp;mm"}
+
+    def _fmt(thresholds, labels, level):
+        """level: 0 = fallback_warn, 1 = safety_net_error"""
+        parts = []
+        for metric, label in labels.items():
+            if metric not in thresholds:
+                continue
+            warn, error, direction = thresholds[metric]
+            val = error if level == 1 else warn
+            op = "&gt;" if direction == "high" else "&lt;"
+            unit = _units.get(metric, "")
+            parts.append(f"{label}&nbsp;{op}&nbsp;{val:g}{unit}")
+        return " &nbsp;|&nbsp;\n  ".join(parts)
+
+    anat = _iqm.THRESHOLDS_ANAT
+    bold = _iqm.THRESHOLDS_BOLD
+
+    return (
+        '<b>Absolute safety-net thresholds (ERROR -always applied):</b><br>\n'
+        f'  <b>T1w:</b>&ensp;\n  {_fmt(anat, _anat_labels, 1)}<br>\n'
+        f'  <b>BOLD:</b>&ensp;\n  {_fmt(bold, _bold_labels, 1)}<br>\n'
+        '  <b>Fallback WARNING thresholds (used when &lt;3 scans):</b><br>\n'
+        f'  <b>T1w:</b>&ensp;\n  {_fmt(anat, _anat_labels, 0)}<br>\n'
+        f'  <b>BOLD:</b>&ensp;\n  {_fmt(bold, _bold_labels, 0)}'
+    )
+
+
+def _fd_bar(pct: float, warn_pct: float = None, error_pct: float = None) -> str:
     """Render a small inline progress bar for the motion percentage."""
+    if warn_pct is None:
+        warn_pct = _mp.WARN_MOTION_PERCENT
+    if error_pct is None:
+        error_pct = _mp.RESCAN_MOTION_PERCENT
     clamped = min(pct, 100.0)
-    color = "#c0392b" if pct >= 20 else ("#e67e22" if pct >= 10 else "#27ae60")
+    color = "#c0392b" if pct >= error_pct else ("#e67e22" if pct >= warn_pct else "#27ae60")
     return (
         f'<div style="background:#eee;border-radius:4px;height:8px;width:120px;display:inline-block;vertical-align:middle;">'
         f'<div style="background:{color};width:{clamped:.0f}%;height:100%;border-radius:4px;"></div>'
@@ -856,7 +892,15 @@ def _section_connectivity_qc(connectivity_results) -> str:
     if not connectivity_results:
         return ""
 
-    intro = """<hr class="sep">
+    fd_warn = _ct.CONNECTIVITY_MEAN_FD_WARN
+    fd_fail = _ct.CONNECTIVITY_MEAN_FD_FAIL
+    cens_warn = _ct.MAX_CENSORED_PCT_WARN
+    cens_fail = _ct.MAX_CENSORED_PCT_FAIL
+    usable_fail = _ct.MIN_USABLE_MINUTES_FAIL
+    dof_warn = _ct.LOSS_DOF_WARN
+    dof_warn_pct = dof_warn * 100
+
+    intro = f"""<hr class="sep">
 <h2>Functional Connectivity Quality Assessment</h2>
 <div class="section-explainer">
   This section evaluates whether each BOLD run has sufficient data quality for
@@ -880,21 +924,21 @@ def _section_connectivity_qc(connectivity_results) -> str:
   <b>Metrics at a glance:</b><br>
   &#9679; <b>Mean FD</b> -
   Average framewise displacement across all volumes.
-  <span class="metric-ok">&lt;0.25&nbsp;mm</span>,
-  <span class="metric-warn">0.25-0.50&nbsp;mm</span>,
-  <span class="metric-error">&gt;0.50&nbsp;mm</span>.<br>
+  <span class="metric-ok">&lt;{fd_warn}&nbsp;mm</span>,
+  <span class="metric-warn">{fd_warn}-{fd_fail}&nbsp;mm</span>,
+  <span class="metric-error">&gt;{fd_fail}&nbsp;mm</span>.<br>
   &#9679; <b>Censored Volumes</b> -
   Volumes flagged by the scrubbing strategy and removed before time-series extraction.
-  <span class="metric-error">&gt;80% censored = not suitable</span>.<br>
+  <span class="metric-error">&gt;{cens_fail:g}% censored = not suitable</span>.<br>
   &#9679; <b>Usable Time</b> -
   Clean scan duration remaining after censoring (in minutes).
-  <span class="metric-error">&lt;1&nbsp;min = not suitable</span>.<br>
+  <span class="metric-error">&lt;{usable_fail:g}&nbsp;min = not suitable</span>.<br>
   &#9679; <b># Regressors</b> -
   Number of confound columns selected by the scrubbing strategy.<br>
   &#9679; <b>Loss of DoF</b> -
   Total temporal degrees of freedom consumed (regressors + censored volumes).
   High values reduce statistical power and can inflate connectivity estimates.
-  <span class="metric-warn">&gt;60% = caution</span>.
+  <span class="metric-warn">&gt;{dof_warn_pct:g}% = caution</span>.
 </div>"""
 
     sections = [intro]
@@ -912,18 +956,18 @@ def _section_connectivity_qc(connectivity_results) -> str:
             badge = '<span class="metric-unknown">UNKNOWN</span>'
 
         # Mean FD
-        fd_cls = ("metric-error" if c.mean_fd > 0.50
-                  else "metric-warn" if c.mean_fd > 0.25
+        fd_cls = ("metric-error" if c.mean_fd > fd_fail
+                  else "metric-warn" if c.mean_fd > fd_warn
                   else "metric-ok")
 
         # Censored volumes
-        censor_bar = _fd_bar(c.pct_censored)
-        pct_cls = ("metric-error" if c.pct_censored > 80
-                   else "metric-warn" if c.pct_censored > 50
+        censor_bar = _fd_bar(c.pct_censored, warn_pct=cens_warn, error_pct=cens_fail)
+        pct_cls = ("metric-error" if c.pct_censored > cens_fail
+                   else "metric-warn" if c.pct_censored > cens_warn
                    else "metric-ok")
 
         # DoF loss
-        dof_cls = ("metric-warn" if c.loss_of_dof_pct > 60.0 else "metric-ok")
+        dof_cls = ("metric-warn" if c.loss_of_dof_pct > dof_warn_pct else "metric-ok")
 
         rows.append(
             f"<tr>"
@@ -947,11 +991,11 @@ def _section_connectivity_qc(connectivity_results) -> str:
   <thead><tr>
     <th>Run</th>
     <th>Status</th>
-    <th>Mean FD<br><span class="th-hint">&#9888; &ge;0.25mm &#10007; &ge;0.50mm</span></th>
-    <th>Censored<br><span class="th-hint">&#10007; &gt;80%</span></th>
-    <th>Usable Time<br><span class="th-hint">&#10007; &lt;1 min</span></th>
+    <th>Mean FD<br><span class="th-hint">&#9888; &ge;{fd_warn}mm &#10007; &ge;{fd_fail}mm</span></th>
+    <th>Censored<br><span class="th-hint">&#10007; &gt;{cens_fail:g}%</span></th>
+    <th>Usable Time<br><span class="th-hint">&#10007; &lt;{usable_fail:g} min</span></th>
     <th># Regressors</th>
-    <th>Loss of DoF<br><span class="th-hint">&#9888; &gt;60%</span></th>
+    <th>Loss of DoF<br><span class="th-hint">&#9888; &gt;{dof_warn_pct:g}%</span></th>
   </tr></thead>
   <tbody>{rows_html}</tbody>
 </table>""")
