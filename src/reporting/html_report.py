@@ -40,6 +40,7 @@ def generate(
     connectivity_results=None,
     researcher_comments: str = "",
     coreg_plots=None,
+    tool_versions: dict = None,
 ) -> str:
     """
     Write full_pipeline_report.html to output_folder.
@@ -66,6 +67,7 @@ def generate(
         connectivity_results or [],
         researcher_comments=researcher_comments,
         coreg_plots=coreg_plots or {},
+        tool_versions=tool_versions or {},
     )
     out_path = Path(output_folder) / "full_pipeline_report.html"
     try:
@@ -76,9 +78,15 @@ def generate(
     return str(out_path)
 
 
-def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
-                          qc_findings=None, output_folder: str = None,
-                          researcher_comments: str = "") -> str:
+def generate_mriqc_report(
+    mriqc_dir: str,
+    iqm_results,
+    mriqc_reports,
+    qc_findings=None,
+    output_folder: str = None,
+    researcher_comments: str = "",
+    tool_versions: dict = None,
+) -> str:
     """
     Write a standalone MRIQC-only HTML report.
 
@@ -121,7 +129,7 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
     parts = [
         _html_head(accent_color, title="MRIQC - Image Quality Report"),
         "<body>",
-        _section_header_mriqc(now, mriqc_dir),
+        _section_header_mriqc(now, mriqc_dir, tool_versions=tool_versions or {}),
     ]
 
     if bids_errors or bids_warnings:
@@ -145,13 +153,36 @@ def generate_mriqc_report(mriqc_dir: str, iqm_results, mriqc_reports,
     return str(out_path)
 
 
-def _section_header_mriqc(now: str, mriqc_dir: str) -> str:
+def _section_header_mriqc(now: str, mriqc_dir: str, tool_versions: dict = None) -> str:
+    tool_versions = tool_versions or {}
+
+    def _escape(s: str) -> str:
+        return (
+            (s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+        )
+
+    bids_v = _escape(str(tool_versions.get("bids", ""))).strip()
+    mriqc_v = _escape(str(tool_versions.get("mriqc", ""))).strip()
+
+    versions_line = ""
+    if bids_v or mriqc_v:
+        bids_disp = bids_v or "N/A"
+        mriqc_disp = mriqc_v or "N/A"
+        versions_line = (
+            f'  <div class="meta">BIDS: v{bids_disp} &nbsp;|&nbsp; MRIQC: v{mriqc_disp}</div>\n'
+        )
+
     return f"""<div class="container">
 <div style="margin-bottom:24px;">
   <div style="font-size:1.5rem;font-weight:800;color:#2c3e50;">
     MRIQC - Image Quality Report
   </div>
-  <div class="meta">Generated: {now} &nbsp;|&nbsp; MRIQC output: {mriqc_dir}</div>
+{versions_line}  <div class="meta">Generated: {now} &nbsp;|&nbsp; MRIQC output: {mriqc_dir}</div>
   <div class="meta" style="margin-top:4px;">
     This report was generated immediately after MRIQC completed, before fMRIPrep.
     A comprehensive QC report will be available after the full pipeline finishes.
@@ -168,11 +199,13 @@ def _build_html(output_folder, qc_findings, motion_results,
                 iqm_results=None, mriqc_reports=None,
                 connectivity_results=None,
                 researcher_comments: str = "",
-                coreg_plots=None) -> str:
+                coreg_plots=None,
+                tool_versions: dict = None) -> str:
     iqm_results = iqm_results or []
     mriqc_reports = mriqc_reports or {}
     connectivity_results = connectivity_results or []
     coreg_plots = coreg_plots or {}
+    tool_versions = tool_versions or {}
 
     errors = [f for f in qc_findings if f.severity.value == "ERROR"]
     warnings = [f for f in qc_findings if f.severity.value == "WARNING"]
@@ -203,7 +236,7 @@ def _build_html(output_folder, qc_findings, motion_results,
     parts = [
         _html_head(accent_color),
         "<body>",
-        _section_header(now, output_folder),
+        _section_header(now, output_folder, tool_versions=tool_versions),
         _section_summary_table(subjects, qc_findings, motion_results, iqm_results,
                                 connectivity_results),
     ]
@@ -351,11 +384,37 @@ def _html_head(accent_color: str, title: str = "fMRI-Prep Full Pipeline Report")
 </head>"""
 
 
-def _section_header(now: str, output_folder: str) -> str:
+def _section_header(now: str, output_folder: str, tool_versions: dict = None) -> str:
+    tool_versions = tool_versions or {}
+
+    def _escape(s: str) -> str:
+        return (
+            (s or "")
+            .replace("&", "&amp;")
+            .replace("<", "&lt;")
+            .replace(">", "&gt;")
+            .replace('"', "&quot;")
+            .replace("'", "&#39;")
+        )
+
+    bids_v = _escape(str(tool_versions.get("bids", ""))).strip()
+    mriqc_v = _escape(str(tool_versions.get("mriqc", ""))).strip()
+    fmriprep_v = _escape(str(tool_versions.get("fmriprep", ""))).strip()
+
+    versions_line = ""
+    if bids_v or mriqc_v or fmriprep_v:
+        bids_disp = bids_v or "N/A"
+        mriqc_disp = mriqc_v or "N/A"
+        fmriprep_disp = fmriprep_v or "N/A"
+        versions_line = (
+            f'  <div class="meta">BIDS: v{bids_disp} &nbsp;|&nbsp; '
+            f'MRIQC: v{mriqc_disp} &nbsp;|&nbsp; fMRIPrep: v{fmriprep_disp}</div>\n'
+        )
+
     return f"""<div class="container">
 <div style="margin-bottom:24px;">
   <div style="font-size:1.5rem;font-weight:800;color:#2c3e50;">fMRI-Prep Full Pipeline Report</div>
-  <div class="meta">Generated: {now} &nbsp;|&nbsp; Output: {output_folder}</div>
+{versions_line}  <div class="meta">Generated: {now} &nbsp;|&nbsp; Output: {output_folder}</div>
 </div>"""
 
 

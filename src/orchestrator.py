@@ -44,6 +44,7 @@ try:
     from .qc import connectivity_thresholds
     from .mriqc import iqm_parser
     from .mriqc import runner as mriqc_runner
+    from .fmriprep import runner as fmriprep_runner
 except ImportError:
     # When run directly as script
     from core.utils import setup_encoding, safe_print, set_log_file, close_log_file
@@ -58,6 +59,7 @@ except ImportError:
     from qc import connectivity_thresholds
     from mriqc import iqm_parser
     from mriqc import runner as mriqc_runner
+    from fmriprep import runner as fmriprep_runner
 
 setup_encoding()
 
@@ -122,6 +124,40 @@ def _read_researcher_comments(output_folder):
     except Exception:
         pass  # Best-effort
     return ""
+
+
+def _extract_docker_tag(image: str) -> str:
+    """Extract the tag (version) from a docker image reference.
+
+    Examples:
+      nipreps/mriqc:24.0.2 -> 24.0.2
+      nipreps/fmriprep:latest -> latest
+    """
+    image = (image or "").strip()
+    if ":" in image and "/" in image:
+        return image.rsplit(":", 1)[1].strip() or ""
+    return ""
+
+
+def _read_bids_version(bids_dir: Path) -> str:
+    """Read BIDSVersion from dataset_description.json (if present)."""
+    try:
+        p = Path(bids_dir) / "dataset_description.json"
+        if not p.exists():
+            return ""
+        data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        v = data.get("BIDSVersion")
+        return str(v).strip() if v else ""
+    except Exception:
+        return ""
+
+
+def _collect_tool_versions(bids_dir: Path, ran_mriqc: bool, ran_fmriprep: bool) -> dict:
+    """Collect versions to display in the HTML report header."""
+    bids_v = _read_bids_version(bids_dir)
+    mriqc_v = _extract_docker_tag(getattr(mriqc_runner, "MRIQC_IMAGE", "")) if ran_mriqc else ""
+    fmriprep_v = _extract_docker_tag(getattr(fmriprep_runner, "FMRIPREP_IMAGE", "")) if ran_fmriprep else ""
+    return {"bids": bids_v, "mriqc": mriqc_v, "fmriprep": fmriprep_v}
 
 
 def _write_structured_summary(
@@ -845,6 +881,12 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         safe_print(f"  Found {len(coreg_plots)} coregistration overlay(s)", flush=True)
 
     # HTML QC report
+    ran_fmriprep = bool(motion_results) or bool(coreg_plots) or (derivatives_dir / "fmriprep").exists()
+    tool_versions = _collect_tool_versions(
+        bids_dir=output_folder,
+        ran_mriqc=mriqc_dir.exists(),
+        ran_fmriprep=ran_fmriprep,
+    )
     html_path = generate_html_report(
         str(output_folder),
         qc_checker.get_all(),
@@ -855,6 +897,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         mriqc_reports=mriqc_reports,
         connectivity_results=connectivity_results,
         coreg_plots=coreg_plots,
+        tool_versions=tool_versions,
     )
     safe_print(f"\nQC report saved to: {html_path}", flush=True)
 
@@ -1423,11 +1466,17 @@ Examples:
                 flush=True,
             )
 
+        tool_versions = _collect_tool_versions(
+            bids_dir=bids_dir,
+            ran_mriqc=True,
+            ran_fmriprep=False,
+        )
         mriqc_report_path = generate_mriqc_report(
             str(mriqc_dir), early_iqm, early_reports,
             qc_findings=qc_checker.get_all(),
             output_folder=str(output_folder),
             researcher_comments=_read_researcher_comments(output_folder),
+            tool_versions=tool_versions,
         )
         safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
         safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
@@ -1657,6 +1706,11 @@ Examples:
     report.set_researcher_comments(researcher_comments)
 
     if not args.skip_fmriprep:
+        tool_versions = _collect_tool_versions(
+            bids_dir=bids_dir,
+            ran_mriqc=run_mriqc,
+            ran_fmriprep=True,
+        )
         html_path = generate_html_report(
             str(output_folder),
             qc_checker.get_all(),
@@ -1668,6 +1722,7 @@ Examples:
             connectivity_results=connectivity_results,
             researcher_comments=researcher_comments,
             coreg_plots=coreg_plots,
+            tool_versions=tool_versions,
         )
         safe_print(f"QC report: {html_path}", flush=True)
 
