@@ -37,11 +37,14 @@ try:
     from .core.progress import ProgressTracker
     from .bids.converter import run_bids_conversion, create_dataset_description
     from .bids.analyzer import count_output_files
-    from .reporting.report import ConversionReport
-    from .reporting.html_report import generate as generate_html_report
+    from .reporting.report import ExecutionReport
+    from .reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from .qc.checker import BIDSQualityChecker
-    from .qc import motion_parser, iqm_parser
-    from .fmriprep import mriqc_runner
+    from .qc import motion_parser
+    from .qc import connectivity_thresholds
+    from .mriqc import iqm_parser
+    from .mriqc import runner as mriqc_runner
+    from .fmriprep import runner as fmriprep_runner
 except ImportError:
     # When run directly as script
     from core.utils import setup_encoding, safe_print, set_log_file, close_log_file
@@ -49,11 +52,14 @@ except ImportError:
     from core.progress import ProgressTracker
     from bids.converter import run_bids_conversion, create_dataset_description
     from bids.analyzer import count_output_files
-    from reporting.report import ConversionReport
-    from reporting.html_report import generate as generate_html_report
+    from reporting.report import ExecutionReport
+    from reporting.html_report import generate as generate_html_report, generate_mriqc_report
     from qc.checker import BIDSQualityChecker
-    from qc import motion_parser, iqm_parser
-    from fmriprep import mriqc_runner
+    from qc import motion_parser
+    from qc import connectivity_thresholds
+    from mriqc import iqm_parser
+    from mriqc import runner as mriqc_runner
+    from fmriprep import runner as fmriprep_runner
 
 setup_encoding()
 
@@ -70,16 +76,102 @@ def _pick_mni_space(output_spaces):
     return "MNI152NLin2009cAsym"
 
 
+def _collect_coreg_plots(derivatives_dir):
+    """Collect fMRIPrep coregistration overlay SVGs from the derivatives directory.
+
+    Searches both ``derivatives/sub-*/figures/`` and ``derivatives/fmriprep/sub-*/figures/``
+    for ``*_desc-coreg_bold.svg`` files.
+
+    Returns:
+        dict mapping run key (e.g. ``"sub-010_ses-02_task-rest_run-01"``) to Path.
+    """
+    import re
+    _coreg_re = re.compile(r"_desc-coreg_bold$")
+    deriv_path = Path(derivatives_dir)
+
+    search_roots = [deriv_path, deriv_path / "fmriprep"]
+    seen_paths = set()
+    coreg_plots = {}
+
+    for root in search_roots:
+        if not root.exists():
+            continue
+        for svg in sorted(root.glob("sub-*/figures/*_desc-coreg_bold.svg")):
+            resolved = svg.resolve()
+            if resolved in seen_paths:
+                continue
+            seen_paths.add(resolved)
+            key = _coreg_re.sub("", svg.stem)
+            if key not in coreg_plots:
+                coreg_plots[key] = svg
+
+    return coreg_plots
+
+
+def _read_researcher_comments(output_folder):
+    """Read the latest researcher comments from the comments file.
+
+    The GUI (or CLI) writes comments to
+    ``<output_folder>/execution_logs/.researcher_comments.txt`` and may
+    update the file while the pipeline is running.  This helper is called
+    just before each report is generated so the reports always contain the
+    most recent version of the comments.
+    """
+    comments_path = Path(output_folder) / "execution_logs" / ".researcher_comments.txt"
+    try:
+        if comments_path.exists():
+            return comments_path.read_text(encoding="utf-8").strip()
+    except Exception:
+        pass  # Best-effort
+    return ""
+
+
+def _extract_docker_tag(image: str) -> str:
+    """Extract the tag (version) from a docker image reference.
+
+    Examples:
+      nipreps/mriqc:24.0.2 -> 24.0.2
+      nipreps/fmriprep:latest -> latest
+    """
+    image = (image or "").strip()
+    if ":" in image and "/" in image:
+        return image.rsplit(":", 1)[1].strip() or ""
+    return ""
+
+
+def _read_bids_version(bids_dir: Path) -> str:
+    """Read BIDSVersion from dataset_description.json (if present)."""
+    try:
+        p = Path(bids_dir) / "dataset_description.json"
+        if not p.exists():
+            return ""
+        data = json.loads(p.read_text(encoding="utf-8", errors="replace"))
+        v = data.get("BIDSVersion")
+        return str(v).strip() if v else ""
+    except Exception:
+        return ""
+
+
+def _collect_tool_versions(bids_dir: Path, ran_mriqc: bool, ran_fmriprep: bool) -> dict:
+    """Collect versions to display in the HTML report header."""
+    bids_v = _read_bids_version(bids_dir)
+    mriqc_v = _extract_docker_tag(getattr(mriqc_runner, "MRIQC_IMAGE", "")) if ran_mriqc else ""
+    fmriprep_v = _extract_docker_tag(getattr(fmriprep_runner, "FMRIPREP_IMAGE", "")) if ran_fmriprep else ""
+    return {"bids": bids_v, "mriqc": mriqc_v, "fmriprep": fmriprep_v}
+
+
 def _write_structured_summary(
     summary_path,
     report,
     subjects_tasks,
     sessions_missing_bold,
     motion_results,
-    censoring_results,
     connectivity_results,
     errors,
     pipeline_start_time,
+    iqm_results=None,
+    ran_fmriprep=True,
+    ran_mriqc=True,
 ):
     """
     Write a human-readable, structured summary to its own file.
@@ -92,8 +184,9 @@ def _write_structured_summary(
     try:
         lines = _build_structured_summary(
             report, subjects_tasks, sessions_missing_bold,
-            motion_results, censoring_results, connectivity_results,
-            errors, pipeline_start_time,
+            motion_results, connectivity_results,
+            errors, pipeline_start_time, iqm_results,
+            ran_fmriprep=ran_fmriprep, ran_mriqc=ran_mriqc,
         )
         with open(summary_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
@@ -107,8 +200,9 @@ def _write_structured_summary(
 
 def _build_structured_summary(
     report, subjects_tasks, sessions_missing_bold,
-    motion_results, censoring_results, connectivity_results,
-    errors, pipeline_start_time,
+    motion_results, connectivity_results,
+    errors, pipeline_start_time, iqm_results=None,
+    ran_fmriprep=True, ran_mriqc=True,
 ):
     """Build the structured summary as a list of lines. May raise; caller catches."""
 
@@ -132,12 +226,12 @@ def _build_structured_summary(
     motion_map = {}
     for m in (motion_results or []):
         motion_map.setdefault((m.sub_id, m.ses_id), []).append(m)
-    censor_map = {}
-    for c in (censoring_results or []):
-        censor_map.setdefault((c.sub_id, c.ses_id), []).append(c)
     conn_map = {}
     for c in (connectivity_results or []):
         conn_map.setdefault((c.sub_id, c.ses_id), []).append(c)
+    iqm_map = {}
+    for r in (iqm_results or []):
+        iqm_map.setdefault((r.sub_id, r.ses_id), []).append(r)
 
     # ---- header ----
     out("=" * W)
@@ -195,65 +289,68 @@ def _build_structured_summary(
             else:
                 out("      BOLD data       : Present")
 
+            # -- MRIQC --
+            if ran_mriqc:
+                sub_iqm = iqm_map.get(key, [])
+                if sub_iqm:
+                    for r in sub_iqm:
+                        sev = r.worst_severity
+                        if sev == "OK":
+                            out(f"      MRIQC [{r.modality:5s}]    : OK")
+                        else:
+                            flag_strs = [
+                                f"{fl.metric_label}={fl.value:.3f}"
+                                for fl in r.flags
+                            ]
+                            out(
+                                f"      MRIQC [{r.modality:5s}]    : {sev}  "
+                                f"({', '.join(flag_strs)})"
+                            )
+
             # -- fMRIPrep --
-            fmriprep_fails = [
-                f for f in fail_map.get(key, []) if f['stage'] == "fMRIPrep"
-            ]
-            if fmriprep_fails:
-                for f in fmriprep_fails:
-                    out(f"      fMRIPrep        : FAILED -- {f['error'][:80]}")
-            elif key in sessions_missing_bold:
-                out("      fMRIPrep        : Skipped (no BOLD)")
-            elif key in success_map:
-                if motion_map.get(key):
-                    out("      fMRIPrep        : Done")
-                else:
-                    out("      fMRIPrep        : Done (no confounds found)")
+            if ran_fmriprep:
+                fmriprep_fails = [
+                    f for f in fail_map.get(key, []) if f['stage'] == "fMRIPrep"
+                ]
+                if fmriprep_fails:
+                    for f in fmriprep_fails:
+                        out(f"      fMRIPrep        : FAILED -- {f['error'][:80]}")
+                elif key in sessions_missing_bold:
+                    out("      fMRIPrep        : Skipped (no BOLD)")
+                elif key in success_map:
+                    if motion_map.get(key):
+                        out("      fMRIPrep        : Done")
+                    else:
+                        out("      fMRIPrep        : Done (no confounds found)")
 
-            # -- Motion QC --
-            for m in motion_map.get(key, []):
-                label = m.run_label or ""
-                if m.flag == "OK":
-                    out(
-                        f"      Motion [{label:20s}] : OK  "
-                        f"(mean FD {m.mean_fd:.2f} mm)"
-                    )
-                elif m.flag == "WARNING":
-                    out(
-                        f"      Motion [{label:20s}] : WARNING  "
-                        f"(mean FD {m.mean_fd:.2f} mm, "
-                        f"{m.pct_high_motion:.0f}% high-motion)"
-                    )
-                else:
-                    out(
-                        f"      Motion [{label:20s}] : RE-SCAN  "
-                        f"(mean FD {m.mean_fd:.2f} mm, "
-                        f"{m.pct_high_motion:.0f}% high-motion)"
-                    )
+                # -- Motion QC --
+                for m in motion_map.get(key, []):
+                    label = m.run_label or ""
+                    if m.flag == "OK":
+                        out(
+                            f"      Motion [{label:20s}] : OK  "
+                            f"(mean FD {m.mean_fd:.2f} mm)"
+                        )
+                    elif m.flag == "WARNING":
+                        out(
+                            f"      Motion [{label:20s}] : WARNING  "
+                            f"(mean FD {m.mean_fd:.2f} mm, "
+                            f"{m.pct_high_motion:.0f}% high-motion)"
+                        )
+                    else:
+                        out(
+                            f"      Motion [{label:20s}] : RE-SCAN  "
+                            f"(mean FD {m.mean_fd:.2f} mm, "
+                            f"{m.pct_high_motion:.0f}% high-motion)"
+                        )
 
-            # -- Volume censoring --
-            for c in censor_map.get(key, []):
-                label = c.run_label or ""
-                if c.severity == "OK":
+                # -- Connectivity --
+                for c in conn_map.get(key, []):
+                    label = c.run_label or ""
                     out(
-                        f"      Censoring [{label:17s}] : OK  "
-                        f"({c.pct_censored_02mm:.0f}% censored, "
-                        f"{c.usable_minutes_02mm:.1f} min usable)"
+                        f"      Connectivity [{label:14s}] : {c.worst_severity}  "
+                        f"(FD={c.mean_fd:.2f}mm, {c.pct_censored:.0f}% censored, {c.usable_minutes:.1f}min usable)"
                     )
-                else:
-                    out(
-                        f"      Censoring [{label:17s}] : {c.severity}  "
-                        f"({c.pct_censored_02mm:.0f}% censored, "
-                        f"{c.usable_minutes_02mm:.1f} min usable)"
-                    )
-
-            # -- Connectivity --
-            for c in conn_map.get(key, []):
-                label = c.run_label or ""
-                out(
-                    f"      Connectivity [{label:14s}] : {c.worst_severity}  "
-                    f"({c.plain_message[:60]})"
-                )
 
     out()
 
@@ -293,17 +390,25 @@ def _build_structured_summary(
     out("    BOLD data        - Whether functional brain-activity scans were")
     out("                       found. Sessions without BOLD cannot be")
     out("                       preprocessed by fMRIPrep.")
-    out("    fMRIPrep         - Preprocessing: motion correction, spatial")
-    out("                       normalisation, confound estimation.")
-    out("    Motion           - Head-motion quality check. 'OK' is good;")
-    out("                       'WARNING' means elevated motion; 'RE-SCAN'")
-    out("                       means the data may be unusable.")
-    out("    Censoring        - How many volumes were removed due to motion.")
-    out("                       More usable minutes = better.")
-    out("    Connectivity     - Checks whether motion corrupts brain-network")
-    out("                       estimates (QC-FC and DM-FC metrics).")
+    if ran_mriqc:
+        out("    MRIQC            - Image quality metrics computed on raw data")
+        out("                       before preprocessing. Flags scans with poor")
+        out("                       SNR, motion, ghosting, or other artefacts.")
+    if ran_fmriprep:
+        out("    fMRIPrep         - Preprocessing: motion correction, spatial")
+        out("                       normalisation, confound estimation.")
+        out("    Motion           - Head-motion quality check. 'OK' is good;")
+        out("                       'WARNING' means elevated motion; 'RE-SCAN'")
+        out("                       means the data may be unusable.")
+        out("    Censoring        - How many volumes were removed due to motion.")
+        out("                       More usable minutes = better.")
+        out("    Connectivity     - Checks whether motion corrupts brain-network")
+        out("                       estimates (DM-FC split-based metric).")
     out()
-    out("  For the full visual report, open qc_report.html in your browser.")
+    if ran_fmriprep:
+        out("  For the full visual report, open full_pipeline_report.html in your browser.")
+    elif ran_mriqc:
+        out("  For the visual report, open the mriqc_report.html in your browser.")
     out()
 
     # ---- footer ----
@@ -329,12 +434,13 @@ def process_bids_task(task, bids_dir, progress_tracker,
         bids_dir: BIDS output directory
         progress_tracker: ProgressTracker instance
         desc_created_event: Threading event for dataset_description.json
-        report: ConversionReport instance
+        report: ExecutionReport instance
         anonymize: If True, anonymize DICOM metadata
         qc_checker: BIDSQualityChecker instance
 
     Returns:
-        Tuple of (error_string_or_None, missing_bold: bool)
+        Tuple of (error_string_or_None, missing_bold: bool,
+                  excluded_bold: list of (nii_path, json_path) tuples)
     """
     sub_id = task['sub_id']
     ses_id = task['ses_id']
@@ -348,16 +454,24 @@ def process_bids_task(task, bids_dir, progress_tracker,
     progress_tracker.task_start(task_num)
 
     missing_bold = False
+    excluded_bold = []
 
-    success, duration, error_msg = run_bids_conversion(
+    success, duration, error_msg, bold_notes = run_bids_conversion(
         dicom_path, sub_id, ses_id, bids_dir, task_label, anonymize=anonymize
     )
 
     if success:
         report.add_success(sub_id, ses_id, duration)
 
+        # Collect BOLD files that should be hidden from fMRIPrep
+        from bids.converter import get_excluded_bold_paths
+        excluded_bold = get_excluded_bold_paths(bold_notes)
+
         # Layer 1: Run BIDS quality checks immediately after conversion
         if qc_checker is not None:
+            # Record BOLD fragment/duplicate findings from conversion
+            if bold_notes:
+                qc_checker.add_bold_notes(sub_id, ses_id, bold_notes)
             session_findings = qc_checker.check_session(bids_dir, sub_id, ses_id)
             n_errors = sum(1 for f in session_findings if f.severity.value == "ERROR")
             n_warnings = sum(1 for f in session_findings if f.severity.value == "WARNING")
@@ -391,10 +505,10 @@ def process_bids_task(task, bids_dir, progress_tracker,
         report.add_failure(sub_id, ses_id, error_msg, "BIDS Conversion")
         progress_tracker.increment()
         safe_print(f"[FAIL] {task_label} - BIDS conversion failed", flush=True)
-        return f"{task_label} (BIDS failed)", missing_bold
+        return f"{task_label} (BIDS failed)", missing_bold, []
 
     progress_tracker.increment()
-    return None, missing_bold
+    return None, missing_bold, excluded_bold
 
 
 def run_fmriprep_for_subject(sub_id, session_ids, bids_dir, derivatives_dir,
@@ -418,7 +532,7 @@ def run_fmriprep_for_subject(sub_id, session_ids, bids_dir, derivatives_dir,
         derivatives_dir: fMRIPrep derivatives directory
         fmriprep_script: Path to fMRIPrep runner script
         fmriprep_opts: Dictionary of fMRIPrep options
-        report: ConversionReport instance
+        report: ExecutionReport instance
         debug_log_file: Optional path to a debug log file
 
     Returns:
@@ -548,7 +662,7 @@ def cleanup_temp_files(bids_dir, report):
     
     Args:
         bids_dir: BIDS output directory
-        report: ConversionReport to update with cleanup info
+        report: ExecutionReport to update with cleanup info
     """
     safe_print("\nCleaning up temporary files...", flush=True)
     cleanup_count = 0
@@ -591,16 +705,50 @@ def cleanup_temp_files(bids_dir, report):
         report.set_cleanup_info(0, 0)
 
 
+def cleanup_work_dirs(output_folder, report):
+    """Remove intermediate work directories from derivatives/."""
+    safe_print("\nCleaning up intermediate work directories...", flush=True)
+    cleanup_count = 0
+    cleanup_size = 0
+    output_path = Path(output_folder)
+
+    mriqc_root = output_path / "derivatives" / "mriqc"
+    targets = [
+        mriqc_root / "work",       # nipype workflow cache (heaviest)
+        mriqc_root / ".bids_db",   # BIDS layout SQLite index
+        mriqc_root / "logs",       # MRIQC runtime logs
+    ]
+
+    for target in targets:
+        if target.exists() and target.is_dir():
+            try:
+                for f in target.rglob('*'):
+                    if f.is_file():
+                        cleanup_size += f.stat().st_size
+                shutil.rmtree(target)
+                cleanup_count += 1
+                rel = target.relative_to(output_path)
+                safe_print(f"  Removed: {rel}/", flush=True)
+            except Exception as e:
+                safe_print(f"  Warning: Could not remove {target.name}/: {e}", flush=True)
+
+    if cleanup_count > 0:
+        size_mb = cleanup_size / (1024 * 1024)
+        safe_print(f"  Freed {size_mb:.1f} MB from {cleanup_count} work dir(s)", flush=True)
+    else:
+        safe_print("  No work directories to clean up", flush=True)
+
+
 def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     """
     Run QC analysis only on an existing pipeline output folder.
 
     Expects the folder to contain:
-      - sub-*/ses-*/ BIDS structure  (for Layer 1 checks)
-      - derivatives/                 (for Layer 3 motion analysis)
-      - derivatives/mriqc/            (for Layer 2 IQM parsing, if --run-mriqc)
+      - sub-*/ses-*/ BIDS structure   (for BIDS quality checks)
+      - derivatives/                  (for motion analysis)
+      - derivatives/mriqc/            (for MRIQC IQM parsing, if available)
 
-    Generates qc_report.html and prints a summary.
+    Generates full_pipeline_report.html and prints a summary.
     """
     safe_print(f"\nRunning QC-only analysis on: {output_folder}", flush=True)
     safe_print("=" * 60, flush=True)
@@ -672,53 +820,42 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         safe_print("\nNo derivatives/ folder found — skipping motion analysis.", flush=True)
 
     # Layer 4: Connectivity QC (optional)
-    censoring_results = []
     connectivity_results = []
-    # Check if --connectivity-qc was requested (it's in run_qc_only args via run_mriqc for now)
-    # For qc-only mode, we'll add a separate check
+    # Check if --connectivity-qc was requested
     try:
         import sys
         if '--connectivity-qc' in sys.argv and derivatives_dir.exists():
             try:
-                from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+                from .qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
             except ImportError:
-                from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+                from qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
 
             if CONNECTIVITY_QC_AVAILABLE:
-                safe_print("\nRunning connectivity quality assessment...", flush=True)
-
-                safe_print("  Analyzing volume censoring...", flush=True)
-                censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, output_folder)
-                if censoring_results:
-                    unsuitable = [c for c in censoring_results if not c.connectivity_ready]
-                    safe_print(
-                        f"    {len(censoring_results)} runs analyzed, {len(unsuitable)} unsuitable for connectivity",
-                        flush=True,
-                    )
-
-                safe_print("  Computing connectivity metrics (may take several minutes)...", flush=True)
+                safe_print("\nRunning connectivity quality assessment (scrubbing strategy)...", flush=True)
                 connectivity_results = connectivity_qc.analyze_all_subjects(
                     derivatives_dir,
                     output_folder,
                     atlas='schaefer_116_tian',
-                    compute_qc_fc=True,
-                    compute_dm_fc=True,
-                    compute_modularity=False,
                     mni_space=_pick_mni_space([])
                 )
                 if connectivity_results:
                     failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
-                    safe_print(f"    {len(connectivity_results)} runs analyzed, {len(failed)} failed QC", flush=True)
+                    warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
+                    safe_print(
+                        f"    {len(connectivity_results)} runs analyzed, "
+                        f"{len(failed)} failed, {len(warned)} warning(s)",
+                        flush=True,
+                    )
             else:
                 safe_print("\nConnectivity QC skipped (Nilearn not installed)", flush=True)
     except Exception as e:
         safe_print(f"\nConnectivity QC skipped (error: {e})", flush=True)
 
-    # Layer 2: MRIQC IQM parsing (if mriqc/ folder exists or --run-mriqc requested)
+    # MRIQC IQM parsing (if mriqc/ folder exists)
     iqm_results = []
     mriqc_reports = {}
     mriqc_dir = output_folder / "derivatives" / "mriqc"
-    if run_mriqc and mriqc_dir.exists():
+    if mriqc_dir.exists():
         safe_print("\nParsing MRIQC IQM files...", flush=True)
         iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
         mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
@@ -737,10 +874,19 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                     )
         else:
             safe_print("  No IQM JSON files found in mriqc/.", flush=True)
-    elif run_mriqc:
-        safe_print(f"\nNo mriqc/ folder found at {mriqc_dir} — skipping IQM parsing.", flush=True)
 
-    # Layer 5: HTML report
+    # Collect fMRIPrep coregistration figures
+    coreg_plots = _collect_coreg_plots(derivatives_dir)
+    if coreg_plots:
+        safe_print(f"  Found {len(coreg_plots)} coregistration overlay(s)", flush=True)
+
+    # HTML QC report
+    ran_fmriprep = bool(motion_results) or bool(coreg_plots) or (derivatives_dir / "fmriprep").exists()
+    tool_versions = _collect_tool_versions(
+        bids_dir=output_folder,
+        ran_mriqc=mriqc_dir.exists(),
+        ran_fmriprep=ran_fmriprep,
+    )
     html_path = generate_html_report(
         str(output_folder),
         qc_checker.get_all(),
@@ -749,8 +895,9 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         [],
         iqm_results=iqm_results,
         mriqc_reports=mriqc_reports,
-        censoring_results=censoring_results,
         connectivity_results=connectivity_results,
+        coreg_plots=coreg_plots,
+        tool_versions=tool_versions,
     )
     safe_print(f"\nQC report saved to: {html_path}", flush=True)
 
@@ -763,11 +910,11 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
             f"QC COMPLETE — {len(all_errors)} scan error(s), {len(all_rescans)} motion re-scan flag(s)",
             flush=True,
         )
-        safe_print("Open qc_report.html for full details.", flush=True)
+        safe_print("Open full_pipeline_report.html for full details.", flush=True)
         sys.exit(1)
     else:
         safe_print("QC COMPLETE — No critical issues found.", flush=True)
-        safe_print("Open qc_report.html for full details.", flush=True)
+        safe_print("Open full_pipeline_report.html for full details.", flush=True)
         sys.exit(0)
 
 
@@ -818,21 +965,41 @@ Examples:
                         help="Keep temporary files for debugging (don't cleanup)")
     parser.add_argument("--fmriprep-opts", type=str, default="",
                         help="Base64-encoded JSON fMRIPrep options (platform-agnostic)")
-    parser.add_argument("--run-mriqc", action="store_true",
-                        help="Run MRIQC image quality assessment after BIDS conversion (requires docker pull nipreps/mriqc:latest)")
+    parser.add_argument("--skip-mriqc", action="store_true",
+                        help="Skip MRIQC image quality assessment (runs by default)")
     parser.add_argument("--connectivity-qc", action="store_true",
                         help="Run connectivity quality assessment (requires nilearn, analyzes motion-connectivity coupling)")
     parser.add_argument("--qc-only", action="store_true",
                         help="Run QC analysis only on an existing output folder (use with --bids-folder)")
+    parser.add_argument("--researcher-comments", type=str, default="",
+                        help="Base64-encoded researcher comments (free text)")
+    parser.add_argument("--qc-thresholds", type=str, default="",
+                        help="Base64-encoded JSON with QC threshold overrides")
+    parser.add_argument("--mriqc-keep-work", action="store_true",
+                        help="Mount MRIQC work dir on host (enables resume of failed runs; "
+                             "default: work stays in container and is discarded on exit)")
 
     args = parser.parse_args()
+
+    # Apply QC threshold overrides (before any QC code runs)
+    if args.qc_thresholds:
+        try:
+            qc_overrides = json.loads(
+                base64.b64decode(args.qc_thresholds).decode('utf-8')
+            )
+            iqm_parser.apply_overrides(qc_overrides)
+            motion_parser.apply_overrides(qc_overrides)
+            connectivity_thresholds.apply_overrides(qc_overrides)
+            safe_print("Applied custom QC threshold overrides.", flush=True)
+        except Exception as e:
+            safe_print(f"Warning: Could not apply QC threshold overrides: {e}", flush=True)
 
     # QC-only mode: analyse an existing output folder, no re-processing
     if args.qc_only:
         if not args.bids_folder:
             safe_print("Error: --qc-only requires --bids-folder <path/to/output_folder>", flush=True)
             sys.exit(1)
-        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=getattr(args, 'run_mriqc', False))
+        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=not getattr(args, 'skip_mriqc', False))
         return  # run_qc_only calls sys.exit(), but return as safety
 
     # Validate arguments
@@ -911,11 +1078,13 @@ Examples:
     # Create debug log file for detailed error tracking (in derivatives/, not the BIDS root,
     # so the BIDS validator does not flag it as an unrecognised file)
     derivatives_dir.mkdir(parents=True, exist_ok=True)
-    debug_log_file = derivatives_dir / "fmriprep_debug.log"
-    if debug_log_file.exists():
-        debug_log_file.unlink()  # Remove old log if exists
-    debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
-    safe_print(f"Debug log: {debug_log_file}", flush=True)
+    debug_log_file = None
+    if not args.skip_fmriprep:
+        debug_log_file = derivatives_dir / "fmriprep_debug.log"
+        if debug_log_file.exists():
+            debug_log_file.unlink()  # Remove old log if exists
+        debug_log_file.write_text(f"fMRIPrep Debug Log\n{'='*80}\nTimestamp: {datetime.now().isoformat()}\n{'='*80}\n\n", encoding='utf-8')
+        safe_print(f"Debug log: {debug_log_file}", flush=True)
 
     # Execution logs folder — keeps both the raw and structured logs together
     logs_folder = output_folder / "execution_logs"
@@ -926,12 +1095,31 @@ Examples:
     set_log_file(execution_log)
     safe_print(f"Execution logs: {logs_folder}", flush=True)
 
+    # Decode researcher comments (base64-encoded from GUI, or plain text from CLI)
+    # and seed the comments file.  The GUI (or user) may update this file while
+    # the pipeline runs; reports will re-read it just before generation.
+    researcher_comments_initial = args.researcher_comments or ""
+    if researcher_comments_initial:
+        try:
+            researcher_comments_initial = base64.b64decode(
+                researcher_comments_initial.encode('ascii')
+            ).decode('utf-8')
+        except Exception:
+            pass  # Not base64 — use as-is (plain text from CLI)
+    # Seed the comments file so that even CLI-provided comments are stored
+    comments_file = logs_folder / ".researcher_comments.txt"
+    try:
+        comments_file.write_text(researcher_comments_initial, encoding="utf-8")
+    except Exception:
+        pass
+
     # Initialize report
-    report = ConversionReport()
+    report = ExecutionReport()
     report.input_folder = str(input_root)
     report.output_folder = str(output_folder)
     report.skip_bids = args.skip_bids
     report.skip_fmriprep = args.skip_fmriprep
+    report.set_researcher_comments(researcher_comments_initial)
     
     safe_print(f"Output folder: {output_folder}", flush=True)
     
@@ -1062,7 +1250,7 @@ Examples:
     all_tasks = [task for sub_tasks in subjects_tasks.values() for task in sub_tasks]
     
     qc_checker = BIDSQualityChecker()
-    run_mriqc = getattr(args, 'run_mriqc', False)
+    run_mriqc = not getattr(args, 'skip_mriqc', False)
     mriqc_dir = output_folder / "derivatives" / "mriqc" if run_mriqc else None
 
     if run_mriqc:
@@ -1078,11 +1266,16 @@ Examples:
     # Keyed by (sub_id, ses_id) — only sessions explicitly flagged are missing.
     sessions_missing_bold: set = set()
 
+    # BOLD files to temporarily hide from fMRIPrep (shorter duplicates).
+    # Collected during Phase 1 as a list of (nii_path, json_path) tuples.
+    fmriprep_exclude_pairs: list = []
+
     # ------------------------------------------------------------------
     # Phase 1: BIDS conversion + QC  (parallel per session)
     # ------------------------------------------------------------------
     if not args.skip_bids:
-        safe_print("\n=== Phase 1: BIDS conversion ===", flush=True)
+        safe_print("\n=== Phase 1: BIDS Conversion ===", flush=True)
+        report.record_phase_start("BIDS Conversion")
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             futures = {
                 executor.submit(
@@ -1096,11 +1289,12 @@ Examples:
                 task = futures[future]
                 sub_id = task['sub_id']
                 try:
-                    error, missing_bold = future.result()
+                    error, missing_bold, excluded_bold = future.result()
                     if error:
                         errors.append(error)
                     if missing_bold:
                         sessions_missing_bold.add((sub_id, task['ses_id']))
+                    fmriprep_exclude_pairs.extend(excluded_bold)
                 except Exception as e:
                     error_msg = f"sub-{task['sub_id']}/ses-{task['ses_id']} (Unexpected error: {e})"
                     errors.append(error_msg)
@@ -1110,20 +1304,188 @@ Examples:
                         flush=True,
                     )
 
+    # Hide shorter duplicate BOLD runs immediately after BIDS conversion.
+    # This ensures consistency checks, MRIQC, and fMRIPrep only see the
+    # final kept runs — preventing duplicate entries in reports.
+    renamed_bold = []
+    if fmriprep_exclude_pairs:
+        from bids.converter import hide_excluded_bold
+        renamed_bold = hide_excluded_bold(fmriprep_exclude_pairs)
+        if renamed_bold:
+            safe_print(
+                f"  Hidden {len(renamed_bold)} duplicate BOLD file(s) "
+                f"from further processing",
+                flush=True,
+            )
+
+    # Cross-session run consistency check
+    if not args.skip_bids:
+        consistency_findings = qc_checker.check_run_consistency(bids_dir, subjects_tasks)
+        if consistency_findings:
+            safe_print(f"  Run consistency: {len(consistency_findings)} warning(s)", flush=True)
+        report.record_phase_end("BIDS Conversion")
+
     # ------------------------------------------------------------------
-    # Layer 2: MRIQC  (once per subject, sequential to avoid race conditions)
+    # Phase 2: MRIQC  (parallel per session — each session gets its own
+    #                   Docker container so sessions run concurrently)
     # ------------------------------------------------------------------
     if run_mriqc and mriqc_dir is not None:
-        mriqc_subjects = list(subjects_tasks.keys())
-        safe_print(f"\n=== MRIQC ({len(mriqc_subjects)} subject(s)) ===", flush=True)
-        for sub_id in mriqc_subjects:
-            safe_print(f"[MRIQC] sub-{sub_id} - starting...", flush=True)
-            ok, err = mriqc_runner.run_mriqc_participant(bids_dir, mriqc_dir, sub_id)
-            if ok:
-                safe_print(f"[MRIQC] sub-{sub_id} - done", flush=True)
-            else:
-                safe_print(f"[MRIQC] sub-{sub_id} - warning: {err[:120]}", flush=True)
-                report.add_warning(f"MRIQC failed for sub-{sub_id}: {err[:120]}")
+        report.record_phase_start("MRIQC")
+        # Build (subject, session) pairs for per-session parallelism
+        mriqc_tasks = []
+        for sub_id, sub_tasks in subjects_tasks.items():
+            seen_sessions = set()
+            for t in sub_tasks:
+                ses_id = t['ses_id']
+                if ses_id not in seen_sessions:
+                    seen_sessions.add(ses_id)
+                    mriqc_tasks.append((sub_id, ses_id))
+
+        safe_print(
+            f"\n=== Phase 2: MRIQC ({len(mriqc_tasks)} session(s) across "
+            f"{len(subjects_tasks)} subject(s)) ===",
+            flush=True,
+        )
+
+        # Probe the Docker VM to learn its actual CPU / RAM limits.
+        # On macOS Docker Desktop runs in a VM whose resources are often
+        # much lower than the host — this is the #1 cause of slow MRIQC.
+        docker_cpus, docker_mem_gb = mriqc_runner.get_docker_vm_resources()
+        if docker_cpus is not None:
+            safe_print(
+                f"  Docker VM resources: {docker_cpus} CPUs, {docker_mem_gb} GB RAM",
+                flush=True,
+            )
+            host_cpus = multiprocessing.cpu_count()
+            if docker_cpus < host_cpus // 2:
+                safe_print(
+                    f"  WARNING: Docker only has {docker_cpus} of your {host_cpus} CPUs. "
+                    f"Increase in Docker Desktop > Settings > Resources for faster runs.",
+                    flush=True,
+                )
+            effective_cpus = docker_cpus
+            effective_mem_gb = docker_mem_gb
+        else:
+            safe_print("  Could not detect Docker VM resources — using host values.", flush=True)
+            effective_cpus = multiprocessing.cpu_count()
+            # Estimate host memory (fallback to 16 GB)
+            try:
+                if sys.platform == "darwin":
+                    import ctypes, ctypes.util
+                    libc = ctypes.CDLL(ctypes.util.find_library("c"))
+                    mem = ctypes.c_int64(0)
+                    size = ctypes.c_size_t(ctypes.sizeof(mem))
+                    libc.sysctlbyname(b"hw.memsize", ctypes.byref(mem), ctypes.byref(size), None, 0)
+                    effective_mem_gb = int(mem.value / (1024 ** 3))
+                else:
+                    effective_mem_gb = int(
+                        os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
+                    )
+            except Exception:
+                effective_mem_gb = 16
+
+        # Dynamic resource allocation: divide Docker VM resources among
+        # concurrent MRIQC containers so they don't starve each other.
+        mriqc_workers = min(args.parallel, len(mriqc_tasks))
+
+        # Reserve ~20% for OS/Docker overhead, split the rest
+        usable_cpus = max(int(effective_cpus * 0.8), 1)
+        usable_mem_gb = effective_mem_gb * 0.8
+
+        cpus_per = max(usable_cpus // max(mriqc_workers, 1), 1)
+        mem_per = max(int(usable_mem_gb // max(mriqc_workers, 1)), 4)
+
+        # Split per-container CPUs into nprocs (parallel scans) and
+        # omp_nthreads (threads per scan).  More omp threads speeds up
+        # the heavy per-scan computation (spatial normalization, IQMs).
+        if cpus_per >= 4:
+            nprocs_per = max(cpus_per // 2, 1)
+            omp_per = max(cpus_per // nprocs_per, 1)
+        else:
+            nprocs_per = cpus_per
+            omp_per = 1
+
+        safe_print(
+            f"  Per container: {nprocs_per} scan workflows x {omp_per} threads, "
+            f"{mem_per} GB RAM ({mriqc_workers} parallel containers)",
+            flush=True,
+        )
+
+        report.record_phase_start("  Participant-level")
+        with ThreadPoolExecutor(max_workers=mriqc_workers) as executor:
+            futures = {
+                executor.submit(
+                    mriqc_runner.run_mriqc_participant,
+                    bids_dir, mriqc_dir, sub_id,
+                    session_id=ses_id,
+                    nprocs=nprocs_per,
+                    omp_nthreads=omp_per,
+                    mem_gb=mem_per,
+                    no_work_dir=not args.mriqc_keep_work,
+                ): (sub_id, ses_id) for sub_id, ses_id in mriqc_tasks
+            }
+            for future in as_completed(futures):
+                sub_id, ses_id = futures[future]
+                label = f"sub-{sub_id}/ses-{ses_id}"
+                try:
+                    ok, err = future.result()
+                    if ok:
+                        safe_print(f"[MRIQC] {label} - done", flush=True)
+                    else:
+                        safe_print(f"[MRIQC] {label} - warning: {err[:120]}", flush=True)
+                        report.add_warning(f"MRIQC failed for {label}: {err[:120]}")
+                except Exception as e:
+                    safe_print(f"[MRIQC] {label} - error: {e}", flush=True)
+                    report.add_warning(f"MRIQC error for {label}: {e}")
+        report.record_phase_end("  Participant-level")
+
+    # ------------------------------------------------------------------
+    # Early MRIQC report — available before fMRIPrep starts
+    # ------------------------------------------------------------------
+    if run_mriqc and mriqc_dir is not None:
+        report.record_phase_start("  Group report")
+        safe_print("Running MRIQC group-level report...", flush=True)
+        grp_ok, grp_err = mriqc_runner.run_mriqc_group(
+            bids_dir, mriqc_dir, no_work_dir=not args.mriqc_keep_work,
+            experiment_dir=base_output,
+        )
+        if grp_ok:
+            safe_print(
+                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
+                flush=True,
+            )
+        else:
+            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
+
+        early_iqm = iqm_parser.parse_all_subjects(mriqc_dir)
+        early_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+        if early_iqm:
+            flagged = [r for r in early_iqm if r.worst_severity != "OK"]
+            safe_print(
+                f"  IQM: {len(early_iqm)} scan(s) analysed, {len(flagged)} with flag(s)",
+                flush=True,
+            )
+
+        tool_versions = _collect_tool_versions(
+            bids_dir=bids_dir,
+            ran_mriqc=True,
+            ran_fmriprep=False,
+        )
+        mriqc_report_path = generate_mriqc_report(
+            str(mriqc_dir), early_iqm, early_reports,
+            qc_findings=qc_checker.get_all(),
+            output_folder=str(output_folder),
+            researcher_comments=_read_researcher_comments(output_folder),
+            tool_versions=tool_versions,
+        )
+        safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
+        safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
+        report.record_phase_end("  Group report")
+        report.record_phase_end("MRIQC")
+
+        # Clean MRIQC work dir to free disk space before fMRIPrep
+        if not args.keep_temp:
+            cleanup_work_dirs(output_folder, report)
 
     # ------------------------------------------------------------------
     # Create .bidsignore before fMRIPrep (defense-in-depth for BIDS validator)
@@ -1136,7 +1498,7 @@ Examples:
             safe_print(f"Warning: Could not create .bidsignore: {e}", flush=True)
 
     # ------------------------------------------------------------------
-    # Phase 2: fMRIPrep  (once per subject, parallel across subjects)
+    # Phase 3: fMRIPrep  (once per subject, parallel across subjects)
     # ------------------------------------------------------------------
     if not args.skip_fmriprep:
         # When skip_bids is set, determine BOLD availability from existing BIDS data
@@ -1175,7 +1537,8 @@ Examples:
                 fmriprep_subjects.append((sub_id, bold_session_ids))
 
         if fmriprep_subjects:
-            safe_print(f"\n=== Phase 2: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
+            report.record_phase_start("fMRIPrep")
+            safe_print(f"\n=== Phase 3: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
             safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
 
             fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
@@ -1203,15 +1566,27 @@ Examples:
                             f"[FAIL] Unexpected error for sub-{sub_id}: {e}",
                             flush=True,
                         )
+            report.record_phase_end("fMRIPrep")
 
     safe_print(f"[PROGRESS:COMPLETE]", flush=True)
-    
+
+    # Restore hidden duplicate BOLD files so the final BIDS directory
+    # contains all original files (both kept and excluded runs).
+    if renamed_bold:
+        from bids.converter import restore_excluded_bold
+        restore_excluded_bold(renamed_bold)
+        safe_print(
+            f"  Restored {len(renamed_bold)} hidden BOLD file(s)",
+            flush=True,
+        )
+
     # Cleanup (skip if --keep-temp was specified)
     if args.keep_temp:
         safe_print("\nKeeping temporary files for debugging (--keep-temp)", flush=True)
         report.set_cleanup_info(0, 0)
     else:
         cleanup_temp_files(bids_dir, report)
+        cleanup_work_dirs(output_folder, report)
     
     # Analyze output
     safe_print("Analyzing output files...", flush=True)
@@ -1232,6 +1607,7 @@ Examples:
     # Layer 3: Parse fMRIPrep confounds for motion analysis
     motion_results = []
     if not args.skip_fmriprep:
+        report.record_phase_start("Motion Analysis")
         safe_print("Analyzing motion from fMRIPrep confounds...", flush=True)
         motion_results = motion_parser.parse_all_subjects(derivatives_dir)
         if motion_results:
@@ -1250,46 +1626,23 @@ Examples:
                 )
         else:
             safe_print("  No confounds files found (fMRIPrep may not have completed).", flush=True)
+        report.record_phase_end("Motion Analysis")
 
     # Layer 4: Connectivity QC (runs automatically when fMRIPrep output exists)
-    censoring_results = []
     connectivity_results = []
     if not args.skip_fmriprep:
         try:
-            from .qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            from .qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
         except ImportError:
-            from qc import CONNECTIVITY_QC_AVAILABLE, volume_censoring, connectivity_qc
+            from qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
 
         if CONNECTIVITY_QC_AVAILABLE:
-            safe_print("Running connectivity quality assessment...", flush=True)
-
-            # 5a: Volume censoring analysis
-            safe_print("  Analyzing volume censoring...", flush=True)
-            censoring_results = volume_censoring.analyze_all_subjects(derivatives_dir, bids_dir)
-            if censoring_results:
-                unsuitable = [c for c in censoring_results if not c.connectivity_ready]
-                marginal = [c for c in censoring_results if c.connectivity_ready and c.severity == "WARNING"]
-                good = [c for c in censoring_results if c.connectivity_ready and c.severity == "OK"]
-                safe_print(
-                    f"    Volume censoring: {len(good)} OK, {len(marginal)} marginal, {len(unsuitable)} unsuitable",
-                    flush=True,
-                )
-                for c in unsuitable:
-                    safe_print(
-                        f"    [CONN-FAIL] sub-{c.sub_id}/ses-{c.ses_id} [{c.run_label}]: "
-                        f"{c.pct_censored_02mm:.0f}% censored, {c.usable_minutes_02mm:.1f}min usable",
-                        flush=True,
-                    )
-
-            # 5b: QC-FC, DM-FC analysis (computationally expensive)
-            safe_print("  Computing connectivity metrics (QC-FC, DM-FC)...", flush=True)
+            report.record_phase_start("Connectivity QC")
+            safe_print("Running connectivity quality assessment (scrubbing strategy)...", flush=True)
             connectivity_results = connectivity_qc.analyze_all_subjects(
                 derivatives_dir,
                 bids_dir,
                 atlas='schaefer_116_tian',
-                compute_qc_fc=True,
-                compute_dm_fc=True,
-                compute_modularity=False,  # Too expensive for routine QC
                 mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", []))
             )
             if connectivity_results:
@@ -1297,33 +1650,26 @@ Examples:
                 warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
                 ok_conn = [r for r in connectivity_results if r.worst_severity == "OK"]
                 safe_print(
-                    f"    Connectivity metrics: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
+                    f"    Connectivity: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
                     flush=True,
                 )
                 for r in failed:
                     safe_print(
                         f"    [CONN-ERROR] sub-{r.sub_id}/ses-{r.ses_id} [{r.run_label}]: "
-                        f"{r.plain_message}",
+                        f"FD={r.mean_fd:.2f}mm, {r.pct_censored:.0f}% censored, {r.usable_minutes:.1f}min usable",
                         flush=True,
                     )
+            report.record_phase_end("Connectivity QC")
         else:
             safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
             safe_print("  Install with: pip install nilearn nibabel", flush=True)
 
-    # Layer 2: MRIQC group-level report + IQM parsing
+    # MRIQC IQM parsing (for final comprehensive report)
+    # Group report already generated after early MRIQC phase —
+    # just re-parse IQM files for the final comprehensive report.
     iqm_results = []
     mriqc_reports = {}
     if run_mriqc and mriqc_dir is not None:
-        safe_print("Running MRIQC group-level report...", flush=True)
-        grp_ok, grp_err = mriqc_runner.run_mriqc_group(bids_dir, mriqc_dir)
-        if grp_ok:
-            safe_print(
-                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
-                flush=True,
-            )
-        else:
-            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
-
         iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
         mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
         if iqm_results:
@@ -1344,29 +1690,52 @@ Examples:
     # Attach QC + motion to the report
     report.set_qc_results(qc_checker.get_all(), motion_results)
 
+    # Collect fMRIPrep coregistration figures
+    coreg_plots = _collect_coreg_plots(derivatives_dir)
+    if coreg_plots:
+        safe_print(f"  Found {len(coreg_plots)} coregistration overlay(s)", flush=True)
+
     # Layer 5: Generate HTML QC report
-    html_path = generate_html_report(
-        str(output_folder),
-        qc_checker.get_all(),
-        motion_results,
-        report.successful,
-        report.failed,
-        iqm_results=iqm_results,
-        mriqc_reports=mriqc_reports,
-        censoring_results=censoring_results,
-        connectivity_results=connectivity_results,
-    )
-    safe_print(f"QC report: {html_path}", flush=True)
+    # Only generate the full pipeline report when fMRIPrep actually ran;
+    # when fMRIPrep is skipped the early MRIQC report is sufficient.
+    report.record_phase_start("Report Generation")
+
+    # Re-read researcher comments right before report generation so the
+    # user's latest edits (made while the pipeline was running) are included.
+    researcher_comments = _read_researcher_comments(output_folder)
+    report.set_researcher_comments(researcher_comments)
+
+    if not args.skip_fmriprep:
+        tool_versions = _collect_tool_versions(
+            bids_dir=bids_dir,
+            ran_mriqc=run_mriqc,
+            ran_fmriprep=True,
+        )
+        html_path = generate_html_report(
+            str(output_folder),
+            qc_checker.get_all(),
+            motion_results,
+            report.successful,
+            report.failed,
+            iqm_results=iqm_results,
+            mriqc_reports=mriqc_reports,
+            connectivity_results=connectivity_results,
+            researcher_comments=researcher_comments,
+            coreg_plots=coreg_plots,
+            tool_versions=tool_versions,
+        )
+        safe_print(f"QC report: {html_path}", flush=True)
 
     # Save report
     report_text = report.generate_report()
-    report_path = output_folder / "conversion_report.txt"
+    report_path = output_folder / "execution_report.txt"
     try:
         with open(report_path, 'w', encoding='utf-8') as f:
             f.write(report_text)
-        safe_print(f"\nConversion report saved to: {report_path}", flush=True)
+        safe_print(f"\nExecution report saved to: {report_path}", flush=True)
     except Exception as e:
         safe_print(f"Warning: Could not save report: {e}", flush=True)
+    report.record_phase_end("Report Generation")
     
     # Structured summary — separate file alongside the raw log
     _write_structured_summary(
@@ -1375,10 +1744,12 @@ Examples:
         subjects_tasks=subjects_tasks,
         sessions_missing_bold=sessions_missing_bold,
         motion_results=motion_results,
-        censoring_results=censoring_results,
         connectivity_results=connectivity_results,
         errors=errors,
         pipeline_start_time=report.start_time,
+        iqm_results=iqm_results,
+        ran_fmriprep=not args.skip_fmriprep,
+        ran_mriqc=run_mriqc,
     )
 
     # Summary

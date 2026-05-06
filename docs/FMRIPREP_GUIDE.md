@@ -137,7 +137,7 @@ Raw fMRI data is **unusable** for analysis due to several problems:
 │  ┌──────────────────────────┐    ┌──────────────────────────┐              │
 │  │  4. Spatial              │    │  8. Susceptibility       │              │
 │  │     Normalization        │◄───┤     Distortion Correction│              │
-│  │     (to MNI template)    │    │     (if fieldmaps exist) │              │
+│  │     (to MNI template)    │    │  (auto/SyN when no fmaps)│              │
 │  └────────────┬─────────────┘    └────────────┬─────────────┘              │
 │               │                               │                             │
 │               └───────────────┬───────────────┘                             │
@@ -332,8 +332,8 @@ Slice 1  ────── acquired at t=0.00s ──────┘
 - Critical for accurate localization
 
 **Methods:**
-- Phase-difference fieldmap
-- "Pepolar" method (two EPIs with opposite phase encoding)
+- **Fieldmap-based (automatic):** When field maps are present (AP/PA EPI pairs or GRE phasediff), the pipeline automatically links them to BOLD runs during BIDS conversion by populating the `IntendedFor` field. fMRIPrep then uses these field maps for distortion correction — no manual editing required.
+- **SyN SDC (optional fallback):** When no field maps are available, the fieldmap-less SyN method can estimate distortion using the T1w anatomical image. This must be enabled explicitly in the GUI or via CLI flags.
 
 ```
 Before SDC:              After SDC:
@@ -439,7 +439,7 @@ sub-001_task-rest_space-MNI152NLin2009cAsym_desc-preproc_bold.nii.gz
 **This is what you use for analysis!** It's:
 - ✓ Motion corrected
 - ✓ Slice-timing corrected
-- ✓ Distortion corrected (if fieldmaps)
+- ✓ Distortion corrected (automatic when field maps present; SyN SDC if enabled)
 - ✓ Aligned to MNI template
 - ✗ NOT smoothed (you do this)
 - ✗ NOT filtered (you do this)

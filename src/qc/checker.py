@@ -105,6 +105,191 @@ class BIDSQualityChecker:
     def has_critical_issues(self) -> bool:
         return bool(self.get_errors())
 
+    def add_bold_notes(
+        self, sub_id: str, ses_id: str, bold_notes: list
+    ) -> List[QCFinding]:
+        """
+        Create QC findings from BOLD conversion notes (dropped fragments,
+        duplicate runs kept).
+
+        ``bold_notes`` is a list of dicts produced by ``_organize_to_bids()``:
+            {"action": "dropped"|"kept", "task": str,
+             "file": str, "volumes": int, "series_desc": str}
+        """
+        new_findings: List[QCFinding] = []
+        if not bold_notes:
+            return new_findings
+
+        dropped = [n for n in bold_notes if n["action"] == "dropped"]
+        excluded = [n for n in bold_notes if n["action"] == "kept_excluded"]
+        kept = [n for n in bold_notes if n["action"] == "kept"]
+
+        # --- Report each dropped fragment ---
+        for d in dropped:
+            new_findings.append(
+                QCFinding(
+                    severity=Severity.WARNING,
+                    sub_id=sub_id,
+                    ses_id=ses_id,
+                    category="bold_fragment_dropped",
+                    message=(
+                        f"Dropped BOLD fragment: task-{d['task']} "
+                        f"({d['volumes']} volumes, series: {d['series_desc']})"
+                    ),
+                    plain_message=(
+                        f"A BOLD fragment with only {d['volumes']} volume(s) "
+                        f"(task-{d['task']}, series '{d['series_desc']}') "
+                        f"was detected and excluded from preprocessing. "
+                        f"This is typically a dcm2niix split artifact."
+                    ),
+                    action="",
+                )
+            )
+
+        # --- Report shorter duplicate runs excluded from fMRIPrep ---
+        for exc in excluded:
+            # Find the kept run for the same task
+            same_task_kept = [n for n in kept if n["task"] == exc["task"]]
+            kept_vols = same_task_kept[0]["volumes"] if same_task_kept else "?"
+            new_findings.append(
+                QCFinding(
+                    severity=Severity.WARNING,
+                    sub_id=sub_id,
+                    ses_id=ses_id,
+                    category="duplicate_bold_run",
+                    message=(
+                        f"task-{exc['task']}: shorter run ({exc['volumes']} vols) "
+                        f"excluded from fMRIPrep, longer run ({kept_vols} vols) kept"
+                    ),
+                    plain_message=(
+                        f"Multiple BOLD runs found for task-{exc['task']}. "
+                        f"The shorter run ({exc['volumes']} vols) was excluded "
+                        f"from fMRIPrep preprocessing; the longer run "
+                        f"({kept_vols} vols) was kept. Both files remain in "
+                        f"the BIDS directory."
+                    ),
+                    action="",
+                )
+            )
+
+        if new_findings:
+            with self._lock:
+                self.findings.extend(new_findings)
+
+        return new_findings
+
+    def check_run_consistency(
+        self, bids_dir, subjects_tasks: Dict
+    ) -> List[QCFinding]:
+        """
+        Compare scan profiles across sessions within the same subject.
+
+        For each subject with 2+ sessions, the most common scan count per
+        scan type (mode) is treated as the expected value.  Any session
+        whose count deviates from the mode produces a WARNING-level finding.
+
+        Returns the list of new findings (also stored internally).
+        """
+        from collections import Counter as _Counter
+
+        bids_path = Path(bids_dir)
+        new_findings: List[QCFinding] = []
+
+        for sub_id, sub_tasks in subjects_tasks.items():
+            # Collect unique session IDs for this subject
+            ses_ids = sorted({t["ses_id"] for t in sub_tasks})
+            if len(ses_ids) < 2:
+                continue
+
+            # Build a scan profile for each session
+            profiles: Dict[str, Dict[str, int]] = {}
+            for ses_id in ses_ids:
+                session_path = bids_path / f"sub-{sub_id}" / f"ses-{ses_id}"
+                if not session_path.exists():
+                    continue
+                profiles[ses_id] = self._build_scan_profile(session_path)
+
+            if len(profiles) < 2:
+                continue
+
+            # Determine the expected count per scan type using the mode
+            # (most common value) across all sessions.
+            all_keys: set = set()
+            for p in profiles.values():
+                all_keys.update(p.keys())
+
+            expected: Dict[str, int] = {}
+            for key in all_keys:
+                counts = [p.get(key, 0) for p in profiles.values()]
+                expected[key] = _Counter(counts).most_common(1)[0][0]
+
+            # Flag any session that deviates from the expected profile
+            for ses_id, profile in sorted(profiles.items()):
+                for key in sorted(all_keys):
+                    actual = profile.get(key, 0)
+                    exp = expected.get(key, 0)
+                    if actual != exp:
+                        new_findings.append(
+                            QCFinding(
+                                severity=Severity.WARNING,
+                                sub_id=sub_id,
+                                ses_id=ses_id,
+                                category="run_consistency",
+                                message=(
+                                    f"ses-{ses_id} has {actual} {key} file(s) "
+                                    f"but {exp} expected"
+                                ),
+                                plain_message=(
+                                    f"Session ses-{ses_id} has {actual} {key} "
+                                    f"file(s), but most sessions for this "
+                                    f"subject have {exp}. "
+                                    f"The scan protocol may differ."
+                                ),
+                                action="",
+                            )
+                        )
+
+        if new_findings:
+            with self._lock:
+                self.findings.extend(new_findings)
+
+        return new_findings
+
+    @staticmethod
+    def _build_scan_profile(session_path: Path) -> Dict[str, int]:
+        """
+        Build a dict of scan-type → count for a BIDS session directory.
+
+        Keys produced:
+          - ``task-<name>_bold`` for each task name found under func/
+          - ``T1w`` for structural scans under anat/
+          - ``fmap`` for fieldmap files under fmap/
+        """
+        import re
+
+        profile: Dict[str, int] = {}
+
+        func_dir = session_path / "func"
+        if func_dir.exists():
+            for f in func_dir.glob("*_bold.nii.gz"):
+                m = re.search(r"task-([A-Za-z0-9]+)", f.name)
+                key = f"task-{m.group(1)}_bold" if m else "bold"
+                profile[key] = profile.get(key, 0) + 1
+
+        anat_dir = session_path / "anat"
+        if anat_dir.exists():
+            count = len(list(anat_dir.glob("*T1w.nii.gz")))
+            if count:
+                profile["T1w"] = count
+
+        fmap_dir = session_path / "fmap"
+        if fmap_dir.exists():
+            count = len(list(fmap_dir.glob("*.nii.gz")))
+            if count:
+                profile["fmap"] = count
+
+        return profile
+
     # ------------------------------------------------------------------
     # Individual checks
     # ------------------------------------------------------------------

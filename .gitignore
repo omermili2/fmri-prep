@@ -8,19 +8,17 @@ __pycache__/
 *.swp
 *.swo
 dummy_data/
+local_docs/
 tmp_dcm2bids/
 *.log
 debug/
 
 # FreeSurfer license (private, any location)
-.freesurfer_license.txt
-freesurfer_license.txt
 tools/.freesurfer_license.txt
-tools/freesurfer_license.txt
+freesurfer_license.txt
 license.txt
 
 # Output artifacts that may land in root
 *.html
 Conversion Report.txt
-
-thesis/
+/.claude/settings.local.json

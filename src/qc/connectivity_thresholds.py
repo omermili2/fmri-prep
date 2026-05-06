@@ -15,7 +15,6 @@ CONNECTIVITY_MEAN_FD_WARN = 0.25  # mm - Stricter than general QC (0.5mm)
 CONNECTIVITY_MEAN_FD_FAIL = 0.50  # mm - Absolute failure threshold
 
 # Volume censoring thresholds
-CENSORING_FD_THRESHOLD = 0.2  # mm - Threshold for marking "bad" volumes
 MAX_CENSORED_PCT_WARN = 50.0  # % - Warning if >50% volumes censored
 MAX_CENSORED_PCT_FAIL = 80.0  # % - Fail if >80% volumes censored (paper threshold)
 
@@ -23,17 +22,35 @@ MAX_CENSORED_PCT_FAIL = 80.0  # % - Fail if >80% volumes censored (paper thresho
 MIN_USABLE_MINUTES_WARN = 2.0  # minutes - Warning threshold
 MIN_USABLE_MINUTES_FAIL = 1.0  # minutes - Paper threshold (absolute minimum)
 
-# QC-FC thresholds (motion-connectivity correlation)
-QC_FC_WARN = 0.10  # Partial correlation threshold
-QC_FC_FAIL = 0.20  # Strong motion-connectivity contamination
+# Loss of temporal degrees of freedom
+# total_loss = num_nuisance_regressors + censored_volumes
+# If total_loss exceeds this fraction of total_volumes, warn the researcher.
+LOSS_DOF_WARN = 0.60  # 60% — more than half the DoF consumed by denoising + scrubbing
 
-# DM-FC thresholds (distance-dependent motion effects)
-DM_FC_WARN = 0.05  # Distance-motion correlation threshold
-DM_FC_FAIL = 0.10  # Strong distance-dependent artifacts
 
-# Network modularity thresholds
-MIN_MODULARITY_WARN = 0.30  # Q statistic
-MIN_MODULARITY_FAIL = 0.20  # Poor network structure preservation
+def apply_overrides(overrides: dict) -> None:
+    """Update module-level connectivity constants from user-supplied overrides.
 
-# TR (repetition time) typical value for calculating scan duration
-DEFAULT_TR = 2.0  # seconds - used if TR not found in metadata
+    Expected key in *overrides*: ``"connectivity"`` mapping constant names
+    (lower-case) to numeric values.
+    """
+    global CONNECTIVITY_MEAN_FD_WARN, CONNECTIVITY_MEAN_FD_FAIL
+    global MAX_CENSORED_PCT_WARN, MAX_CENSORED_PCT_FAIL
+    global MIN_USABLE_MINUTES_WARN, MIN_USABLE_MINUTES_FAIL
+    global LOSS_DOF_WARN
+
+    conn = overrides.get("connectivity", {})
+    if "connectivity_mean_fd_warn" in conn:
+        CONNECTIVITY_MEAN_FD_WARN = float(conn["connectivity_mean_fd_warn"])
+    if "connectivity_mean_fd_fail" in conn:
+        CONNECTIVITY_MEAN_FD_FAIL = float(conn["connectivity_mean_fd_fail"])
+    if "max_censored_pct_warn" in conn:
+        MAX_CENSORED_PCT_WARN = float(conn["max_censored_pct_warn"])
+    if "max_censored_pct_fail" in conn:
+        MAX_CENSORED_PCT_FAIL = float(conn["max_censored_pct_fail"])
+    if "min_usable_minutes_warn" in conn:
+        MIN_USABLE_MINUTES_WARN = float(conn["min_usable_minutes_warn"])
+    if "min_usable_minutes_fail" in conn:
+        MIN_USABLE_MINUTES_FAIL = float(conn["min_usable_minutes_fail"])
+    if "loss_dof_warn" in conn:
+        LOSS_DOF_WARN = float(conn["loss_dof_warn"])

@@ -14,11 +14,13 @@ import shutil
 import io
 from pathlib import Path
 
-# Default fMRIPrep Docker image
-FMRIPREP_IMAGE = "nipreps/fmriprep:latest"
+# Default fMRIPrep Docker image (pinned — do not use :latest)
+# Keeping this pinned ensures the HTML report always shows a real version number.
+FMRIPREP_IMAGE = "nipreps/fmriprep:25.2.5"
 
 _PROJECT_PARENT = Path(__file__).parent.parent.parent.parent  # dir containing the project folder
 _FMRIPREP_TAR_CANDIDATES = [
+    "fmriprep_25.2.5", "fmriprep_25.2.5.tar", "fmriprep-25.2.5", "fmriprep-25.2.5.tar",
     "fmriprep_latest", "fmriprep_latest.tar", "fmriprep-latest", "fmriprep-latest.tar",
     "fmriprep.tar", "fmriprep",
 ]

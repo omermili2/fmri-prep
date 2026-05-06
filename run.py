@@ -17,11 +17,47 @@ Usage:
 
 import sys
 import os
+import subprocess
 from pathlib import Path
 
 # Add src to path
 src_path = Path(__file__).parent / "src"
 sys.path.insert(0, str(src_path))
+
+
+def ensure_dependencies():
+    """Check that required packages are installed; install them if missing."""
+    requirements_file = Path(__file__).parent / "requirements.txt"
+    if not requirements_file.exists():
+        return
+
+    missing = []
+    for line in requirements_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Extract the bare package name (strip version specifiers)
+        pkg = line.split(">=")[0].split("<=")[0].split("==")[0].split("!=")[0].split("<")[0].split(">")[0].strip()
+        # importlib.metadata handles name normalisation (e.g. scikit-learn -> scikit_learn)
+        try:
+            from importlib.metadata import distribution  # Python 3.8+
+            distribution(pkg)
+        except Exception:
+            missing.append(pkg)
+
+    if missing:
+        print(f"Installing missing dependencies: {', '.join(missing)} ...")
+        try:
+            subprocess.check_call(
+                [sys.executable, "-m", "pip", "install", "-r", str(requirements_file)],
+                stdout=sys.stdout,
+                stderr=sys.stderr,
+            )
+            print("Dependencies installed successfully.")
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Failed to install dependencies (exit code {e.returncode}).")
+            print("Please run manually:  pip install -r requirements.txt")
+            sys.exit(1)
 
 
 def has_display():
@@ -65,6 +101,8 @@ def print_x11_help():
 
 
 if __name__ == "__main__":
+    ensure_dependencies()
+
     # Check if --cli flag is present
     if '--cli' in sys.argv:
         # Remove --cli flag and pass rest to orchestrator

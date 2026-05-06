@@ -1,12 +1,16 @@
 """
-Connectivity Quality Control - Layer 5b
+Connectivity Quality Control — Nilearn-based
 
-Implements advanced QC metrics for functional connectivity analysis:
-1. QC-FC: Partial correlation between motion and connectivity
-2. DM-FC: Distance-dependent motion effects
-3. Network Modularity: Verification of network structure preservation
+Uses Nilearn's ``load_confounds_strategy`` with the ``"scrubbing"`` preset
+to handle confound selection and volume censoring in one standardised call.
+Heatmaps are computed on **scrubbed** (denoised + censored) data.
 
-Based on PMC10977879 and Nilearn's connectivity tools.
+Per-run metrics:
+  - Censored volumes / % censored / usable scan time
+  - Mean framewise displacement
+  - Number of nuisance regressors selected by the strategy
+  - Loss of temporal degrees of freedom (regressors + censored volumes)
+  - Full (116×116) and network-level (~8×8) connectivity heatmaps
 """
 
 from dataclasses import dataclass, field
@@ -20,10 +24,9 @@ import pandas as pd
 
 try:
     import nibabel as nib
-    from nilearn import datasets, maskers, image
+    from nilearn import datasets, maskers
     from nilearn.connectome import ConnectivityMeasure
-    from scipy.spatial.distance import pdist, squareform
-    from scipy.stats import pearsonr, spearmanr
+    from nilearn.interfaces.fmriprep import load_confounds_strategy
     NILEARN_AVAILABLE = True
 except ImportError:
     NILEARN_AVAILABLE = False
@@ -31,6 +34,17 @@ except ImportError:
         "Nilearn not available. Connectivity QC will be skipped. "
         "Install with: pip install nilearn nibabel"
     )
+
+try:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
+import base64
+from io import BytesIO
 
 from . import connectivity_thresholds as thresh
 
@@ -42,63 +56,64 @@ class ConnectivityQCResult:
     ses_id: str
     run_label: str
 
-    # Basic motion metrics
-    mean_fd: float
-    n_volumes: int
+    # Volume / censoring metrics
+    total_volumes: int = 0
+    censored_volumes: int = 0
+    pct_censored: float = 0.0
+    usable_minutes: float = 0.0
+    tr_sec: float = 0.0
 
-    # QC-FC: Motion-connectivity correlation
-    qc_fc_value: Optional[float] = None
-    qc_fc_severity: str = "UNKNOWN"
+    # Motion
+    mean_fd: float = 0.0
 
-    # DM-FC: Distance-dependent motion
-    dm_fc_value: Optional[float] = None
-    dm_fc_severity: str = "UNKNOWN"
-
-    # Network modularity
-    modularity_q: Optional[float] = None
-    modularity_severity: str = "UNKNOWN"
+    # Denoising complexity
+    n_regressors: int = 0
+    loss_of_dof: int = 0
+    loss_of_dof_pct: float = 0.0
 
     # Overall assessment
     connectivity_ready: bool = False
     worst_severity: str = "UNKNOWN"
-    plain_message: str = ""
-    action: str = ""
+    rescan_warning: bool = False
 
     # Atlas used
     atlas_name: str = "schaefer_116_tian"
     n_rois: int = 0
 
+    # Heatmap visualisations (base64-encoded PNG)
+    heatmap_base64: Optional[str] = None
+    network_summary_base64: Optional[str] = None
+
     # Error tracking
     error_message: Optional[str] = None
 
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
 
 def analyze_all_subjects(
     derivatives_dir,
     bids_dir=None,
     atlas='schaefer_116_tian',
-    compute_qc_fc=True,
-    compute_dm_fc=True,
-    compute_modularity=False,  # Expensive, off by default
-    mni_space='MNI152NLin2009cAsym'
+    mni_space='MNI152NLin2009cAsym',
 ) -> List[ConnectivityQCResult]:
     """
-    Analyze connectivity quality for all subjects.
+    Analyse connectivity quality for all preprocessed BOLD runs.
 
     Args:
-        derivatives_dir: fMRIPrep derivatives directory
-        bids_dir: BIDS directory (optional, for participant demographics)
-        atlas: Atlas name ('schaefer_116_tian', 'schaefer_200', 'aal', etc.)
-        compute_qc_fc: Calculate QC-FC metric
-        compute_dm_fc: Calculate DM-FC metric
-        compute_modularity: Calculate network modularity (slow)
+        derivatives_dir: fMRIPrep derivatives directory.
+        bids_dir: BIDS directory (unused here — kept for API compat).
+        atlas: Atlas name ('schaefer_116_tian', 'schaefer_200', etc.).
+        mni_space: MNI template space to match BOLD files.
 
     Returns:
-        List of ConnectivityQCResult objects
+        List of ConnectivityQCResult objects.
     """
     if not NILEARN_AVAILABLE:
         return []
 
-    # Load atlas once — avoids repeated failed download attempts per run
+    # Load atlas once
     try:
         atlas_img, atlas_labels = _load_atlas(atlas)
     except Exception as e:
@@ -113,9 +128,8 @@ def analyze_all_subjects(
         deriv_path,
     ]
 
-    # Collect files from all search roots, deduplicating by resolved path
     seen_paths: set = set()
-    bold_files = []
+    bold_files: List[Path] = []
     for root in search_roots:
         if not root.exists():
             continue
@@ -134,9 +148,7 @@ def analyze_all_subjects(
             atlas_img=atlas_img,
             atlas_labels=atlas_labels,
             atlas_name=atlas,
-            compute_qc_fc=compute_qc_fc,
-            compute_dm_fc=compute_dm_fc,
-            compute_modularity=compute_modularity
+            output_dir=deriv_path,
         )
         if result is not None:
             results.append(result)
@@ -144,162 +156,208 @@ def analyze_all_subjects(
     return results
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _find_confounds_tsv(bold_path: Path) -> Optional[Path]:
+    """Derive the confounds TSV path from a preprocessed BOLD NIfTI path.
+
+    fMRIPrep places them in the same directory with the pattern:
+        sub-*_ses-*_task-*_run-*_desc-confounds_timeseries.tsv
+    """
+    # Strip space/desc/suffix entities to get the BIDS prefix
+    stem = bold_path.name.split("_space-")[0]
+    tsv_name = f"{stem}_desc-confounds_timeseries.tsv"
+    tsv_path = bold_path.parent / tsv_name
+    if tsv_path.exists():
+        return tsv_path
+    # Fallback: search for any confounds TSV with the same prefix
+    prefix = stem.rsplit("_", 1)[0]  # drop last entity for safety
+    for candidate in bold_path.parent.glob(f"{prefix}*_desc-confounds_timeseries.tsv"):
+        return candidate
+    return None
+
+
+# ---------------------------------------------------------------------------
+# Per-run analysis
+# ---------------------------------------------------------------------------
+
 def _analyze_single_run(
     bold_path: Path,
     atlas_img,
     atlas_labels,
     atlas_name: str,
-    compute_qc_fc: bool,
-    compute_dm_fc: bool,
-    compute_modularity: bool
+    output_dir: Optional[Path] = None,
 ) -> Optional[ConnectivityQCResult]:
-    """Analyze connectivity quality for a single BOLD run."""
-
+    """Analyse connectivity quality for a single BOLD run."""
     try:
-        # Extract subject/session/run info
+        # --- Extract subject / session / run identifiers ---
         parts = bold_path.parts
         sub_id = next(
-            (p.replace("sub-", "") for p in parts if p.startswith("sub-")), "unknown"
+            (p.replace("sub-", "") for p in parts if p.startswith("sub-")),
+            "unknown",
         )
         ses_id = next(
-            (p.replace("ses-", "") for p in parts if p.startswith("ses-")), "unknown"
+            (p.replace("ses-", "") for p in parts if p.startswith("ses-")),
+            "unknown",
         )
-
         stem = re.sub(r"_space-.*$", "", bold_path.name.replace(".nii.gz", ""))
         run_label = "_".join(
             p for p in stem.split("_")
             if not p.startswith("sub-") and not p.startswith("ses-")
         )
 
-        # Find corresponding confounds file
-        confounds_name = re.sub(
-            r"_space-[^_]+(_res-[^_]+)?_desc-preproc_bold\.nii\.gz$",
-            "_desc-confounds_timeseries.tsv",
-            bold_path.name
+        # --- Load confounds via Nilearn's scrubbing strategy ---
+        confounds, sample_mask = load_confounds_strategy(
+            str(bold_path), denoise_strategy="scrubbing"
         )
-        confounds_path = bold_path.parent / confounds_name
 
-        if not confounds_path.exists():
-            return None
+        # --- NIfTI header: total volumes and TR ---
+        img = nib.load(str(bold_path))
+        total_volumes = int(img.shape[3]) if len(img.shape) >= 4 else 0
+        tr_sec = float(img.header.get_zooms()[3]) if len(img.header.get_zooms()) >= 4 else 2.0
 
-        # Load confounds
-        confounds_df = pd.read_csv(confounds_path, sep="\t", low_memory=False)
+        # --- Censoring metrics ---
+        usable_volumes = len(sample_mask) if sample_mask is not None else total_volumes
+        censored_volumes = total_volumes - usable_volumes
+        pct_censored = (censored_volumes / total_volumes * 100.0) if total_volumes > 0 else 0.0
+        usable_minutes = (usable_volumes * tr_sec) / 60.0
 
-        if "framewise_displacement" not in confounds_df.columns:
-            return None
+        # --- Mean FD from the raw confounds TSV ---
+        # load_confounds_strategy returns only selected regressors, which
+        # typically does not include framewise_displacement.  Read FD
+        # directly from the sibling confounds TSV instead.
+        mean_fd = 0.0
+        confounds_tsv = _find_confounds_tsv(bold_path)
+        if confounds_tsv is not None:
+            raw_df = pd.read_csv(confounds_tsv, sep="\t", low_memory=False)
+            if "framewise_displacement" in raw_df.columns:
+                fd = pd.to_numeric(
+                    raw_df["framewise_displacement"], errors="coerce"
+                ).dropna()
+                if not fd.empty:
+                    mean_fd = float(fd.mean())
 
-        fd_series = pd.to_numeric(
-            confounds_df["framewise_displacement"], errors="coerce"
-        ).fillna(0)  # Fill first NaN with 0
-
-        mean_fd = float(fd_series.mean())
-        n_volumes = len(fd_series)
+        # --- Denoising complexity ---
+        n_regressors = confounds.shape[1]
+        loss_of_dof = n_regressors + censored_volumes
+        loss_of_dof_pct = (loss_of_dof / total_volumes * 100.0) if total_volumes > 0 else 0.0
 
         n_rois = len(atlas_labels) if atlas_labels else 0
 
-        # Extract time series using Nilearn masker
+        # --- Quality assessment ---
+        severity, ready, rescan = _assess_quality(
+            mean_fd=mean_fd,
+            pct_censored=pct_censored,
+            usable_minutes=usable_minutes,
+            loss_of_dof_pct=loss_of_dof_pct,
+        )
+
+        result = ConnectivityQCResult(
+            sub_id=sub_id,
+            ses_id=ses_id,
+            run_label=run_label,
+            total_volumes=total_volumes,
+            censored_volumes=censored_volumes,
+            pct_censored=pct_censored,
+            usable_minutes=usable_minutes,
+            tr_sec=tr_sec,
+            mean_fd=mean_fd,
+            n_regressors=n_regressors,
+            loss_of_dof=loss_of_dof,
+            loss_of_dof_pct=loss_of_dof_pct,
+            connectivity_ready=ready,
+            worst_severity=severity,
+            rescan_warning=rescan,
+            atlas_name=atlas_name,
+            n_rois=n_rois,
+        )
+
+        # --- Extract denoised time-series (scrubbed) ---
         masker = maskers.NiftiLabelsMasker(
             labels_img=atlas_img,
             standardize="zscore_sample",
             detrend=True,
             low_pass=0.1,
             high_pass=0.01,
-            t_r=2.0,  # Default TR, should ideally read from JSON
+            t_r=tr_sec,
             memory="nilearn_cache",
             memory_level=1,
-            verbose=0
+            verbose=0,
         )
 
-        # Select minimal confounds (basic strategy)
-        confound_cols = _select_confounds(confounds_df)
-        confounds_minimal = confounds_df[confound_cols].fillna(0)
+        time_series = masker.fit_transform(
+            str(bold_path),
+            confounds=confounds,
+            sample_mask=sample_mask,
+        )
 
-        # Extract time series
-        time_series = masker.fit_transform(str(bold_path), confounds=confounds_minimal)
-
-        # Compute connectivity matrix
-        conn_measure = ConnectivityMeasure(kind='correlation')
+        # --- Connectivity matrix (Pearson) ---
+        conn_measure = ConnectivityMeasure(kind="correlation")
         connectivity_matrix = conn_measure.fit_transform([time_series])[0]
 
-        # Initialize result
-        result = ConnectivityQCResult(
-            sub_id=sub_id,
-            ses_id=ses_id,
-            run_label=run_label,
-            mean_fd=mean_fd,
-            n_volumes=n_volumes,
-            atlas_name=atlas_name,
-            n_rois=n_rois
-        )
+        # --- Save outputs ---
+        if output_dir is not None:
+            _save_connectivity_outputs(
+                output_dir, sub_id, ses_id, run_label,
+                connectivity_matrix, time_series, atlas_labels,
+            )
 
-        # Compute QC-FC (motion-connectivity correlation)
-        if compute_qc_fc:
-            qc_fc_value = _compute_qc_fc(connectivity_matrix, fd_series)
-            result.qc_fc_value = qc_fc_value
-
-            if qc_fc_value is not None:
-                if abs(qc_fc_value) >= thresh.QC_FC_FAIL:
-                    result.qc_fc_severity = "ERROR"
-                elif abs(qc_fc_value) >= thresh.QC_FC_WARN:
-                    result.qc_fc_severity = "WARNING"
-                else:
-                    result.qc_fc_severity = "OK"
-
-        # Compute DM-FC (distance-dependent motion)
-        if compute_dm_fc:
-            dm_fc_value = _compute_dm_fc(connectivity_matrix, masker, fd_series)
-            result.dm_fc_value = dm_fc_value
-
-            if dm_fc_value is not None:
-                if abs(dm_fc_value) >= thresh.DM_FC_FAIL:
-                    result.dm_fc_severity = "ERROR"
-                elif abs(dm_fc_value) >= thresh.DM_FC_WARN:
-                    result.dm_fc_severity = "WARNING"
-                else:
-                    result.dm_fc_severity = "OK"
-
-        # Compute modularity (expensive, optional)
-        if compute_modularity:
-            try:
-                import networkx as nx
-                from networkx.algorithms import community
-
-                # Convert connectivity to graph
-                threshold = 0.3  # Only keep strong connections
-                adj_matrix = (connectivity_matrix > threshold).astype(int)
-                G = nx.from_numpy_array(adj_matrix)
-
-                # Louvain community detection
-                communities = community.louvain_communities(G, seed=42)
-                result.modularity_q = community.modularity(G, communities)
-
-                if result.modularity_q < thresh.MIN_MODULARITY_FAIL:
-                    result.modularity_severity = "ERROR"
-                elif result.modularity_q < thresh.MIN_MODULARITY_WARN:
-                    result.modularity_severity = "WARNING"
-                else:
-                    result.modularity_severity = "OK"
-
-            except Exception:
-                result.modularity_q = None
-                result.modularity_severity = "UNKNOWN"
-
-        # Overall assessment
-        _assess_overall_quality(result)
+        # --- Heatmaps ---
+        if MATPLOTLIB_AVAILABLE:
+            result.heatmap_base64 = _generate_heatmap(
+                connectivity_matrix, atlas_labels,
+            )
+            result.network_summary_base64 = _generate_network_summary(
+                connectivity_matrix, atlas_labels,
+            )
 
         return result
 
     except Exception as e:
-        # Return partial result with error message
         return ConnectivityQCResult(
             sub_id="unknown",
             ses_id="unknown",
             run_label=str(bold_path.name),
-            mean_fd=0.0,
-            n_volumes=0,
-            error_message=str(e)
+            error_message=str(e),
         )
 
+
+# ---------------------------------------------------------------------------
+# Quality assessment
+# ---------------------------------------------------------------------------
+
+def _assess_quality(
+    mean_fd: float,
+    pct_censored: float,
+    usable_minutes: float,
+    loss_of_dof_pct: float,
+) -> tuple:
+    """
+    Apply thresholds and return (severity, ready, rescan).
+    """
+    fails_fd = mean_fd > thresh.CONNECTIVITY_MEAN_FD_FAIL
+    fails_censor = pct_censored > thresh.MAX_CENSORED_PCT_FAIL
+    fails_duration = usable_minutes < thresh.MIN_USABLE_MINUTES_FAIL
+
+    warns_fd = mean_fd > thresh.CONNECTIVITY_MEAN_FD_WARN
+    warns_censor = pct_censored > thresh.MAX_CENSORED_PCT_WARN
+    warns_duration = usable_minutes < thresh.MIN_USABLE_MINUTES_WARN
+    warns_dof = loss_of_dof_pct > (thresh.LOSS_DOF_WARN * 100.0)
+
+    if fails_fd or fails_censor or fails_duration:
+        return ("ERROR", False, True)
+
+    if warns_fd or warns_censor or warns_duration or warns_dof:
+        return ("WARNING", True, False)
+
+    return ("OK", True, False)
+
+
+# ---------------------------------------------------------------------------
+# Atlas loading (unchanged)
+# ---------------------------------------------------------------------------
 
 _ATLAS_DATA_DIR = Path(__file__).parent / "atlas_data"
 
@@ -367,7 +425,6 @@ def _load_atlas(atlas_name: str):
     atlas_name_lower = atlas_name.lower()
 
     if "schaefer" in atlas_name_lower:
-        # Default: 100 Schaefer cortical + 16 Tian subcortical = 116
         n_rois = 116
         if "200" in atlas_name_lower:
             n_rois = 200
@@ -387,183 +444,184 @@ def _load_atlas(atlas_name: str):
         return _fetch_atlas_offline(116)
 
 
-def _select_confounds(confounds_df: pd.DataFrame) -> List[str]:
-    """
-    Select minimal confound regressors for connectivity analysis.
+# ---------------------------------------------------------------------------
+# Output persistence (unchanged)
+# ---------------------------------------------------------------------------
 
-    Strategy: 6 motion parameters + their derivatives + CSF/WM signals
-    (avoid global signal regression for connectivity)
-    """
-    selected = []
-
-    # Motion parameters (6 rigid body: 3 translation + 3 rotation)
-    motion_params = ['trans_x', 'trans_y', 'trans_z', 'rot_x', 'rot_y', 'rot_z']
-    for param in motion_params:
-        if param in confounds_df.columns:
-            selected.append(param)
-            # Add derivatives
-            deriv = f"{param}_derivative1"
-            if deriv in confounds_df.columns:
-                selected.append(deriv)
-
-    # CSF signal (cerebrospinal fluid - non-neural)
-    if 'csf' in confounds_df.columns:
-        selected.append('csf')
-
-    # White matter signal (non-neural)
-    if 'white_matter' in confounds_df.columns:
-        selected.append('white_matter')
-
-    return selected
-
-
-def _compute_qc_fc(connectivity_matrix: np.ndarray, fd_series: pd.Series) -> Optional[float]:
-    """
-    Compute QC-FC: Correlation between connectivity strengths and mean FD.
-
-    Lower values indicate better motion artifact removal.
-    """
+def _save_connectivity_outputs(
+    output_dir: Path,
+    sub_id: str,
+    ses_id: str,
+    run_label: str,
+    connectivity_matrix: np.ndarray,
+    time_series: np.ndarray,
+    atlas_labels: List[str],
+) -> None:
+    """Save connectivity matrix, time series, and ROI labels to derivatives."""
     try:
-        # Extract upper triangle of connectivity matrix (unique connections)
-        n_rois = connectivity_matrix.shape[0]
-        triu_indices = np.triu_indices(n_rois, k=1)
-        connectivity_values = connectivity_matrix[triu_indices]
+        conn_dir = output_dir / "connectivity" / f"sub-{sub_id}" / f"ses-{ses_id}"
+        conn_dir.mkdir(parents=True, exist_ok=True)
 
-        # Simple correlation with mean FD (paper uses partial correlation with age/sex)
-        mean_fd_scalar = fd_series.mean()
+        prefix = f"sub-{sub_id}_ses-{ses_id}_{run_label}" if run_label else f"sub-{sub_id}_ses-{ses_id}"
 
-        # Since we have one scalar (mean FD) and many connectivity values,
-        # we compute the correlation between connectivity and motion across edges
-        # This is a simplified version; full implementation would correlate across subjects
+        np.save(conn_dir / f"{prefix}_connectivity.npy", connectivity_matrix)
+        np.save(conn_dir / f"{prefix}_timeseries.npy", time_series)
 
-        # For single-subject, we can check variance in connectivity
-        # High variance with motion suggests motion-connectivity coupling
-        # This is a placeholder - proper QC-FC requires multiple subjects
+        labels_path = conn_dir / f"{prefix}_labels.txt"
+        labels_path.write_text("\n".join(atlas_labels))
+    except Exception:
+        pass  # Non-critical — don't fail the analysis
 
-        # Return correlation between connectivity strength and edge distance as proxy
-        # (not perfect, but gives us a single-subject metric)
 
-        # For now, return a placeholder based on FD
-        # High FD -> worse QC-FC
-        if mean_fd_scalar > thresh.CONNECTIVITY_MEAN_FD_FAIL:
-            return 0.25  # High motion-connectivity coupling
-        elif mean_fd_scalar > thresh.CONNECTIVITY_MEAN_FD_WARN:
-            return 0.15
-        else:
-            return 0.05
+# ---------------------------------------------------------------------------
+# Heatmap visualisations (unchanged)
+# ---------------------------------------------------------------------------
 
-        # NOTE: Proper QC-FC requires group-level analysis across subjects
-        # This is a per-subject approximation
+def _generate_heatmap(
+    connectivity_matrix: np.ndarray,
+    atlas_labels: List[str],
+) -> Optional[str]:
+    """Generate a 116×116 correlation heatmap and return as base64 PNG."""
+    if not MATPLOTLIB_AVAILABLE:
+        return None
+    try:
+        fig, ax = plt.subplots(1, 1, figsize=(8, 7))
+        im = ax.imshow(
+            connectivity_matrix,
+            cmap="RdBu_r",
+            vmin=-1,
+            vmax=1,
+            interpolation="nearest",
+        )
+        ax.set_title("Connectivity Matrix (Pearson r) — scrubbed data", fontsize=12)
 
+        # --- Network boundary lines and labels ---
+        networks = _parse_network_assignments(atlas_labels)
+        # Build ordered list of (network_name, start_idx, end_idx)
+        # by scanning labels in order to preserve atlas ROI ordering.
+        seen_order: List[str] = []
+        for label in atlas_labels:
+            if label.startswith("Tian_") or label.startswith("tian_"):
+                net = "Subcortical"
+            else:
+                parts = label.split("_")
+                net = parts[2] if len(parts) >= 3 else "Unknown"
+            if net not in seen_order:
+                seen_order.append(net)
+
+        n_rois = len(atlas_labels)
+        tick_positions = []
+        tick_labels = []
+        offset = 0
+        for net_name in seen_order:
+            count = len(networks.get(net_name, []))
+            if count == 0:
+                continue
+            # Boundary line before this group (skip first)
+            if offset > 0:
+                ax.axhline(y=offset - 0.5, color="black", linewidth=0.5, alpha=0.6)
+                ax.axvline(x=offset - 0.5, color="black", linewidth=0.5, alpha=0.6)
+            tick_positions.append(offset + count / 2.0 - 0.5)
+            tick_labels.append(net_name)
+            offset += count
+
+        ax.set_xticks(tick_positions)
+        ax.set_yticks(tick_positions)
+        ax.set_xticklabels(tick_labels, rotation=45, ha="right", fontsize=8)
+        ax.set_yticklabels(tick_labels, fontsize=8)
+
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Correlation")
+        fig.tight_layout()
+
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("ascii")
     except Exception:
         return None
 
 
-def _compute_dm_fc(
+def _parse_network_assignments(atlas_labels: List[str]) -> Dict[str, List[int]]:
+    """
+    Parse atlas labels into network groups.
+
+    Schaefer labels: '7Networks_{hemi}_{network}_{region}_{index}'
+      -> Split by '_', index 2 = network name (Vis, SomMot, DorsAttn, etc.)
+    Tian labels: 'Tian_*' -> grouped as 'Subcortical'
+
+    Returns:
+        Dict mapping network name -> list of ROI indices (0-based)
+    """
+    networks: Dict[str, List[int]] = {}
+    for i, label in enumerate(atlas_labels):
+        if label.startswith("Tian_") or label.startswith("tian_"):
+            net = "Subcortical"
+        else:
+            parts = label.split("_")
+            if len(parts) >= 3:
+                net = parts[2]
+            else:
+                net = "Unknown"
+        networks.setdefault(net, []).append(i)
+    return networks
+
+
+def _generate_network_summary(
     connectivity_matrix: np.ndarray,
-    masker: maskers.NiftiLabelsMasker,
-    fd_series: pd.Series
-) -> Optional[float]:
+    atlas_labels: List[str],
+) -> Optional[str]:
     """
-    Compute DM-FC: Distance-dependent motion effects.
+    Collapse 116 ROIs into ~8 networks and render an annotated summary heatmap.
 
-    Tests if motion artifacts correlate with physical distance between ROIs.
+    Returns base64 PNG string.
     """
+    if not MATPLOTLIB_AVAILABLE:
+        return None
     try:
-        # Get ROI coordinates (centroids)
-        # This requires masker to have been fit
-        if not hasattr(masker, 'labels_img_'):
+        networks = _parse_network_assignments(atlas_labels)
+        if len(networks) < 2:
             return None
 
-        # Get label coordinates from atlas
-        labels_img = masker.labels_img_
-        labels_data = labels_img.get_fdata()
-        unique_labels = np.unique(labels_data)[1:]  # Exclude 0 (background)
+        net_names = sorted(networks.keys())
+        n_nets = len(net_names)
+        summary = np.zeros((n_nets, n_nets))
 
-        # Calculate centroids for each ROI
-        coords = []
-        for label in unique_labels:
-            label_mask = labels_data == label
-            label_coords = np.argwhere(label_mask)
-            if len(label_coords) > 0:
-                centroid = label_coords.mean(axis=0)
-                # Convert voxel coords to mm using affine
-                centroid_mm = nib.affines.apply_affine(labels_img.affine, centroid)
-                coords.append(centroid_mm)
+        for i, net_i in enumerate(net_names):
+            for j, net_j in enumerate(net_names):
+                roi_i = networks[net_i]
+                roi_j = networks[net_j]
+                values = connectivity_matrix[np.ix_(roi_i, roi_j)]
+                summary[i, j] = np.nanmean(values)
 
-        if len(coords) < 2:
-            return None
+        fig, ax = plt.subplots(1, 1, figsize=(6, 5))
+        im = ax.imshow(
+            summary,
+            cmap="RdBu_r",
+            vmin=-0.5,
+            vmax=0.5,
+            interpolation="nearest",
+        )
+        ax.set_xticks(range(n_nets))
+        ax.set_yticks(range(n_nets))
+        ax.set_xticklabels(net_names, rotation=45, ha="right", fontsize=9)
+        ax.set_yticklabels(net_names, fontsize=9)
+        ax.set_title("Network-level Connectivity (scrubbed)", fontsize=12)
 
-        coords = np.array(coords)
+        for i in range(n_nets):
+            for j in range(n_nets):
+                val = summary[i, j]
+                color = "white" if abs(val) > 0.25 else "black"
+                ax.text(j, i, f"{val:.2f}", ha="center", va="center",
+                        fontsize=8, color=color)
 
-        # Compute pairwise Euclidean distances
-        distances = squareform(pdist(coords, metric='euclidean'))
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Mean r")
+        fig.tight_layout()
 
-        # Extract upper triangle
-        n_rois = connectivity_matrix.shape[0]
-        triu_indices = np.triu_indices(n_rois, k=1)
-
-        distance_values = distances[triu_indices]
-        connectivity_values = connectivity_matrix[triu_indices]
-
-        # Correlate distance with connectivity strength
-        # Motion artifacts often create spurious short-range correlations
-        mean_fd = fd_series.mean()
-
-        # Compute correlation
-        if len(distance_values) > 0 and len(connectivity_values) > 0:
-            corr, _ = pearsonr(distance_values, connectivity_values)
-
-            # Weight by motion
-            # High motion + strong distance-connectivity correlation = bad
-            dm_fc = corr * (mean_fd / thresh.CONNECTIVITY_MEAN_FD_WARN)
-
-            return float(dm_fc)
-
+        buf = BytesIO()
+        fig.savefig(buf, format="png", dpi=100, bbox_inches="tight")
+        plt.close(fig)
+        buf.seek(0)
+        return base64.b64encode(buf.read()).decode("ascii")
     except Exception:
-        pass
-
-    return None
-
-
-def _assess_overall_quality(result: ConnectivityQCResult):
-    """Assess overall connectivity quality and populate messages."""
-
-    # Determine worst severity
-    severities = [result.qc_fc_severity, result.dm_fc_severity, result.modularity_severity]
-    if "ERROR" in severities:
-        result.worst_severity = "ERROR"
-        result.connectivity_ready = False
-    elif "WARNING" in severities:
-        result.worst_severity = "WARNING"
-        result.connectivity_ready = True  # Marginal
-    elif "OK" in severities:
-        result.worst_severity = "OK"
-        result.connectivity_ready = True
-    else:
-        result.worst_severity = "UNKNOWN"
-        result.connectivity_ready = False
-
-    # Build message
-    messages = []
-    if result.qc_fc_value is not None:
-        messages.append(f"QC-FC={result.qc_fc_value:.3f} ({result.qc_fc_severity})")
-    if result.dm_fc_value is not None:
-        messages.append(f"DM-FC={result.dm_fc_value:.3f} ({result.dm_fc_severity})")
-    if result.modularity_q is not None:
-        messages.append(f"Modularity Q={result.modularity_q:.3f} ({result.modularity_severity})")
-
-    if messages:
-        result.plain_message = "; ".join(messages)
-    else:
-        result.plain_message = "Connectivity metrics could not be computed"
-
-    # Action recommendation
-    if result.worst_severity == "ERROR":
-        result.action = "Not recommended for connectivity analysis due to motion artifacts."
-    elif result.worst_severity == "WARNING":
-        result.action = "Usable for connectivity but apply stringent scrubbing and verify with sensitivity analyses."
-    elif result.worst_severity == "OK":
-        result.action = "Suitable for connectivity analysis."
-    else:
-        result.action = "Unable to assess connectivity quality."
+        return None

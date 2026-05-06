@@ -143,13 +143,13 @@ The pipeline automatically recognizes these session folder names:
 ### Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                    BIDS CONVERSION PIPELINE                             │
-│                                                                         │
-│   DICOM Files    ──►    dcm2niix    ──►    Organize    ──►    BIDS     │
-│   (Scanner)           (Converter)        (Auto-classify)    (Standard) │
-│                                                                         │
-└─────────────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────────────────────────┐
+│                           BIDS CONVERSION PIPELINE                                    │
+│                                                                                      │
+│  DICOM Files  ──►  dcm2niix  ──►  Organize  ──►  Link Field Maps  ──►  BIDS        │
+│  (Scanner)       (Converter)    (Auto-classify)  (IntendedFor)       (Standard)     │
+│                                                                                      │
+└──────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Step 1: Reading DICOM Headers
@@ -212,6 +212,30 @@ tmp_dcm2niix/T1_MPRAGE_4.nii.gz
                     ▼
 sub-001/ses-01/anat/sub-001_ses-01_T1w.nii.gz
 ```
+
+### Step 5: Linking Field Maps to BOLD Runs
+
+When the scan protocol includes field maps (AP/PA spin-echo EPI pairs or GRE phase-difference maps), the pipeline automatically populates the `IntendedFor` field in each field map's JSON sidecar. This tells fMRIPrep which BOLD runs each field map should correct for susceptibility distortion.
+
+**How matching works:**
+- If there is a single field map pair, all BOLD runs in that session are assigned to it
+- If there are multiple field map pairs, each pair is matched to the nearest BOLD runs by acquisition time
+- If no timing information is available, all BOLD runs are conservatively assigned to all field maps
+- Existing `IntendedFor` values are never overwritten
+
+**Example** — after conversion, the field map JSON sidecar automatically contains:
+```json
+{
+    "PhaseEncodingDirection": "j-",
+    "AcquisitionTime": "10:00:00.000000",
+    "IntendedFor": [
+        "ses-01/func/sub-001_ses-01_task-rest_bold.nii.gz",
+        "ses-01/func/sub-001_ses-01_task-memory_bold.nii.gz"
+    ]
+}
+```
+
+No manual editing is required. If your protocol does not include field maps, this step is skipped automatically.
 
 ### Visual Summary
 
