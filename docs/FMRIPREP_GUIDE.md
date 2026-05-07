@@ -332,7 +332,7 @@ Slice 1  ────── acquired at t=0.00s ──────┘
 - Critical for accurate localization
 
 **Methods:**
-- **Fieldmap-based (automatic):** When field maps are present (AP/PA EPI pairs or GRE phasediff), the pipeline automatically links them to BOLD runs during BIDS conversion by populating the `IntendedFor` field. fMRIPrep then uses these field maps for distortion correction — no manual editing required.
+- **Fieldmap-based (automatic):** When field maps are present (AP/PA EPI pairs or GRE phasediff), the pipeline automatically links them to BOLD runs during BIDS conversion by populating the `IntendedFor` field. fMRIPrep then uses these field maps for distortion correction - no manual editing required.
 - **SyN SDC (optional fallback):** When no field maps are available, the fieldmap-less SyN method can estimate distortion using the T1w anatomical image. This must be enabled explicitly in the GUI or via CLI flags.
 
 ```
