@@ -365,7 +365,10 @@ def _prepare_group_staging(experiment_dir, current_mriqc_dir):
             mriqc_dirs.add(d.resolve())
     mriqc_dirs.add(current_mriqc_dir)
 
-    # filename -> list of (path, mtime)
+    # relpath-within-mriqc-dir -> list of (path, mtime)
+    #
+    # IMPORTANT: preserve the BIDS-derivatives directory structure (sub-*/ses-*/anat|func/)
+    # because newer MRIQC versions may expect this layout when building group reports.
     file_map: dict[str, list[tuple[Path, float]]] = {}
     for mdir in mriqc_dirs:
         for json_file in mdir.rglob("sub-*.json"):
@@ -374,26 +377,32 @@ def _prepare_group_staging(experiment_dir, current_mriqc_dir):
             stem = json_file.stem
             if not any(stem.endswith(s) for s in ("_T1w", "_T2w", "_bold")):
                 continue
-            fname = json_file.name
-            file_map.setdefault(fname, []).append(
+            try:
+                rel_key = str(json_file.relative_to(mdir)).replace("\\", "/")
+            except Exception:
+                # Fallback: still dedupe by basename if relative-to fails
+                rel_key = json_file.name
+            file_map.setdefault(rel_key, []).append(
                 (json_file, json_file.stat().st_mtime)
             )
 
-    # Deduplicate: keep newest per filename
+    # Deduplicate: keep newest per relpath key
     kept: dict[str, Path] = {}
     duplicates: list[tuple[str, Path]] = []
-    for fname, entries in file_map.items():
+    for rel_key, entries in file_map.items():
         entries.sort(key=lambda x: x[1], reverse=True)  # newest first
-        kept[fname] = entries[0][0]
+        kept[rel_key] = entries[0][0]
         for path, _ in entries[1:]:
-            duplicates.append((fname, path))
+            duplicates.append((rel_key, path))
 
     n_total = sum(len(v) for v in file_map.values())
 
-    # Create staging dir and copy files (flat layout)
+    # Create staging dir and copy files (preserve layout)
     staging_dir = Path(tempfile.mkdtemp(prefix="mriqc_group_staging_"))
-    for fname, src_path in kept.items():
-        shutil.copy2(src_path, staging_dir / fname)
+    for rel_key, src_path in kept.items():
+        dst = staging_dir / rel_key
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src_path, dst)
 
     # Copy dataset_description.json if available (MRIQC group may expect it)
     for mdir in mriqc_dirs:
@@ -511,9 +520,17 @@ def run_mriqc_group(bids_dir, mriqc_output_dir, modalities=None,
 
         # Copy group outputs from staging back to the current run's mriqc dir
         if success and staging_dir is not None:
+            copied = 0
             for pattern in ("group_*.html", "group_*.tsv"):
                 for f in Path(staging_dir).glob(pattern):
                     shutil.copy2(f, mriqc_output_dir / f.name)
+                    copied += 1
+            if copied == 0:
+                # This can happen if MRIQC ran but did not detect any IQMs to summarize
+                # (or wrote outputs in an unexpected layout).
+                print(
+                    "  Warning: MRIQC group completed but no group_*.html/tsv files were produced."
+                )
 
         if success:
             return True, None

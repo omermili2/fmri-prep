@@ -1454,8 +1454,20 @@ Examples:
                 f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
                 flush=True,
             )
+            # Defensive check: some failures can exit "success" but not write group outputs.
+            try:
+                group_html = list(Path(mriqc_dir).glob("group_*.html"))
+                if not group_html:
+                    safe_print(
+                        "  Warning: MRIQC group returned success but no group_*.html files were found.",
+                        flush=True,
+                    )
+            except Exception:
+                pass
         else:
-            safe_print(f"  MRIQC group warning: {grp_err[:120]}", flush=True)
+            # Print a larger tail of the error; full stderr is often needed to debug group failures.
+            tail = (grp_err or "")[-1200:]
+            safe_print(f"  MRIQC group warning: {tail}", flush=True)
 
         early_iqm = iqm_parser.parse_all_subjects(mriqc_dir)
         early_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
