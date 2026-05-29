@@ -100,27 +100,47 @@ class App(ctk.CTk):
         self.frame_config.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
         self.frame_config.grid_columnconfigure(1, weight=1)
 
+        # State
+        self.input_dirs = []
+
         # Input Directory
         self.label_input = ctk.CTkLabel(
             self.frame_config, 
-            text="Source Folder:",
+            text="Source Folders:",
             font=ctk.CTkFont(weight="bold")
         )
-        self.label_input.grid(row=0, column=0, padx=15, pady=15, sticky="w")
+        self.label_input.grid(row=0, column=0, padx=15, pady=(15, 5), sticky="nw")
         
-        self.entry_input = ctk.CTkEntry(
+        self.text_inputs = ctk.CTkTextbox(
             self.frame_config, 
-            placeholder_text="DICOM folder, BIDS dataset, or previous pipeline output"
+            height=80,
+            font=ctk.CTkFont(size=11)
         )
-        self.entry_input.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
-        
-        self.btn_browse_input = ctk.CTkButton(
-            self.frame_config, 
-            text="Browse", 
+        self.text_inputs.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
+        self.text_inputs.insert("1.0", "No folders selected. Click 'Add Folder' to start.")
+        self.text_inputs.configure(state="disabled", text_color="gray")
+
+        # Buttons container for Input
+        self.frame_input_btns = ctk.CTkFrame(self.frame_config, fg_color="transparent")
+        self.frame_input_btns.grid(row=0, column=2, padx=15, pady=15, sticky="n")
+
+        self.btn_add_input = ctk.CTkButton(
+            self.frame_input_btns, 
+            text="Add Folder", 
             width=100, 
-            command=self.browse_input
+            command=self.add_input
         )
-        self.btn_browse_input.grid(row=0, column=2, padx=15, pady=15)
+        self.btn_add_input.pack(pady=(0, 5))
+
+        self.btn_clear_input = ctk.CTkButton(
+            self.frame_input_btns, 
+            text="Clear", 
+            width=100, 
+            fg_color="#606060",
+            hover_color="#404040",
+            command=self.clear_input
+        )
+        self.btn_clear_input.pack()
 
         # Output Directory
         self.label_output = ctk.CTkLabel(
@@ -477,20 +497,42 @@ class App(ctk.CTk):
         self.is_running = False
         
 
-    def browse_input(self):
+    def add_input(self):
         folder = filedialog.askdirectory(title="Select Source Folder")
         if folder:
-            self.entry_input.delete(0, "end")
-            self.entry_input.insert(0, folder)
-            self._update_output_info()
-            self._update_button_states()
+            folder_path = str(Path(folder).resolve())
+            if folder_path not in self.input_dirs:
+                self.input_dirs.append(folder_path)
+                self._update_input_display()
+                self._update_output_info()
+                self._update_button_states()
+
+    def clear_input(self):
+        self.input_dirs = []
+        self._update_input_display()
+        self._update_output_info()
+        self._update_button_states()
+
+    def _update_input_display(self):
+        """Update the text box to show the list of selected folders."""
+        self.text_inputs.configure(state="normal")
+        self.text_inputs.delete("1.0", "end")
+        
+        if not self.input_dirs:
+            self.text_inputs.insert("1.0", "No folders selected. Click 'Add Folder' to start.")
+            self.text_inputs.configure(text_color="gray")
+        else:
+            self.text_inputs.insert("1.0", "\n".join(self.input_dirs))
+            self.text_inputs.configure(text_color="#DCDCDC")
+            
+        self.text_inputs.configure(state="disabled")
 
     def browse_output(self):
         initial_dir = None
-        input_dir = self.entry_input.get().strip()
-        if input_dir:
+        # Use the first input directory's parent as a starting point
+        if self.input_dirs:
             try:
-                initial_dir = str(Path(input_dir).resolve().parent)
+                initial_dir = str(Path(self.input_dirs[0]).resolve().parent)
             except Exception:
                 initial_dir = None
 
@@ -666,13 +708,26 @@ class App(ctk.CTk):
                             return True
         return False
 
+    @staticmethod
+    def _has_dicom_files_anywhere(path):
+        """Check if a path contains DICOM files anywhere (recursive)."""
+        dcm_patterns = ['*.dcm', '*.DCM', '*.ima', '*.IMA', '*.dcm.gz']
+        p = Path(path)
+        for pattern in dcm_patterns:
+            try:
+                if any(p.rglob(pattern)):
+                    return True
+            except Exception:
+                pass
+        return False
+
     # ------------------------------------------------------------------
 
     def _update_button_states(self):
-        """Enable/disable buttons based on what the source folder contains
+        """Enable/disable buttons based on what the source folders contain
         and whether an output folder has been selected.
 
-        The Source folder can point to:
+        The Source folders can point to:
         - Raw DICOM data  -> enables BIDS Conversion and Full Pipeline
         - A BIDS dataset  -> enables fMRIPrep Only (and the above)
         - Pipeline output with derivatives/ -> enables Connectivity QC (and the above)
@@ -681,45 +736,46 @@ class App(ctk.CTk):
         require both Source AND Output folders.  Buttons that operate on existing
         data (fMRIPrep Only, Connectivity QC Only) only require Source.
         """
-        input_dir = self.entry_input.get().strip()
         output_dir = self.entry_output.get().strip()
         has_output = bool(output_dir)
+        has_input = bool(self.input_dirs)
 
         has_subjects = False
         has_bids_data = False
         has_fmriprep_results = False
 
-        if input_dir and Path(input_dir).is_dir():
+        for input_dir in self.input_dirs:
+            if not Path(input_dir).is_dir():
+                continue
+            
             src = Path(input_dir)
-
-            # Check for output_* subfolders (previous pipeline run) and
-            # auto-resolve to the most recent one
+            # Check for output_* subfolders (previous pipeline run)
             output_subs = sorted(
-                [p for p in src.iterdir()
-                 if p.is_dir() and p.name.startswith("output_")],
+                [p for p in src.iterdir() if p.is_dir() and p.name.startswith("output_")],
                 key=lambda p: p.stat().st_mtime, reverse=True
             )
             check_path = output_subs[0] if output_subs else src
 
-            has_subjects = any(
-                p.is_dir() and not p.name.startswith(".")
-                for p in src.iterdir()
-            )
-
-            # BIDS detector: dataset_description.json + raw NIfTI under
-            # top-level sub-* folders (ignores derivatives/sub-*)
-            has_bids_data = self._has_bids_nifti(check_path)
-
-            # fMRIPrep detector: confounds TSV files under derivatives/
-            has_fmriprep_results = self._has_fmriprep_derivatives(check_path)
+            # Determine if this folder contains subjects OR is a subject itself
+            if any(p.is_dir() and not p.name.startswith((".", "output_")) for p in src.iterdir()):
+                has_subjects = True
+            elif self._has_dicom_files_anywhere(src):
+                has_subjects = True
+                
+            if self._has_bids_nifti(check_path):
+                has_bids_data = True
+            if self._has_fmriprep_derivatives(check_path):
+                has_fmriprep_results = True
 
         # Determine the reason to show when a button that needs output is disabled
-        if not input_dir and not has_output:
+        if not has_input and not has_output:
             output_reason = "Select Source and Output folders"
-        elif not input_dir:
+        elif not has_input:
             output_reason = "Select a Source DICOM Folder"
         else:
             output_reason = "Select an Output Root Folder"
+
+        multiple_inputs = len(self.input_dirs) > 1
 
         # --- Apply button states ---
         # BIDS Conversion: needs subject folders + output folder
@@ -743,18 +799,20 @@ class App(ctk.CTk):
             reason=output_reason if not has_output else "Select a Source DICOM Folder"
         )
 
-        # fMRIPrep Only: needs raw BIDS NIfTI data (not just any sub-* folder)
+        # fMRIPrep Only: needs raw BIDS NIfTI data + only 1 source folder
         self._set_button_enabled(
             self.btn_fmriprep_only, self.label_est_fmriprep, "fmriprep",
-            enabled=has_bids_data,
-            reason="Source must contain BIDS data (NIfTI files in sub-*/)"
+            enabled=has_bids_data and not multiple_inputs,
+            reason="Please select only ONE Source folder for fMRIPrep Only" if multiple_inputs 
+                   else "Source must contain BIDS data (NIfTI files in sub-*/)"
         )
 
-        # Connectivity QC: needs actual fMRIPrep confounds/results
+        # Connectivity QC: needs actual fMRIPrep confounds/results + only 1 source folder
         self._set_button_enabled(
             self.btn_connectivity_qc, self.label_est_conn, "conn",
-            enabled=has_fmriprep_results,
-            reason="Source must contain fMRIPrep results (derivatives/)"
+            enabled=has_fmriprep_results and not multiple_inputs,
+            reason="Please select only ONE Source folder for Connectivity QC" if multiple_inputs
+                   else "Source must contain fMRIPrep results (derivatives/)"
         )
 
         # Update time estimates for enabled buttons
@@ -786,25 +844,64 @@ class App(ctk.CTk):
         return f"{h}h {m:02d}min"
 
     def _update_time_estimates(self):
-        """Scan the source folder and update dataset summary + time labels."""
-        input_dir = self.entry_input.get().strip()
-
-        if not input_dir or not Path(input_dir).is_dir():
+        """Scan the source folders and update dataset summary + time labels."""
+        if not self.input_dirs:
             self.label_dataset_summary.grid_remove()
             return
 
-        # Count subjects and sessions
+        # Count subjects and sessions across all folders
         n_subjects = 0
         n_sessions = 0
-        src = Path(input_dir)
-        for child in src.iterdir():
-            if child.is_dir() and not child.name.startswith("."):
+        
+        for input_dir in self.input_dirs:
+            if not Path(input_dir).is_dir():
+                continue
+                
+            src = Path(input_dir)
+            # Check if this is a subject folder itself or a root containing subjects
+            # Heuristic: if it has subfolders starting with 'sub-', it's definitely a root.
+            sub_dirs = [d for d in src.iterdir() if d.is_dir() and not d.name.startswith((".", "output_"))]
+            has_sub_prefix = any(d.name.startswith("sub-") for d in sub_dirs)
+            
+            is_direct_subject = False
+            if not has_sub_prefix:
+                # If it has session-like subfolders OR DICOMs anywhere, and no sub- prefix subfolders
+                # we'll check if it looks like a single subject
+                sessions_found = 0
+                for d in sub_dirs:
+                    name = d.name.lower()
+                    if (re.match(r'^ses-\d+$', d.name) or 
+                        re.match(r'^mri\d+$', name) or 
+                        re.match(r'^session[_-]?\d+$', name) or
+                        re.match(r'^(?:timepoint|tp)[_-]?\d+$', name) or
+                        name in ['baseline', 'pre', 'screening', 'followup', 'post', 'scans']):
+                        sessions_found += 1
+                
+                if sessions_found > 0 or self._has_dicom_files_anywhere(src):
+                    is_direct_subject = True
+
+            if is_direct_subject:
                 n_subjects += 1
-                ses_count = sum(
-                    1 for s in child.iterdir()
-                    if s.is_dir() and not s.name.startswith(".")
-                )
-                n_sessions += max(ses_count, 1)
+                # Estimate sessions
+                sessions_count = 0
+                for d in sub_dirs:
+                    name = d.name.lower()
+                    if (re.match(r'^ses-\d+$', d.name) or 
+                        re.match(r'^mri\d+$', name) or 
+                        re.match(r'^session[_-]?\d+$', name) or
+                        re.match(r'^(?:timepoint|tp)[_-]?\d+$', name) or
+                        name in ['baseline', 'pre', 'screening', 'followup', 'post', 'scans']):
+                        sessions_count += 1
+                n_sessions += max(sessions_count, 1)
+            else:
+                # Root folder: count subdirectories as subjects
+                for child in sub_dirs:
+                    n_subjects += 1
+                    ses_count = sum(
+                        1 for s in child.iterdir()
+                        if s.is_dir() and not s.name.startswith(".")
+                    )
+                    n_sessions += max(ses_count, 1)
 
         if n_subjects == 0:
             self.label_dataset_summary.grid_remove()
@@ -1350,37 +1447,32 @@ class App(ctk.CTk):
 
     def _validate_paths(self):
         """Validate input and output paths before running."""
-        input_dir = self.entry_input.get().strip()
-        output_dir = self.entry_output.get().strip()
-
-        if not input_dir:
-            self.console.log("Please select a source DICOM folder.", "warning")
+        if not self.input_dirs:
+            self.console.log("Please select at least one source folder.", "warning")
             return False
             
+        output_dir = self.entry_output.get().strip()
         if not output_dir:
             self.console.log("Please select an output folder.", "warning")
             return False
 
         # Resolve to absolute paths for comparison
-        input_path = Path(input_dir).resolve()
         output_path = Path(output_dir).resolve()
 
-        if not input_path.exists():
-            self.console.log(f"Source folder does not exist: {input_dir}", "warning")
-            return False
+        for input_dir in self.input_dirs:
+            input_path = Path(input_dir).resolve()
+            if not input_path.exists():
+                self.console.log(f"Source folder does not exist: {input_dir}", "warning")
+                return False
 
-        # Prevent output inside input or same as input
-        if output_path == input_path:
-            self.console.log("Output folder cannot be the same as input folder!", "warning")
-            self.console.log("   Please select a different output location.", "warning")
-            return False
+            # Prevent output inside input or same as input
+            if output_path == input_path:
+                self.console.log(f"Output folder cannot be the same as input folder: {input_dir}", "warning")
+                return False
 
-        if str(output_path).startswith(str(input_path) + os.sep):
-            self.console.log("Output folder cannot be inside the input folder!", "warning")
-            self.console.log("   Please select a different output location.", "warning")
-            return False
-
-        # Note: Output CAN be parent of input - timestamped subfolder will be created
+            if str(output_path).startswith(str(input_path) + os.sep):
+                self.console.log(f"Output folder cannot be inside an input folder: {input_dir}", "warning")
+                return False
 
         return True
 
@@ -1428,12 +1520,11 @@ class App(ctk.CTk):
 
     def run_connectivity_qc_only(self):
         """Run connectivity QC (Nilearn) on an existing fMRIPrep output folder."""
-        source_folder = self.entry_input.get().strip()
-
-        if not source_folder:
-            self.console.log("Please select a Source folder containing fMRIPrep output.", "warning")
+        if len(self.input_dirs) != 1:
+            self.console.log("Please select exactly ONE Source folder containing fMRIPrep output.", "warning")
             return
 
+        source_folder = self.input_dirs[0]
         bids_path = Path(source_folder).resolve()
         if not bids_path.exists():
             self.console.log(f"Folder does not exist: {source_folder}", "warning")
@@ -1473,12 +1564,11 @@ class App(ctk.CTk):
                 self._toggle_fmriprep_options()
             return
 
-        source_folder = self.entry_input.get().strip()
-
-        if not source_folder:
-            self.console.log("Please select a Source folder containing BIDS data.", "warning")
+        if len(self.input_dirs) != 1:
+            self.console.log("Please select exactly ONE Source folder containing BIDS data.", "warning")
             return
 
+        source_folder = self.input_dirs[0]
         bids_path = Path(source_folder).resolve()
         if not bids_path.exists():
             self.console.log(f"Folder does not exist: {source_folder}", "warning")
@@ -1592,7 +1682,7 @@ class App(ctk.CTk):
                 return
             bids_folder = None
 
-        input_dir = self.entry_input.get().strip()
+        input_dirs = list(self.input_dirs)
         output_dir = self.entry_output.get().strip()
 
         self.is_running = True
@@ -1617,14 +1707,14 @@ class App(ctk.CTk):
         if self._fmriprep_only_mode:
             self.console.log(f"BIDS Folder: {bids_folder}")
         else:
-            self.console.log(f"Source: {input_dir}")
+            self.console.log(f"Source(s): {', '.join(input_dirs)}")
             self.console.log(f"Output Root: {output_dir}")
         self.console.log("=" * 60)
 
         # Run in background thread
         threading.Thread(
             target=self.run_subprocess, 
-            args=(input_dir, output_dir, bids_folder), 
+            args=(input_dirs, output_dir, bids_folder), 
             daemon=True
         ).start()
 
@@ -1635,10 +1725,11 @@ class App(ctk.CTk):
         self.btn_fmriprep_only.configure(state=state)
         self.btn_connectivity_qc.configure(state=state)
         self.btn_full_pipeline.configure(state=state)
-        self.btn_browse_input.configure(state=state)
+        self.btn_add_input.configure(state=state)
+        self.btn_clear_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
-    def run_subprocess(self, input_dir, output_dir, bids_folder=None):
+    def run_subprocess(self, input_dirs, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
         
         # Connectivity QC only mode
@@ -1658,9 +1749,10 @@ class App(ctk.CTk):
         else:
             cmd = [
                 sys.executable, str(script_path), 
-                "--input", input_dir, 
                 "--output_dir", output_dir
             ]
+            cmd.append("--input")
+            cmd.extend(input_dirs)
 
         if not self._run_bids:
             cmd.append("--skip-bids")

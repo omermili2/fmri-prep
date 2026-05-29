@@ -943,8 +943,8 @@ Examples:
     cpu_count = multiprocessing.cpu_count()
     default_workers = min(max(cpu_count, 4), 12)
     
-    parser.add_argument("--input", 
-                        help="Path to root directory containing subject folders (required unless --bids-folder is used)")
+    parser.add_argument("--input", nargs='+',
+                        help="Path to one or more root directories containing subject folders (required unless --bids-folder is used)")
     parser.add_argument("--output_dir", 
                         help="Base directory for outputs (required unless --bids-folder is used)")
     parser.add_argument("--bids-folder",
@@ -1062,7 +1062,7 @@ Examples:
                 else:
                     safe_print(f"Warning: Could not create dataset_description.json", flush=True)
     else:
-        input_root = Path(args.input).resolve()
+        input_roots = [Path(p).resolve() for p in args.input]
     base_output = Path(args.output_dir).resolve()
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -1115,7 +1115,7 @@ Examples:
 
     # Initialize report
     report = ExecutionReport()
-    report.input_folder = str(input_root)
+    report.input_folder = "; ".join(str(p) for p in input_roots) if not fmriprep_only_mode else str(bids_folder_path)
     report.output_folder = str(output_folder)
     report.skip_bids = args.skip_bids
     report.skip_fmriprep = args.skip_fmriprep
@@ -1172,38 +1172,74 @@ Examples:
         tasks.append({
             "sub_id": sanitize_id(args.subject),
             "ses_id": args.session,
-            "dicom_path": input_root
+            "dicom_path": input_roots[0]
         })
     elif args.subject:
         sub_id = sanitize_id(args.subject)
-        sessions = find_sessions(input_root)
-        for ses_id, ses_path in sessions:
-            tasks.append({
-                "sub_id": sub_id,
-                "ses_id": ses_id,
-                "dicom_path": ses_path
-            })
-    else:
-        safe_print(f"Scanning {input_root} for subjects...", flush=True)
-        
-        for sub_dir in find_subject_folders(input_root):
-            sub_id = sanitize_id(sub_dir.name)
-            if not sub_id:
-                safe_print(f"  Skipping invalid folder name: {sub_dir.name}", flush=True)
-                continue
-            
-            sessions = find_sessions(sub_dir)
-            safe_print(f"  Found subject {sub_id} with {len(sessions)} session(s)", flush=True)
-            
+        for input_root in input_roots:
+            sessions = find_sessions(input_root)
             for ses_id, ses_path in sessions:
-                if has_dicom_files(ses_path):
-                    tasks.append({
-                        "sub_id": sub_id,
-                        "ses_id": ses_id,
-                        "dicom_path": ses_path
-                    })
-                else:
-                    safe_print(f"    Warning: No DICOM files found in {ses_path}", flush=True)
+                tasks.append({
+                    "sub_id": sub_id,
+                    "ses_id": ses_id,
+                    "dicom_path": ses_path
+                })
+    else:
+        for input_root in input_roots:
+            # Determine if input_root is a subject folder or a root folder containing subjects.
+            # Heuristic: if it has subfolders starting with 'sub-', it's a root.
+            # If it has session-like subfolders (MRI1, ses-01) or DICOMs, it's a subject.
+            
+            sub_dirs = find_subject_folders(input_root)
+            has_sub_prefix = any(d.name.startswith("sub-") for d in sub_dirs)
+            
+            # Check for sessions in input_root
+            sessions = find_sessions(input_root)
+            is_direct_subject = False
+            
+            if not has_sub_prefix:
+                # If no sub-* folders, check if it looks like a subject itself
+                if len(sessions) > 1 or (len(sessions) == 1 and sessions[0][1] != input_root):
+                    is_direct_subject = True
+                elif has_dicom_files(input_root):
+                    is_direct_subject = True
+            
+            if is_direct_subject:
+                sub_id = sanitize_id(input_root.name)
+                if not sub_id:
+                    safe_print(f"  Skipping invalid subject folder: {input_root.name}", flush=True)
+                    continue
+                
+                safe_print(f"Processing as subject: {input_root.name} (ID: {sub_id})", flush=True)
+                for ses_id, ses_path in sessions:
+                    if has_dicom_files(ses_path):
+                        tasks.append({
+                            "sub_id": sub_id,
+                            "ses_id": ses_id,
+                            "dicom_path": ses_path
+                        })
+                    else:
+                        safe_print(f"    Warning: No DICOM files found in {ses_path}", flush=True)
+            else:
+                # Treat as a root folder containing subjects
+                safe_print(f"Scanning {input_root} for subjects...", flush=True)
+                for sub_dir in sub_dirs:
+                    sub_id = sanitize_id(sub_dir.name)
+                    if not sub_id:
+                        continue
+                    
+                    sub_sessions = find_sessions(sub_dir)
+                    safe_print(f"  Found subject {sub_id} with {len(sub_sessions)} session(s)", flush=True)
+                    
+                    for ses_id, ses_path in sub_sessions:
+                        if has_dicom_files(ses_path):
+                            tasks.append({
+                                "sub_id": sub_id,
+                                "ses_id": ses_id,
+                                "dicom_path": ses_path
+                            })
+                        else:
+                            safe_print(f"    Warning: No DICOM files found in {ses_path}", flush=True)
 
     if not tasks:
         safe_print("No subjects/sessions found to process.", flush=True)
