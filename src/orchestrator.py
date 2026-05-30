@@ -32,7 +32,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 # Use absolute imports for compatibility when run as script
 try:
     # When run as part of package
-    from .core.utils import setup_encoding, safe_print, set_log_file, close_log_file
+    from .core.utils import setup_encoding, safe_print, set_log_file, close_log_file, get_available_memory_gb
     from .core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
     from .core.progress import ProgressTracker
     from .bids.converter import run_bids_conversion, create_dataset_description
@@ -47,7 +47,7 @@ try:
     from .fmriprep import runner as fmriprep_runner
 except ImportError:
     # When run directly as script
-    from core.utils import setup_encoding, safe_print, set_log_file, close_log_file
+    from core.utils import setup_encoding, safe_print, set_log_file, close_log_file, get_available_memory_gb
     from core.discovery import find_subject_folders, find_sessions, sanitize_id, has_dicom_files
     from core.progress import ProgressTracker
     from bids.converter import run_bids_conversion, create_dataset_description
@@ -1366,34 +1366,35 @@ Examples:
             effective_cpus = docker_cpus
             effective_mem_gb = docker_mem_gb
         else:
-            safe_print("  Could not detect Docker VM resources — using host values.", flush=True)
+            safe_print("  Detecting available host memory...", flush=True)
             effective_cpus = multiprocessing.cpu_count()
-            # Estimate host memory (fallback to 16 GB)
-            try:
-                if sys.platform == "darwin":
-                    import ctypes, ctypes.util
-                    libc = ctypes.CDLL(ctypes.util.find_library("c"))
-                    mem = ctypes.c_int64(0)
-                    size = ctypes.c_size_t(ctypes.sizeof(mem))
-                    libc.sysctlbyname(b"hw.memsize", ctypes.byref(mem), ctypes.byref(size), None, 0)
-                    effective_mem_gb = int(mem.value / (1024 ** 3))
-                else:
-                    effective_mem_gb = int(
-                        os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
-                    )
-            except Exception:
-                effective_mem_gb = 16
+            effective_mem_gb = get_available_memory_gb()
+            safe_print(f"  Available system memory: {effective_mem_gb:.1f} GB", flush=True)
 
-        # Dynamic resource allocation: divide Docker VM resources among
+        # Dynamic resource allocation: divide resources among
         # concurrent MRIQC containers so they don't starve each other.
+        # We enforce a floor of 4 GB per container to prevent crashes.
         mriqc_workers = min(args.parallel, len(mriqc_tasks))
 
-        # Reserve ~20% for OS/Docker overhead, split the rest
-        usable_cpus = max(int(effective_cpus * 0.8), 1)
-        usable_mem_gb = effective_mem_gb * 0.8
+        # Check if requested parallelism exceeds available memory (at 4GB floor)
+        mem_floor_gb = 4
+        # For MRIQC, we use a 90% threshold of available memory as 'usable'
+        usable_mem_gb = effective_mem_gb * 0.9
+        max_safe_workers = max(int(usable_mem_gb // mem_floor_gb), 1)
+
+        if mriqc_workers > max_safe_workers:
+            safe_print(
+                f"  WARNING: High memory pressure. Reducing MRIQC parallel workers "
+                f"from {mriqc_workers} to {max_safe_workers} to prevent crash.",
+                flush=True
+            )
+            mriqc_workers = max_safe_workers
+
+        # Reserve ~10% for OS/Docker overhead for CPUs, split the rest
+        usable_cpus = max(int(effective_cpus * 0.9), 1)
 
         cpus_per = max(usable_cpus // max(mriqc_workers, 1), 1)
-        mem_per = max(int(usable_mem_gb // max(mriqc_workers, 1)), 4)
+        mem_per = max(int(usable_mem_gb // max(mriqc_workers, 1)), mem_floor_gb)
 
         # Split per-container CPUs into nprocs (parallel scans) and
         # omp_nthreads (threads per scan).  More omp threads speeds up
@@ -1553,7 +1554,22 @@ Examples:
             safe_print(f"\n=== Phase 3: fMRIPrep ({len(fmriprep_subjects)} subject(s)) ===", flush=True)
             safe_print(f"[PROGRESS:TOTAL:{len(fmriprep_subjects)}]", flush=True)
 
+            # Safety check: Cap fMRIPrep workers based on available RAM
+            effective_mem_gb = get_available_memory_gb()
+            # fMRIPrep uses ~16-20GB per subject. We'll use 16GB as a conservative floor for worker capping.
+            fmriprep_mem_floor = 16
+            max_safe_fmriprep_workers = max(int(effective_mem_gb // fmriprep_mem_floor), 1)
+
             fmriprep_workers = min(args.parallel, len(fmriprep_subjects))
+
+            if fmriprep_workers > max_safe_fmriprep_workers:
+                safe_print(
+                    f"  WARNING: High memory pressure. Reducing fMRIPrep parallel subjects "
+                    f"from {fmriprep_workers} to {max_safe_fmriprep_workers} to prevent crash.",
+                    flush=True
+                )
+                fmriprep_workers = max_safe_fmriprep_workers
+
             with ThreadPoolExecutor(max_workers=fmriprep_workers) as executor:
                 futures = {
                     executor.submit(
