@@ -1444,57 +1444,61 @@ Examples:
     # Early MRIQC report — available before fMRIPrep starts
     # ------------------------------------------------------------------
     if run_mriqc and mriqc_dir is not None:
-        report.record_phase_start("  Group report")
-        safe_print("Running MRIQC group-level report...", flush=True)
-        grp_ok, grp_err = mriqc_runner.run_mriqc_group(
-            bids_dir, mriqc_dir, no_work_dir=not args.mriqc_keep_work,
-            experiment_dir=base_output,
-        )
-        if grp_ok:
-            safe_print(
-                f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
-                flush=True,
+        try:
+            report.record_phase_start("  Group report")
+            safe_print("Running MRIQC group-level report...", flush=True)
+            grp_ok, grp_err = mriqc_runner.run_mriqc_group(
+                bids_dir, mriqc_dir, no_work_dir=not args.mriqc_keep_work,
+                experiment_dir=base_output,
             )
-            # Defensive check: some failures can exit "success" but not write group outputs.
-            try:
-                group_html = list(Path(mriqc_dir).glob("group_*.html"))
-                if not group_html:
-                    safe_print(
-                        "  Warning: MRIQC group returned success but no group_*.html files were found.",
-                        flush=True,
-                    )
-            except Exception:
-                pass
-        else:
-            # Print a larger tail of the error; full stderr is often needed to debug group failures.
-            tail = (grp_err or "")[-1200:]
-            safe_print(f"  MRIQC group warning: {tail}", flush=True)
+            if grp_ok:
+                safe_print(
+                    f"  Group reports: {mriqc_dir}/group_T1w.html, group_bold.html",
+                    flush=True,
+                )
+                # Defensive check: some failures can exit "success" but not write group outputs.
+                try:
+                    group_html = list(Path(mriqc_dir).glob("group_*.html"))
+                    if not group_html:
+                        safe_print(
+                            "  Warning: MRIQC group returned success but no group_*.html files were found.",
+                            flush=True,
+                        )
+                except Exception:
+                    pass
+            else:
+                # Print a larger tail of the error; full stderr is often needed to debug group failures.
+                tail = (grp_err or "")[-1200:]
+                safe_print(f"  MRIQC group warning: {tail}", flush=True)
 
-        early_iqm = iqm_parser.parse_all_subjects(mriqc_dir)
-        early_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
-        if early_iqm:
-            flagged = [r for r in early_iqm if r.worst_severity != "OK"]
-            safe_print(
-                f"  IQM: {len(early_iqm)} scan(s) analysed, {len(flagged)} with flag(s)",
-                flush=True,
+            early_iqm = iqm_parser.parse_all_subjects(mriqc_dir)
+            early_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
+            if early_iqm:
+                flagged = [r for r in early_iqm if r.worst_severity != "OK"]
+                safe_print(
+                    f"  IQM: {len(early_iqm)} scan(s) analysed, {len(flagged)} with flag(s)",
+                    flush=True,
+                )
+
+            tool_versions = _collect_tool_versions(
+                bids_dir=bids_dir,
+                ran_mriqc=True,
+                ran_fmriprep=False,
             )
-
-        tool_versions = _collect_tool_versions(
-            bids_dir=bids_dir,
-            ran_mriqc=True,
-            ran_fmriprep=False,
-        )
-        mriqc_report_path = generate_mriqc_report(
-            str(mriqc_dir), early_iqm, early_reports,
-            qc_findings=qc_checker.get_all(),
-            output_folder=str(output_folder),
-            researcher_comments=_read_researcher_comments(output_folder),
-            tool_versions=tool_versions,
-        )
-        safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
-        safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
-        report.record_phase_end("  Group report")
-        report.record_phase_end("MRIQC")
+            mriqc_report_path = generate_mriqc_report(
+                str(mriqc_dir), early_iqm, early_reports,
+                qc_findings=qc_checker.get_all(),
+                output_folder=str(output_folder),
+                researcher_comments=_read_researcher_comments(output_folder),
+                tool_versions=tool_versions,
+            )
+            safe_print(f"\n  MRIQC report ready: {mriqc_report_path}", flush=True)
+            safe_print("  >>> Supervisor can review this now while fMRIPrep runs <<<", flush=True)
+            report.record_phase_end("  Group report")
+            report.record_phase_end("MRIQC")
+        except Exception as e:
+            safe_print(f"\n  Warning: MRIQC post-processing/reporting failed: {e}", flush=True)
+            safe_print("  (Continuing to fMRIPrep phase anyway...)", flush=True)
 
         # Clean MRIQC work dir to free disk space before fMRIPrep
         if not args.keep_temp:

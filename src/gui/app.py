@@ -385,6 +385,64 @@ class App(ctk.CTk):
         )
         self.btn_full_pipeline.grid(row=1, column=4, padx=10, pady=(10, 2), sticky="ew")
 
+        # --- Stability & Parallelism Options (New Row) ---
+        self.frame_stability = ctk.CTkFrame(self.frame_actions, fg_color="transparent")
+        self.frame_stability.grid(row=3, column=0, columnspan=5, padx=10, pady=(15, 0), sticky="ew")
+        self.frame_stability.grid_columnconfigure(1, weight=1)
+
+        # Skip MRIQC (Moved to main view for visibility)
+        self.check_skip_mriqc = ctk.CTkCheckBox(
+            self.frame_stability,
+            text="Skip MRIQC (Recommended for memory stability)",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#FFB300"
+        )
+        self.check_skip_mriqc.grid(row=0, column=0, padx=(0, 20), sticky="w")
+        self.check_skip_mriqc.select()
+
+        # Connectivity QC
+        self.check_connectivity = ctk.CTkCheckBox(
+            self.frame_stability,
+            text="Run Connectivity QC",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.check_connectivity.grid(row=0, column=1, padx=(0, 20), sticky="w")
+        self.check_connectivity.select()
+
+        # Parallelism Slider
+        self.label_parallel = ctk.CTkLabel(
+            self.frame_stability,
+            text="Parallel Workers (Subjects):",
+            font=ctk.CTkFont(size=12)
+        )
+        self.label_parallel.grid(row=0, column=2, padx=(20, 10), sticky="e")
+
+        # Determine a safe default for workers (1 worker per 20GB of available RAM)
+        try:
+            from core.utils import get_available_memory_gb
+            avail_gb = get_available_memory_gb()
+            safe_workers = max(int(avail_gb // 20), 1)
+        except:
+            safe_workers = 2
+
+        self.slider_parallel = ctk.CTkSlider(
+            self.frame_stability,
+            from_=1,
+            to=min(multiprocessing.cpu_count(), 12),
+            number_of_steps=min(multiprocessing.cpu_count(), 12) - 1,
+            command=self._update_parallel_label
+        )
+        self.slider_parallel.set(safe_workers)
+        self.slider_parallel.grid(row=0, column=3, padx=5, sticky="ew")
+
+        self.label_parallel_val = ctk.CTkLabel(
+            self.frame_stability,
+            text=str(safe_workers),
+            width=30,
+            font=ctk.CTkFont(size=13, weight="bold")
+        )
+        self.label_parallel_val.grid(row=0, column=4, padx=(5, 0), sticky="w")
+
         # Time estimate / requirement labels (below each button)
         est_font = ctk.CTkFont(size=11)
         est_color = "#888888"
@@ -1638,9 +1696,13 @@ class App(ctk.CTk):
         self.btn_browse_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
+    def _update_parallel_label(self, value):
+        """Update the numeric label for parallel workers as the slider moves."""
+        self.label_parallel_val.configure(text=str(int(value)))
+
     def run_subprocess(self, input_dir, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
-        
+
         # Connectivity QC only mode
         if self._connectivity_only_mode:
             cmd = [
@@ -1657,12 +1719,17 @@ class App(ctk.CTk):
             ]
         else:
             cmd = [
-                sys.executable, str(script_path), 
-                "--input", input_dir, 
+                sys.executable, str(script_path),
+                "--input", input_dir,
                 "--output_dir", output_dir
             ]
 
+        # Add parallelism from slider
+        parallel_workers = int(self.slider_parallel.get())
+        cmd.extend(["--parallel", str(parallel_workers)])
+
         if not self._run_bids:
+
             cmd.append("--skip-bids")
         if not self._run_fmriprep:
             cmd.append("--skip-fmriprep")
@@ -1670,8 +1737,14 @@ class App(ctk.CTk):
             cmd.append("--anonymize")
 
         # Add --skip-mriqc when MRIQC is not requested (MRIQC runs by default)
-        if not getattr(self, '_run_mriqc', True):
+        # Check both the manual _run_mriqc flag and the new GUI checkbox
+        mriqc_requested = getattr(self, '_run_mriqc', True)
+        if not mriqc_requested or self.check_skip_mriqc.get():
             cmd.append("--skip-mriqc")
+
+        # Add --connectivity-qc flag
+        if self.check_connectivity.get():
+            cmd.append("--connectivity-qc")
 
         # Add fMRIPrep options if running fMRIPrep (platform-agnostic via base64 JSON)
         if self._run_fmriprep:
