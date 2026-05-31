@@ -2,6 +2,7 @@ import customtkinter as ctk
 from tkinter import filedialog, END, messagebox
 import subprocess
 import threading
+import multiprocessing
 from pathlib import Path
 import sys
 import os
