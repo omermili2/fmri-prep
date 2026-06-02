@@ -450,8 +450,8 @@ def _load_atlas(atlas_name: str):
         n_rois = 116
         if "200" in atlas_name_lower:
             n_rois = 200
-        elif "400" in atlas_name_lower:
-            n_rois = 400
+        elif "400" in atlas_name_lower or "432" in atlas_name_lower:
+            n_rois = 432
         return _fetch_atlas_offline(n_rois)
 
     elif "aal" in atlas_name_lower:
@@ -574,14 +574,16 @@ def _parse_network_assignments(atlas_labels: List[str]) -> Dict[str, List[int]]:
 
     Schaefer labels: '7Networks_{hemi}_{network}_{region}_{index}'
       -> Split by '_', index 2 = network name (Vis, SomMot, DorsAttn, etc.)
-    Tian labels: 'Tian_*' -> grouped as 'Subcortical'
+    Tian labels: 'Tian_*' or specific S2 keywords -> grouped as 'Subcortical'
 
     Returns:
         Dict mapping network name -> list of ROI indices (0-based)
     """
+    subcortical_keywords = {'HIP', 'AMY', 'THA', 'NAc', 'GP', 'PUT', 'CAU', 'Pallidum'}
     networks: Dict[str, List[int]] = {}
     for i, label in enumerate(atlas_labels):
-        if label.startswith("Tian_") or label.startswith("tian_"):
+        label_upper = label.upper()
+        if label.startswith("Tian_") or label.startswith("tian_") or any(k in label_upper for k in subcortical_keywords):
             net = "Subcortical"
         else:
             parts = label.split("_")
