@@ -385,6 +385,84 @@ class App(ctk.CTk):
         )
         self.btn_full_pipeline.grid(row=1, column=4, padx=10, pady=(10, 2), sticky="ew")
 
+        # --- Stability & Advanced Options (Main Dashboard) ---
+        self.frame_stability = ctk.CTkFrame(self.frame_actions, fg_color="transparent")
+        self.frame_stability.grid(row=3, column=0, columnspan=5, padx=10, pady=(15, 0), sticky="ew")
+        
+        # Column 0: Skip MRIQC
+        self.check_skip_mriqc = ctk.CTkCheckBox(
+            self.frame_stability,
+            text="Skip MRIQC",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color="#FFB300"
+        )
+        self.check_skip_mriqc.grid(row=0, column=0, padx=(0, 15), sticky="w")
+        self.check_skip_mriqc.select()
+
+        # Column 1: Connectivity QC
+        self.check_connectivity = ctk.CTkCheckBox(
+            self.frame_stability,
+            text="Connectivity QC",
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.check_connectivity.grid(row=0, column=1, padx=(0, 15), sticky="w")
+        self.check_connectivity.select()
+
+        # Column 2: Strategy Dropdown
+        self.label_strat = ctk.CTkLabel(self.frame_stability, text="Strategy:", font=ctk.CTkFont(size=11))
+        self.label_strat.grid(row=0, column=2, padx=(10, 2), sticky="e")
+        self.combo_strategy = ctk.CTkComboBox(
+            self.frame_stability,
+            values=["anatomical", "global", "both"],
+            width=100,
+            font=ctk.CTkFont(size=11)
+        )
+        self.combo_strategy.set("anatomical")
+        self.combo_strategy.grid(row=0, column=3, padx=(0, 15), sticky="w")
+
+        # Column 3: Atlas Dropdown
+        self.label_atlas = ctk.CTkLabel(self.frame_stability, text="Atlas:", font=ctk.CTkFont(size=11))
+        self.label_atlas.grid(row=0, column=4, padx=(10, 2), sticky="e")
+        self.combo_atlas = ctk.CTkComboBox(
+            self.frame_stability,
+            values=["Schaefer-116", "Schaefer-432 (Amir's)"],
+            width=120,
+            font=ctk.CTkFont(size=11)
+        )
+        self.combo_atlas.set("Schaefer-116")
+        self.combo_atlas.grid(row=0, column=5, padx=(0, 15), sticky="w")
+
+        # Column 4: Parallel Workers
+        self.label_parallel = ctk.CTkLabel(self.frame_stability, text="Parallel:", font=ctk.CTkFont(size=11))
+        self.label_parallel.grid(row=0, column=6, padx=(10, 2), sticky="e")
+        
+        # Safe default: 1 worker per 20GB RAM
+        try:
+            from core.utils import get_available_memory_gb
+            avail_gb = get_available_memory_gb()
+            safe_workers = max(int(avail_gb // 20), 1)
+        except:
+            safe_workers = 2
+
+        self.slider_parallel = ctk.CTkSlider(
+            self.frame_stability,
+            from_=1,
+            to=min(multiprocessing.cpu_count(), 12),
+            number_of_steps=min(multiprocessing.cpu_count(), 12) - 1,
+            width=80,
+            command=self._update_parallel_label
+        )
+        self.slider_parallel.set(safe_workers)
+        self.slider_parallel.grid(row=0, column=7, padx=5, sticky="ew")
+
+        self.label_parallel_val = ctk.CTkLabel(
+            self.frame_stability,
+            text=str(safe_workers),
+            width=20,
+            font=ctk.CTkFont(size=12, weight="bold")
+        )
+        self.label_parallel_val.grid(row=0, column=8, sticky="w")
+
         # Time estimate / requirement labels (below each button)
         est_font = ctk.CTkFont(size=11)
         est_color = "#888888"
@@ -1638,15 +1716,18 @@ class App(ctk.CTk):
         self.btn_browse_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
+    def _update_parallel_label(self, value):
+        """Update the numeric label for parallel workers as the slider moves."""
+        self.label_parallel_val.configure(text=str(int(value)))
+
     def run_subprocess(self, input_dir, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
-        
+
         # Connectivity QC only mode
         if self._connectivity_only_mode:
             cmd = [
                 sys.executable, str(script_path),
-                "--qc-only", "--bids-folder", self._connectivity_bids_folder,
-                "--connectivity-qc"
+                "--qc-only", "--bids-folder", self._connectivity_bids_folder
             ]
             self._connectivity_only_mode = False
         # For fMRIPrep-only mode, use the BIDS folder as input
@@ -1657,12 +1738,36 @@ class App(ctk.CTk):
             ]
         else:
             cmd = [
-                sys.executable, str(script_path), 
-                "--input", input_dir, 
+                sys.executable, str(script_path),
+                "--input", input_dir,
                 "--output_dir", output_dir
             ]
 
+        # Add parallelism from slider
+        parallel_workers = int(self.slider_parallel.get())
+        cmd.extend(["--parallel", str(parallel_workers)])
+
+        # Advanced Connectivity Options
+        if self.check_connectivity.get():
+            cmd.append("--connectivity-qc")
+
+            # Map Atlas
+            atlas_val = self.combo_atlas.get()
+            atlas_flag = "schaefer_432_tian" if "432" in atlas_val else "schaefer_116_tian"
+            cmd.extend(["--connectivity-atlas", atlas_flag])
+
+            # Map Strategy
+            strat_val = self.combo_strategy.get()
+            strat_flag = "scrubbing" if strat_val == "anatomical" else strat_val
+            cmd.extend(["--connectivity-strategy", strat_flag])
+
+        # MRIQC Handling
+        mriqc_requested = getattr(self, '_run_mriqc', True)
+        if not mriqc_requested or self.check_skip_mriqc.get():
+            cmd.append("--skip-mriqc")
+
         if not self._run_bids:
+
             cmd.append("--skip-bids")
         if not self._run_fmriprep:
             cmd.append("--skip-fmriprep")

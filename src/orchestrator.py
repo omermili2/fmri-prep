@@ -969,6 +969,10 @@ Examples:
                         help="Skip MRIQC image quality assessment (runs by default)")
     parser.add_argument("--connectivity-qc", action="store_true",
                         help="Run connectivity quality assessment (requires nilearn, analyzes motion-connectivity coupling)")
+    parser.add_argument("--connectivity-atlas", type=str, default="schaefer_116_tian",
+                        help="Atlas for connectivity analysis (e.g. 'schaefer_116_tian' or 'schaefer_432_tian')")
+    parser.add_argument("--connectivity-strategy", type=str, default="scrubbing",
+                        help="Denoising strategy for connectivity: 'scrubbing' (anatomical), 'global' (GSR), or 'both'")
     parser.add_argument("--qc-only", action="store_true",
                         help="Run QC analysis only on an existing output folder (use with --bids-folder)")
     parser.add_argument("--researcher-comments", type=str, default="",
@@ -1658,7 +1662,7 @@ Examples:
 
     # Layer 4: Connectivity QC (runs automatically when fMRIPrep output exists)
     connectivity_results = []
-    if not args.skip_fmriprep:
+    if args.connectivity_qc or not args.skip_fmriprep:
         try:
             from .qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
         except ImportError:
@@ -1666,31 +1670,37 @@ Examples:
 
         if CONNECTIVITY_QC_AVAILABLE:
             report.record_phase_start("Connectivity QC")
-            safe_print("Running connectivity quality assessment (scrubbing strategy)...", flush=True)
-            connectivity_results = connectivity_qc.analyze_all_subjects(
-                derivatives_dir,
-                bids_dir,
-                atlas='schaefer_116_tian',
-                mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", []))
-            )
-            if connectivity_results:
-                failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
-                warned = [r for r in connectivity_results if r.worst_severity == "WARNING"]
-                ok_conn = [r for r in connectivity_results if r.worst_severity == "OK"]
-                safe_print(
-                    f"    Connectivity: {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
-                    flush=True,
+            
+            # Determine strategies to run
+            strategies = ['scrubbing', 'global'] if args.connectivity_strategy == 'both' else [args.connectivity_strategy]
+            
+            for strat in strategies:
+                label = "anatomical" if strat == "scrubbing" else "global signal regression"
+                safe_print(f"Running connectivity quality assessment (strategy: {label})...", flush=True)
+                
+                results = connectivity_qc.analyze_all_subjects(
+                    derivatives_dir,
+                    bids_dir,
+                    atlas=args.connectivity_atlas,
+                    mni_space=_pick_mni_space(fmriprep_opts.get("output_spaces", [])),
+                    strategy=strat
                 )
-                for r in failed:
+                connectivity_results.extend(results)
+                
+                if results:
+                    failed = [r for r in results if r.worst_severity == "ERROR"]
+                    warned = [r for r in results if r.worst_severity == "WARNING"]
+                    ok_conn = [r for r in results if r.worst_severity == "OK"]
                     safe_print(
-                        f"    [CONN-ERROR] sub-{r.sub_id}/ses-{r.ses_id} [{r.run_label}]: "
-                        f"FD={r.mean_fd:.2f}mm, {r.pct_censored:.0f}% censored, {r.usable_minutes:.1f}min usable",
+                        f"    Connectivity ({strat}): {len(ok_conn)} OK, {len(warned)} warning(s), {len(failed)} failed",
                         flush=True,
                     )
+            
             report.record_phase_end("Connectivity QC")
         else:
-            safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
-            safe_print("  Install with: pip install nilearn nibabel", flush=True)
+            if args.connectivity_qc:
+                safe_print("  Connectivity QC skipped (Nilearn not installed)", flush=True)
+                safe_print("  Install with: pip install nilearn nibabel", flush=True)
 
     # MRIQC IQM parsing (for final comprehensive report)
     # Group report already generated after early MRIQC phase —

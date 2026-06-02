@@ -97,6 +97,7 @@ def analyze_all_subjects(
     bids_dir=None,
     atlas='schaefer_116_tian',
     mni_space='MNI152NLin2009cAsym',
+    strategy='scrubbing',
 ) -> List[ConnectivityQCResult]:
     """
     Analyse connectivity quality for all preprocessed BOLD runs.
@@ -104,8 +105,9 @@ def analyze_all_subjects(
     Args:
         derivatives_dir: fMRIPrep derivatives directory.
         bids_dir: BIDS directory (unused here — kept for API compat).
-        atlas: Atlas name ('schaefer_116_tian', 'schaefer_200', etc.).
+        atlas: Atlas name ('schaefer_116_tian', 'schaefer_432_tian', etc.).
         mni_space: MNI template space to match BOLD files.
+        strategy: Denoising strategy ('scrubbing' for anatomical, 'global' for GSR).
 
     Returns:
         List of ConnectivityQCResult objects.
@@ -148,6 +150,7 @@ def analyze_all_subjects(
             atlas_img=atlas_img,
             atlas_labels=atlas_labels,
             atlas_name=atlas,
+            strategy=strategy,
             output_dir=deriv_path,
         )
         if result is not None:
@@ -188,6 +191,7 @@ def _analyze_single_run(
     atlas_img,
     atlas_labels,
     atlas_name: str,
+    strategy: str = 'scrubbing',
     output_dir: Optional[Path] = None,
 ) -> Optional[ConnectivityQCResult]:
     """Analyse connectivity quality for a single BOLD run."""
@@ -208,9 +212,11 @@ def _analyze_single_run(
             if not p.startswith("sub-") and not p.startswith("ses-")
         )
 
-        # --- Load confounds via Nilearn's scrubbing strategy ---
+        # --- Load confounds via Nilearn ---
+        # Note: 'global' strategy includes Global Signal Regression (basic)
+        gsr = "basic" if strategy == "global" else None
         confounds, sample_mask = load_confounds_strategy(
-            str(bold_path), denoise_strategy="scrubbing"
+            str(bold_path), denoise_strategy="scrubbing", global_signal=gsr
         )
 
         # --- NIfTI header: total volumes and TR ---
@@ -225,9 +231,6 @@ def _analyze_single_run(
         usable_minutes = (usable_volumes * tr_sec) / 60.0
 
         # --- Mean FD from the raw confounds TSV ---
-        # load_confounds_strategy returns only selected regressors, which
-        # typically does not include framewise_displacement.  Read FD
-        # directly from the sibling confounds TSV instead.
         mean_fd = 0.0
         confounds_tsv = _find_confounds_tsv(bold_path)
         if confounds_tsv is not None:
@@ -270,7 +273,7 @@ def _analyze_single_run(
             connectivity_ready=ready,
             worst_severity=severity,
             rescan_warning=rescan,
-            atlas_name=atlas_name,
+            atlas_name=f"{atlas_name} ({strategy})",
             n_rois=n_rois,
         )
 
@@ -302,6 +305,7 @@ def _analyze_single_run(
             _save_connectivity_outputs(
                 output_dir, sub_id, ses_id, run_label,
                 connectivity_matrix, time_series, atlas_labels,
+                strategy=strategy
             )
 
         # --- Heatmaps ---
@@ -363,10 +367,12 @@ _ATLAS_DATA_DIR = Path(__file__).parent / "atlas_data"
 
 _BUNDLED_ATLAS_LABELS = {
     116: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_Tian_S1_order.txt",
+    432: _ATLAS_DATA_DIR / "Schaefer2018_400Parcels_7Networks_Tian_S2_order.txt",
 }
 
 _BUNDLED_ATLAS_NIFTI = {
     116: _ATLAS_DATA_DIR / "Schaefer2018_100Parcels_7Networks_order_Tian_Subcortex_S1_3T_MNI152NLin2009cAsym_2mm.nii.gz",
+    432: _ATLAS_DATA_DIR / "Schaefer2018_400Parcels_7Networks_order_Tian_Subcortex_S2_3T_MNI152NLin2009cAsym_2mm.nii.gz",
 }
 
 
@@ -456,6 +462,7 @@ def _save_connectivity_outputs(
     connectivity_matrix: np.ndarray,
     time_series: np.ndarray,
     atlas_labels: List[str],
+    strategy: str = 'scrubbing'
 ) -> None:
     """Save connectivity matrix, time series, and ROI labels to derivatives."""
     try:
@@ -463,11 +470,14 @@ def _save_connectivity_outputs(
         conn_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = f"sub-{sub_id}_ses-{ses_id}_{run_label}" if run_label else f"sub-{sub_id}_ses-{ses_id}"
+        
+        # Append strategy to filename for clarity
+        strat_suffix = f"_desc-{strategy}"
 
-        np.save(conn_dir / f"{prefix}_connectivity.npy", connectivity_matrix)
-        np.save(conn_dir / f"{prefix}_timeseries.npy", time_series)
+        np.save(conn_dir / f"{prefix}{strat_suffix}_connectivity.npy", connectivity_matrix)
+        np.save(conn_dir / f"{prefix}{strat_suffix}_timeseries.npy", time_series)
 
-        labels_path = conn_dir / f"{prefix}_labels.txt"
+        labels_path = conn_dir / f"{prefix}{strat_suffix}_labels.txt"
         labels_path.write_text("\n".join(atlas_labels))
     except Exception:
         pass  # Non-critical — don't fail the analysis
