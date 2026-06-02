@@ -1,3 +1,5 @@
+import multiprocessing
+
 import customtkinter as ctk
 from tkinter import filedialog, END, messagebox
 import subprocess
