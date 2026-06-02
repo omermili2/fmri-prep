@@ -573,6 +573,11 @@ class App(ctk.CTk):
         self.is_running = False
         
 
+    @property
+    def primary_input(self):
+        """Returns the first input folder or empty string."""
+        return self.input_folders[0] if self.input_folders else ""
+
     def add_input_folder(self):
         folder = filedialog.askdirectory(title="Add Source Folder")
         if folder:
@@ -628,7 +633,7 @@ class App(ctk.CTk):
 
     def browse_output(self):
         initial_dir = None
-        input_dir = self.entry_input.get().strip()
+        input_dir = self.primary_input
         if input_dir:
             try:
                 initial_dir = str(Path(input_dir).resolve().parent)
@@ -822,7 +827,7 @@ class App(ctk.CTk):
         require both Source AND Output folders.  Buttons that operate on existing
         data (fMRIPrep Only, Connectivity QC Only) only require Source.
         """
-        input_dir = self.entry_input.get().strip()
+        input_dir = self.primary_input
         output_dir = self.entry_output.get().strip()
         has_output = bool(output_dir)
 
@@ -928,7 +933,7 @@ class App(ctk.CTk):
 
     def _update_time_estimates(self):
         """Scan the source folder and update dataset summary + time labels."""
-        input_dir = self.entry_input.get().strip()
+        input_dir = self.primary_input
 
         if not input_dir or not Path(input_dir).is_dir():
             self.label_dataset_summary.grid_remove()
@@ -1491,7 +1496,7 @@ class App(ctk.CTk):
 
     def _validate_paths(self):
         """Validate input and output paths before running."""
-        input_dir = self.entry_input.get().strip()
+        input_dir = self.primary_input
         output_dir = self.entry_output.get().strip()
 
         if not input_dir:
@@ -1569,7 +1574,7 @@ class App(ctk.CTk):
 
     def run_connectivity_qc_only(self):
         """Run connectivity QC (Nilearn) on an existing fMRIPrep output folder."""
-        source_folder = self.entry_input.get().strip()
+        source_folder = self.primary_input
 
         if not source_folder:
             self.console.log("Please select a Source folder containing fMRIPrep output.", "warning")
@@ -1623,7 +1628,7 @@ class App(ctk.CTk):
                 self._toggle_fmriprep_options()
             return
 
-        source_folder = self.entry_input.get().strip()
+        source_folder = self.primary_input
 
         if not source_folder:
             self.console.log("Please select a Source folder containing BIDS data.", "warning")
@@ -1742,7 +1747,7 @@ class App(ctk.CTk):
                 return
             bids_folder = None
 
-        input_dir = self.entry_input.get().strip()
+        input_dir = self.primary_input
         output_dir = self.entry_output.get().strip()
 
         self.is_running = True
