@@ -102,27 +102,43 @@ class App(ctk.CTk):
         self.frame_config.grid(row=1, column=0, padx=20, pady=10, sticky="ew")
         self.frame_config.grid_columnconfigure(1, weight=1)
 
-        # Input Directory
+        # Input Directory (Multi-Folder Support)
         self.label_input = ctk.CTkLabel(
             self.frame_config, 
-            text="Source Folder:",
+            text="Source Folders:",
             font=ctk.CTkFont(weight="bold")
         )
-        self.label_input.grid(row=0, column=0, padx=15, pady=15, sticky="w")
+        self.label_input.grid(row=0, column=0, padx=15, pady=(15, 0), sticky="nw")
         
-        self.entry_input = ctk.CTkEntry(
-            self.frame_config, 
-            placeholder_text="DICOM folder, BIDS dataset, or previous pipeline output"
-        )
-        self.entry_input.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
+        # Scrollable frame for input folders
+        self.frame_input_list = ctk.CTkScrollableFrame(self.frame_config, height=100)
+        self.frame_input_list.grid(row=0, column=1, padx=10, pady=15, sticky="ew")
+        self.frame_input_list.grid_columnconfigure(0, weight=1)
         
-        self.btn_browse_input = ctk.CTkButton(
-            self.frame_config, 
-            text="Browse", 
+        self.input_folders = []
+        self._input_labels = []
+
+        # Buttons for input
+        self.frame_input_btns = ctk.CTkFrame(self.frame_config, fg_color="transparent")
+        self.frame_input_btns.grid(row=0, column=2, padx=15, pady=15, sticky="n")
+
+        self.btn_add_input = ctk.CTkButton(
+            self.frame_input_btns, 
+            text="Add Folder", 
             width=100, 
-            command=self.browse_input
+            command=self.add_input_folder
         )
-        self.btn_browse_input.grid(row=0, column=2, padx=15, pady=15)
+        self.btn_add_input.pack(pady=(0, 5))
+
+        self.btn_clear_input = ctk.CTkButton(
+            self.frame_input_btns, 
+            text="Clear All", 
+            width=100, 
+            fg_color="#D32F2F",
+            hover_color="#B71C1C",
+            command=self.clear_input_folders
+        )
+        self.btn_clear_input.pack()
 
         # Output Directory
         self.label_output = ctk.CTkLabel(
@@ -557,11 +573,56 @@ class App(ctk.CTk):
         self.is_running = False
         
 
-    def browse_input(self):
-        folder = filedialog.askdirectory(title="Select Source Folder")
+    def add_input_folder(self):
+        folder = filedialog.askdirectory(title="Add Source Folder")
         if folder:
-            self.entry_input.delete(0, "end")
-            self.entry_input.insert(0, folder)
+            folder_path = str(Path(folder).resolve())
+            if folder_path not in self.input_folders:
+                self.input_folders.append(folder_path)
+                self._refresh_input_list()
+                self._update_output_info()
+                self._update_button_states()
+
+    def clear_input_folders(self):
+        self.input_folders = []
+        self._refresh_input_list()
+        self._update_output_info()
+        self._update_button_states()
+
+    def _refresh_input_list(self):
+        # Clear existing widgets in the frame
+        for widget in self.frame_input_list.winfo_children():
+            widget.destroy()
+        
+        if not self.input_folders:
+            lbl = ctk.CTkLabel(self.frame_input_list, text="No folders selected", text_color="gray")
+            lbl.pack(pady=10)
+            return
+
+        for i, path in enumerate(self.input_folders):
+            row_frame = ctk.CTkFrame(self.frame_input_list, fg_color="transparent")
+            row_frame.pack(fill="x", padx=5, pady=2)
+            
+            # Use a shorter display path if it's very long
+            display_path = path
+            if len(path) > 60:
+                display_path = "..." + path[-57:]
+                
+            lbl = ctk.CTkLabel(row_frame, text=f"{i+1}. {display_path}", anchor="w")
+            lbl.pack(side="left", fill="x", expand=True)
+            
+            # Individual remove button
+            btn = ctk.CTkButton(
+                row_frame, text="X", width=25, height=20, 
+                fg_color="#D32F2F", hover_color="#B71C1C",
+                command=lambda p=path: self._remove_input_folder(p)
+            )
+            btn.pack(side="right", padx=5)
+
+    def _remove_input_folder(self, path):
+        if path in self.input_folders:
+            self.input_folders.remove(path)
+            self._refresh_input_list()
             self._update_output_info()
             self._update_button_states()
 
@@ -1519,22 +1580,31 @@ class App(ctk.CTk):
             self.console.log(f"Folder does not exist: {source_folder}", "warning")
             return
 
-        # Auto-select most recent output_* subfolder if needed
-        output_subfolders = [p for p in bids_path.iterdir()
-                             if p.is_dir() and p.name.startswith("output_")]
-        if output_subfolders:
-            most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
-            bids_path = most_recent.resolve()
-            self.console.log(f"Using output folder: {most_recent.name}", "info")
+        # Check if this is a subject folder or contains subject folders
+        is_subject_folder = bids_path.name.startswith("sub-")
+        has_subject_subfolders = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
+        
+        if not is_subject_folder and not has_subject_subfolders:
+            # Auto-select most recent output_* subfolder if needed (standard pipeline behavior)
+            output_subfolders = [p for p in bids_path.iterdir()
+                                 if p.is_dir() and p.name.startswith("output_")]
+            if output_subfolders:
+                most_recent = max(output_subfolders, key=lambda p: p.stat().st_mtime)
+                bids_path = most_recent.resolve()
+                self.console.log(f"Using output folder: {most_recent.name}", "info")
+                is_subject_folder = bids_path.name.startswith("sub-")
+                has_subject_subfolders = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
 
-        has_subjects = any(p.name.startswith("sub-") and p.is_dir() for p in bids_path.iterdir())
-        if not has_subjects:
-            self.console.log("No 'sub-*' folders found. Select a folder with pipeline output.", "warning")
+        if not is_subject_folder and not has_subject_subfolders:
+            self.console.log("No 'sub-*' folders found. Select a subject folder or a folder with pipeline output.", "warning")
             return
 
+        # Check for derivatives or just raw fMRIPrep files (relaxed check)
         derivatives = bids_path / "derivatives"
-        if not derivatives.exists():
-            self.console.log("No 'derivatives/' folder found. fMRIPrep must run before Connectivity QC.", "warning")
+        has_fmriprep_files = any(p.name in ["anat", "func"] or p.name.startswith("ses-") for p in bids_path.iterdir())
+        
+        if not derivatives.exists() and not has_fmriprep_files and not is_subject_folder:
+            self.console.log("No 'derivatives/' or fMRIPrep files found.", "warning")
             return
 
         self._run_bids = False

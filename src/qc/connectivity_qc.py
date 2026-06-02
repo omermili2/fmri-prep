@@ -103,7 +103,7 @@ def analyze_all_subjects(
     Analyse connectivity quality for all preprocessed BOLD runs.
 
     Args:
-        derivatives_dir: fMRIPrep derivatives directory.
+        derivatives_dir: fMRIPrep derivatives directory or a single subject folder.
         bids_dir: BIDS directory (unused here — kept for API compat).
         atlas: Atlas name ('schaefer_116_tian', 'schaefer_432_tian', etc.).
         mni_space: MNI template space to match BOLD files.
@@ -125,6 +125,7 @@ def analyze_all_subjects(
     deriv_path = Path(derivatives_dir)
 
     # Search for preprocessed BOLD files
+    # Support both standard 'derivatives/fmriprep/sub-X' and direct 'sub-X' folders
     search_roots = [
         deriv_path / "fmriprep",
         deriv_path,
@@ -132,26 +133,41 @@ def analyze_all_subjects(
 
     seen_paths: set = set()
     bold_files: List[Path] = []
-    for root in search_roots:
-        if not root.exists():
-            continue
-        for bold_path in sorted(
-            root.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")
-        ):
+    
+    # 1. First, check if the provided path IS the subject folder itself (no 'derivatives' wrapper)
+    if deriv_path.name.startswith("sub-"):
+        for bold_path in sorted(deriv_path.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")):
             resolved = bold_path.resolve()
             if resolved not in seen_paths:
                 seen_paths.add(resolved)
                 bold_files.append(bold_path)
+    
+    # 2. Otherwise, scan recursively for all subjects
+    if not bold_files:
+        for root in search_roots:
+            if not root.exists():
+                continue
+            for bold_path in sorted(
+                root.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")
+            ):
+                resolved = bold_path.resolve()
+                if resolved not in seen_paths:
+                    seen_paths.add(resolved)
+                    bold_files.append(bold_path)
 
     results: List[ConnectivityQCResult] = []
     for bold_path in bold_files:
+        # Determine appropriate output directory: 
+        # if input was a subject folder, save connectivity inside it; otherwise follow standard derivatives.
+        target_out = deriv_path if deriv_path.name.startswith("sub-") else deriv_path
+        
         result = _analyze_single_run(
             bold_path,
             atlas_img=atlas_img,
             atlas_labels=atlas_labels,
             atlas_name=atlas,
             strategy=strategy,
-            output_dir=deriv_path,
+            output_dir=target_out,
         )
         if result is not None:
             results.append(result)
