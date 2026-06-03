@@ -1779,7 +1779,7 @@ class App(ctk.CTk):
         # Run in background thread
         threading.Thread(
             target=self.run_subprocess, 
-            args=(input_dir, output_dir, bids_folder), 
+            args=(self.input_folders, output_dir, bids_folder), 
             daemon=True
         ).start()
 
@@ -1790,14 +1790,15 @@ class App(ctk.CTk):
         self.btn_fmriprep_only.configure(state=state)
         self.btn_connectivity_qc.configure(state=state)
         self.btn_full_pipeline.configure(state=state)
-        self.btn_browse_input.configure(state=state)
+        self.btn_add_input.configure(state=state)
+        self.btn_clear_input.configure(state=state)
         self.btn_browse_output.configure(state=state)
 
     def _update_parallel_label(self, value):
         """Update the numeric label for parallel workers as the slider moves."""
         self.label_parallel_val.configure(text=str(int(value)))
 
-    def run_subprocess(self, input_dir, output_dir, bids_folder=None):
+    def run_subprocess(self, input_folders, output_dir, bids_folder=None):
         script_path = Path(__file__).parent.parent / "orchestrator.py"
 
         # Connectivity QC only mode
@@ -1814,9 +1815,11 @@ class App(ctk.CTk):
                 "--bids-folder", bids_folder
             ]
         else:
+            # Join multiple input folders with commas for the orchestrator
+            input_str = ",".join(input_folders)
             cmd = [
                 sys.executable, str(script_path),
-                "--input", input_dir,
+                "--input", input_str,
                 "--output_dir", output_dir
             ]
 

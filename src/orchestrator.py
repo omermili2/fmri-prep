@@ -1065,25 +1065,30 @@ Examples:
                     safe_print("dataset_description.json now exists", flush=True)
                 else:
                     safe_print(f"Warning: Could not create dataset_description.json", flush=True)
-    else:
-        input_root = Path(args.input).resolve()
-    base_output = Path(args.output_dir).resolve()
+    # Handle multiple input roots
+    input_roots = [Path(p.strip()).resolve() for p in args.input.split(',')] if args.input else []
+    input_root = input_roots[0] if input_roots else Path(".") # Primary root for report
+    base_output = Path(args.output_dir).resolve() if args.output_dir else None
     
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_folder = base_output / f"output_{timestamp}"
-    output_folder.mkdir(parents=True, exist_ok=True)
+    if base_output:
+        output_folder = base_output / f"output_{timestamp}"
+        output_folder.mkdir(parents=True, exist_ok=True)
+    else:
+        output_folder = None
     
     # BIDS output goes directly in output folder
     bids_dir = output_folder
-    derivatives_dir = output_folder / "derivatives"
+    derivatives_dir = output_folder / "derivatives" if output_folder else None
     
     fmriprep_script = project_root / "src" / "fmriprep" / "runner.py"
     
     # Create debug log file for detailed error tracking (in derivatives/, not the BIDS root,
     # so the BIDS validator does not flag it as an unrecognised file)
-    derivatives_dir.mkdir(parents=True, exist_ok=True)
+    if derivatives_dir:
+        derivatives_dir.mkdir(parents=True, exist_ok=True)
     debug_log_file = None
-    if not args.skip_fmriprep:
+    if not args.skip_fmriprep and derivatives_dir:
         debug_log_file = derivatives_dir / "fmriprep_debug.log"
         if debug_log_file.exists():
             debug_log_file.unlink()  # Remove old log if exists
@@ -1091,13 +1096,15 @@ Examples:
         safe_print(f"Debug log: {debug_log_file}", flush=True)
 
     # Execution logs folder — keeps both the raw and structured logs together
-    logs_folder = output_folder / "execution_logs"
-    logs_folder.mkdir(parents=True, exist_ok=True)
+    logs_folder = output_folder / "execution_logs" if output_folder else None
+    if logs_folder:
+        logs_folder.mkdir(parents=True, exist_ok=True)
 
     # Start raw execution log — mirrors all safe_print() output to disk
-    execution_log = logs_folder / "raw_execution_log.log"
-    set_log_file(execution_log)
-    safe_print(f"Execution logs: {logs_folder}", flush=True)
+    if logs_folder:
+        execution_log = logs_folder / "raw_execution_log.log"
+        set_log_file(execution_log)
+        safe_print(f"Execution logs: {logs_folder}", flush=True)
 
     # Decode researcher comments (base64-encoded from GUI, or plain text from CLI)
     # and seed the comments file.  The GUI (or user) may update this file while
@@ -1173,41 +1180,44 @@ Examples:
                     "dicom_path": None  # Not needed for fMRIPrep-only mode
                 })
     elif args.subject and args.session:
-        tasks.append({
-            "sub_id": sanitize_id(args.subject),
-            "ses_id": args.session,
-            "dicom_path": input_root
-        })
+        for root in input_roots:
+            tasks.append({
+                "sub_id": sanitize_id(args.subject),
+                "ses_id": args.session,
+                "dicom_path": root
+            })
     elif args.subject:
         sub_id = sanitize_id(args.subject)
-        sessions = find_sessions(input_root)
-        for ses_id, ses_path in sessions:
-            tasks.append({
-                "sub_id": sub_id,
-                "ses_id": ses_id,
-                "dicom_path": ses_path
-            })
-    else:
-        safe_print(f"Scanning {input_root} for subjects...", flush=True)
-        
-        for sub_dir in find_subject_folders(input_root):
-            sub_id = sanitize_id(sub_dir.name)
-            if not sub_id:
-                safe_print(f"  Skipping invalid folder name: {sub_dir.name}", flush=True)
-                continue
-            
-            sessions = find_sessions(sub_dir)
-            safe_print(f"  Found subject {sub_id} with {len(sessions)} session(s)", flush=True)
-            
+        for root in input_roots:
+            sessions = find_sessions(root)
             for ses_id, ses_path in sessions:
-                if has_dicom_files(ses_path):
-                    tasks.append({
-                        "sub_id": sub_id,
-                        "ses_id": ses_id,
-                        "dicom_path": ses_path
-                    })
-                else:
-                    safe_print(f"    Warning: No DICOM files found in {ses_path}", flush=True)
+                tasks.append({
+                    "sub_id": sub_id,
+                    "ses_id": ses_id,
+                    "dicom_path": ses_path
+                })
+    else:
+        for root in input_roots:
+            safe_print(f"Scanning {root} for subjects...", flush=True)
+            
+            for sub_dir in find_subject_folders(root):
+                sub_id = sanitize_id(sub_dir.name)
+                if not sub_id:
+                    safe_print(f"  Skipping invalid folder name: {sub_dir.name}", flush=True)
+                    continue
+                
+                sessions = find_sessions(sub_dir)
+                safe_print(f"  Found subject {sub_id} with {len(sessions)} session(s)", flush=True)
+                
+                for ses_id, ses_path in sessions:
+                    if has_dicom_files(ses_path):
+                        tasks.append({
+                            "sub_id": sub_id,
+                            "ses_id": ses_id,
+                            "dicom_path": ses_path
+                        })
+                    else:
+                        safe_print(f"    Warning: No DICOM files found in {ses_path}", flush=True)
 
     if not tasks:
         safe_print("No subjects/sessions found to process.", flush=True)
