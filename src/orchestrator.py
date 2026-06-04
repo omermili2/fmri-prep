@@ -813,7 +813,9 @@ def run_qc_only(input_folder: Path, run_mriqc: bool = False, atlas: str = 'schae
         safe_print("No sub-*/ses-* structure found. Is this a valid BIDS output folder?", flush=True)
         sys.exit(1)
 
-    safe_print(f"Found {len(sessions)} session(s) across {len({s[0] for s in sessions})} subject(s)", flush=True)
+    unique_subjects = sorted({s[0] for s in sessions})
+    safe_print(f"Found {len(sessions)} session(s) across {len(unique_subjects)} subject(s)", flush=True)
+    safe_print(f"Processing subjects: {', '.join(unique_subjects)}", flush=True)
 
     # Resolve BIDS root for checker (if we are inside a subject folder, parent is the root)
     bids_dir_for_checker = input_folder.parent if input_folder.name.startswith("sub-") else input_folder
