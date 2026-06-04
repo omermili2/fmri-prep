@@ -132,26 +132,30 @@ def analyze_all_subjects(
         deriv_path / "fmriprep",
         deriv_path,
     ]
+    # If parent has 'derivatives', check there too (for direct subject selection case)
+    if deriv_path.parent.name == "derivatives":
+        search_roots.append(deriv_path.parent)
 
     seen_paths: set = set()
     bold_files: List[Path] = []
     
-    # 1. First, check if the provided path IS the subject folder itself (no 'derivatives' wrapper)
-    if deriv_path.name.startswith("sub-"):
-        for bold_path in sorted(deriv_path.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")):
+    # Scan all roots recursively for any preprocessed BOLD files
+    for root in search_roots:
+        if not root.is_dir():
+            continue
+        for bold_path in sorted(
+            root.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")
+        ):
             resolved = bold_path.resolve()
             if resolved not in seen_paths:
                 seen_paths.add(resolved)
                 bold_files.append(bold_path)
-    
-    # 2. Otherwise, scan recursively for all subjects
+
     if not bold_files:
+        # Fallback: try without the space filter if nothing found (handles non-standard naming)
         for root in search_roots:
-            if not root.exists():
-                continue
-            for bold_path in sorted(
-                root.rglob(f"*space-{mni_space}*_desc-preproc_bold.nii.gz")
-            ):
+            if not root.is_dir(): continue
+            for bold_path in sorted(root.rglob("*_desc-preproc_bold.nii.gz")):
                 resolved = bold_path.resolve()
                 if resolved not in seen_paths:
                     seen_paths.add(resolved)

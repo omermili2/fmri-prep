@@ -774,30 +774,39 @@ def run_qc_only(input_folder: Path, run_mriqc: bool = False, atlas: str = 'schae
     else:
         derivatives_dir = input_folder / "derivatives" # Standard fallback
 
-    # Discover subjects/sessions from BIDS structure
+    # Discover subjects/sessions recursively from the input folder
     sessions = []
     
-    # Case 1: The folder itself is a subject folder (e.g. sub-010)
+    # Scan for all sub-* directories
+    sub_dirs = []
     if input_folder.name.startswith("sub-"):
-        sub_id = input_folder.name.replace("sub-", "")
-        ses_dirs = sorted(d for d in input_folder.iterdir() if d.is_dir() and d.name.startswith("ses-"))
+        sub_dirs = [input_folder]
+    else:
+        # Look for sub-* folders at the top level and inside derivatives/
+        sub_dirs = list(input_folder.glob("sub-*"))
+        if (input_folder / "derivatives").is_dir():
+            sub_dirs.extend((input_folder / "derivatives").glob("sub-*"))
+        if (input_folder / "derivatives" / "fmriprep").is_dir():
+            sub_dirs.extend((input_folder / "derivatives" / "fmriprep").glob("sub-*"))
+            
+    # Clean up duplicates and ensure they are directories
+    seen_subs = set()
+    final_sub_dirs = []
+    for d in sub_dirs:
+        if d.is_dir() and d.name not in seen_subs:
+            seen_subs.add(d.name)
+            final_sub_dirs.append(d)
+
+    for sub_dir in sorted(final_sub_dirs):
+        sub_id = sub_dir.name.replace("sub-", "")
+        # Find sessions inside this subject
+        ses_dirs = sorted(d for d in sub_dir.iterdir() if d.is_dir() and d.name.startswith("ses-"))
         if ses_dirs:
             for ses_dir in ses_dirs:
                 sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
         else:
-            sessions.append((sub_id, "01"))
-            
-    # Case 2: Standard BIDS/derivatives root folder
-    else:
-        for sub_dir in sorted(input_folder.iterdir()):
-            if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
-                continue
-            sub_id = sub_dir.name.replace("sub-", "")
-            ses_dirs = sorted(d for d in sub_dir.iterdir() if d.is_dir() and d.name.startswith("ses-"))
-            if ses_dirs:
-                for ses_dir in ses_dirs:
-                    sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
-            else:
+            # Check if there are BOLD files directly in func/ (single session)
+            if (sub_dir / "func").is_dir():
                 sessions.append((sub_id, "01"))
 
     if not sessions:
