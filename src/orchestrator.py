@@ -1050,7 +1050,15 @@ Examples:
     if fmriprep_only_mode:
         # Use existing BIDS folder directly
         bids_dir = bids_folder_path
-        derivatives_dir = bids_dir / "derivatives"
+        
+        # Resolve derivatives directory (could be root/derivatives or the root itself if it's sub-*)
+        if (bids_dir / "derivatives").is_dir():
+            derivatives_dir = bids_dir / "derivatives"
+        elif bids_dir.name.startswith("sub-"):
+            derivatives_dir = bids_dir
+        else:
+            derivatives_dir = bids_dir / "derivatives" # Standard fallback
+            
         output_folder = bids_dir
         input_root = bids_dir  # For report
         

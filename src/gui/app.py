@@ -771,45 +771,64 @@ class App(ctk.CTk):
 
     @staticmethod
     def _has_fmriprep_derivatives(root):
-        """Return True if *root* contains fMRIPrep derivative results.
+        """Return True if *root* or its standard subfolders contain fMRIPrep derivative results.
 
         Looks for the fMRIPrep-specific confounds file
-        (``*_desc-confounds_timeseries.tsv``) under ``derivatives/``.
-        This file is unique to fMRIPrep output and cannot be confused
-        with raw BIDS data or MRIQC results.
+        (``*_desc-confounds_timeseries.tsv``).
 
-        Searches in both ``derivatives/fmriprep/sub-*`` (nipreps layout)
-        and ``derivatives/sub-*`` (flat layout) to cover all variants.
+        This handles cases where:
+        1. root is a BIDS directory containing ``derivatives/``
+        2. root is a derivatives directory containing ``sub-*``
+        3. root is a subject directory ``sub-*`` itself
         """
-        deriv = root / "derivatives"
-        if not deriv.is_dir():
+        if not root or not root.is_dir():
             return False
 
-        # Candidate roots that may contain sub-* result folders
-        search_roots = [deriv]
-        fmriprep_dir = deriv / "fmriprep"
-        if fmriprep_dir.is_dir():
-            search_roots.insert(0, fmriprep_dir)
+        # 1. Check if the root itself is a subject folder
+        if root.name.startswith("sub-"):
+            # sub-*/func/
+            func_dir = root / "func"
+            if func_dir.is_dir():
+                for f in func_dir.iterdir():
+                    if f.name.endswith("_desc-confounds_timeseries.tsv"):
+                        return True
+            # sub-*/ses-*/func/
+            for ses in root.iterdir():
+                if ses.is_dir() and ses.name.startswith("ses-"):
+                    ses_func = ses / "func"
+                    if ses_func.is_dir():
+                        for f in ses_func.iterdir():
+                            if f.name.endswith("_desc-confounds_timeseries.tsv"):
+                                return True
 
-        for search_root in search_roots:
-            for sub in search_root.iterdir():
+        # 2. Check standard result locations
+        search_roots = [root]
+        deriv = root / "derivatives"
+        if deriv.is_dir():
+            search_roots.append(deriv)
+            fmriprep_dir = deriv / "fmriprep"
+            if fmriprep_dir.is_dir():
+                search_roots.append(fmriprep_dir)
+
+        for sr in search_roots:
+            for sub in sr.iterdir():
                 if not (sub.is_dir() and sub.name.startswith("sub-")):
                     continue
-                # Look for confounds TSV up to two levels deep
-                # (sub-*/func/ or sub-*/ses-*/func/)
-                func_dirs = []
-                func_direct = sub / "func"
-                if func_direct.is_dir():
-                    func_dirs.append(func_direct)
+                
+                # Check sub/func/
+                func_dir = sub / "func"
+                if func_dir.is_dir():
+                    for f in func_dir.iterdir():
+                        if f.name.endswith("_desc-confounds_timeseries.tsv"):
+                            return True
+                # Check sub/ses-*/func/
                 for ses in sub.iterdir():
                     if ses.is_dir() and ses.name.startswith("ses-"):
                         ses_func = ses / "func"
                         if ses_func.is_dir():
-                            func_dirs.append(ses_func)
-                for func_dir in func_dirs:
-                    for f in func_dir.iterdir():
-                        if f.name.endswith("_desc-confounds_timeseries.tsv"):
-                            return True
+                            for f in ses_func.iterdir():
+                                if f.name.endswith("_desc-confounds_timeseries.tsv"):
+                                    return True
         return False
 
     # ------------------------------------------------------------------
