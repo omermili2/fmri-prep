@@ -301,8 +301,21 @@ class BIDSQualityChecker:
         anat_dir = session_path / "anat"
         func_dir = session_path / "func"
 
-        has_t1w = bool(list(anat_dir.glob("*T1w.nii.gz"))) if anat_dir.exists() else False
-        has_bold = bool(list(func_dir.glob("*bold.nii.gz"))) if func_dir.exists() else False
+        # Check for raw or processed T1w
+        has_t1w = False
+        if anat_dir.exists():
+            if list(anat_dir.glob("*T1w.nii.gz")):
+                has_t1w = True
+            elif list(anat_dir.glob("*desc-preproc_T1w.nii.gz")):
+                has_t1w = True
+
+        # Check for raw or processed BOLD
+        has_bold = False
+        if func_dir.exists():
+            if list(func_dir.glob("*bold.nii.gz")):
+                has_bold = True
+            elif list(func_dir.glob("*desc-preproc_bold.nii.gz")):
+                has_bold = True
 
         if not has_t1w:
             findings.append(
@@ -344,6 +357,10 @@ class BIDSQualityChecker:
         findings = []
 
         for nii_file in session_path.rglob("*.nii.gz"):
+            # Skip fMRIPrep derivatives
+            if "desc-" in nii_file.name or "space-" in nii_file.name:
+                continue
+                
             try:
                 size_mb = nii_file.stat().st_size / (1024 * 1024)
             except OSError:
@@ -384,6 +401,10 @@ class BIDSQualityChecker:
             return findings
 
         for bold_file in sorted(func_dir.glob("*bold.nii.gz")):
+            # Skip derivatives
+            if "desc-" in bold_file.name or "space-" in bold_file.name:
+                continue
+                
             n_trs = self._read_nifti_n_trs(bold_file)
             if n_trs is None:
                 continue

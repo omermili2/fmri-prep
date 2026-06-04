@@ -739,7 +739,7 @@ def cleanup_work_dirs(output_folder, report):
         safe_print("  No work directories to clean up", flush=True)
 
 
-def run_qc_only(output_folder: Path, run_mriqc: bool = False):
+def run_qc_only(output_folder: Path, run_mriqc: bool = False, atlas: str = 'schaefer_116_tian', strategy: str = 'scrubbing'):
     """
     Run QC analysis only on an existing pipeline output folder.
 
@@ -852,13 +852,13 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                 from qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
 
             if CONNECTIVITY_QC_AVAILABLE:
-                safe_print(f"\nRunning connectivity quality assessment (atlas: {args.connectivity_atlas}, strategy: {args.connectivity_strategy})...", flush=True)
+                safe_print(f"\nRunning connectivity quality assessment (atlas: {atlas}, strategy: {strategy})...", flush=True)
                 connectivity_results = connectivity_qc.analyze_all_subjects(
                     derivatives_dir,
                     output_folder,
-                    atlas=args.connectivity_atlas,
+                    atlas=atlas,
                     mni_space=_pick_mni_space([]),
-                    strategy=args.connectivity_strategy
+                    strategy=strategy
                 )
                 if connectivity_results:
                     failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]
@@ -920,7 +920,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     ran_fmriprep = bool(motion_results) or bool(coreg_plots) or (derivatives_dir / "fmriprep").exists()
     tool_versions = _collect_tool_versions(
         bids_dir=output_folder,
-        ran_mriqc=mriqc_dir.exists(),
+        ran_mriqc=mriqc_dir is not None,
         ran_fmriprep=ran_fmriprep,
     )
     html_path = generate_html_report(
@@ -1039,7 +1039,12 @@ Examples:
         if not args.bids_folder:
             safe_print("Error: --qc-only requires --bids-folder <path/to/output_folder>", flush=True)
             sys.exit(1)
-        run_qc_only(Path(args.bids_folder).resolve(), run_mriqc=not getattr(args, 'skip_mriqc', False))
+        run_qc_only(
+            Path(args.bids_folder).resolve(), 
+            run_mriqc=not getattr(args, 'skip_mriqc', False),
+            atlas=args.connectivity_atlas,
+            strategy=args.connectivity_strategy
+        )
         return  # run_qc_only calls sys.exit(), but return as safety
 
     # Validate arguments
