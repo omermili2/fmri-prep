@@ -757,20 +757,39 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
         safe_print(f"Error: folder does not exist: {output_folder}", flush=True)
         sys.exit(1)
 
-    derivatives_dir = output_folder / "derivatives"
+    # Resolve derivatives directory
+    if (output_folder / "derivatives").is_dir():
+        derivatives_dir = output_folder / "derivatives"
+    elif output_folder.name.startswith("sub-"):
+        derivatives_dir = output_folder
+    else:
+        derivatives_dir = output_folder / "derivatives" # Standard fallback
 
     # Discover subjects/sessions from BIDS structure
     sessions = []
-    for sub_dir in sorted(output_folder.iterdir()):
-        if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
-            continue
-        sub_id = sub_dir.name.replace("sub-", "")
-        ses_dirs = sorted(d for d in sub_dir.iterdir() if d.is_dir() and d.name.startswith("ses-"))
+    
+    # Case 1: The folder itself is a subject folder (e.g. sub-010)
+    if output_folder.name.startswith("sub-"):
+        sub_id = output_folder.name.replace("sub-", "")
+        ses_dirs = sorted(d for d in output_folder.iterdir() if d.is_dir() and d.name.startswith("ses-"))
         if ses_dirs:
             for ses_dir in ses_dirs:
                 sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
         else:
             sessions.append((sub_id, "01"))
+            
+    # Case 2: Standard BIDS/derivatives root folder
+    else:
+        for sub_dir in sorted(output_folder.iterdir()):
+            if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
+                continue
+            sub_id = sub_dir.name.replace("sub-", "")
+            ses_dirs = sorted(d for d in sub_dir.iterdir() if d.is_dir() and d.name.startswith("ses-"))
+            if ses_dirs:
+                for ses_dir in ses_dirs:
+                    sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
+            else:
+                sessions.append((sub_id, "01"))
 
     if not sessions:
         safe_print("No sub-*/ses-* structure found. Is this a valid BIDS output folder?", flush=True)
@@ -778,11 +797,14 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
 
     safe_print(f"Found {len(sessions)} session(s) across {len({s[0] for s in sessions})} subject(s)", flush=True)
 
+    # Resolve BIDS root for checker (if we are inside a subject folder, parent is the root)
+    bids_dir_for_checker = output_folder.parent if output_folder.name.startswith("sub-") else output_folder
+
     # Layer 1: BIDS quality checks
     safe_print("\nRunning BIDS quality checks...", flush=True)
     qc_checker = BIDSQualityChecker()
     for sub_id, ses_id in sessions:
-        findings = qc_checker.check_session(output_folder, sub_id, ses_id)
+        findings = qc_checker.check_session(bids_dir_for_checker, sub_id, ses_id)
         n_err = sum(1 for f in findings if f.severity.value == "ERROR")
         n_warn = sum(1 for f in findings if f.severity.value == "WARNING")
         if n_err:
@@ -823,7 +845,6 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     connectivity_results = []
     # Check if --connectivity-qc was requested
     try:
-        import sys
         if '--connectivity-qc' in sys.argv and derivatives_dir.exists():
             try:
                 from .qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
@@ -855,8 +876,22 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
     # MRIQC IQM parsing (if mriqc/ folder exists)
     iqm_results = []
     mriqc_reports = {}
-    mriqc_dir = output_folder / "derivatives" / "mriqc"
-    if mriqc_dir.exists():
+    
+    # Try multiple standard locations for MRIQC data
+    mriqc_candidates = [
+        derivatives_dir / "mriqc",
+        output_folder / "derivatives" / "mriqc"
+    ]
+    if output_folder.name.startswith("sub-"):
+        mriqc_candidates.append(output_folder.parent / "mriqc")
+        
+    mriqc_dir = None
+    for cand in mriqc_candidates:
+        if cand.is_dir():
+            mriqc_dir = cand
+            break
+
+    if mriqc_dir:
         safe_print("\nParsing MRIQC IQM files...", flush=True)
         iqm_results = iqm_parser.parse_all_subjects(mriqc_dir)
         mriqc_reports = mriqc_runner.collect_mriqc_reports(mriqc_dir)
