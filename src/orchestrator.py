@@ -25,6 +25,7 @@ import shutil
 import threading
 import multiprocessing
 from pathlib import Path
+from typing import Optional
 from datetime import datetime
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor, as_completed
