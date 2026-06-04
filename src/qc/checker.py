@@ -303,18 +303,23 @@ class BIDSQualityChecker:
 
         # Check for raw or processed T1w
         has_t1w = False
+        
+        # 1. Check session-level anat/
         if anat_dir.exists():
-            if list(anat_dir.glob("*T1w.nii.gz")):
+            if list(anat_dir.glob("*T1w.nii.gz")) or list(anat_dir.glob("*desc-preproc_T1w.nii.gz")):
                 has_t1w = True
-            elif list(anat_dir.glob("*desc-preproc_T1w.nii.gz")):
-                has_t1w = True
+        
+        # 2. Check subject-level anat/ (common in multi-session fMRIPrep)
+        if not has_t1w:
+            sub_anat = session_path.parent / "anat"
+            if sub_anat.is_dir():
+                if list(sub_anat.glob("*T1w.nii.gz")) or list(sub_anat.glob("*desc-preproc_T1w.nii.gz")):
+                    has_t1w = True
 
         # Check for raw or processed BOLD
         has_bold = False
         if func_dir.exists():
-            if list(func_dir.glob("*bold.nii.gz")):
-                has_bold = True
-            elif list(func_dir.glob("*desc-preproc_bold.nii.gz")):
+            if list(func_dir.glob("*bold.nii.gz")) or list(func_dir.glob("*desc-preproc_bold.nii.gz")):
                 has_bold = True
 
         if not has_t1w:

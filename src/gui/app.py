@@ -1855,7 +1855,8 @@ class App(ctk.CTk):
         if self._connectivity_only_mode:
             cmd = [
                 sys.executable, str(script_path),
-                "--qc-only", "--bids-folder", self._connectivity_bids_folder
+                "--qc-only", "--bids-folder", self._connectivity_bids_folder,
+                "--output_dir", output_dir
             ]
             self._connectivity_only_mode = False
         # For fMRIPrep-only mode, use the BIDS folder as input

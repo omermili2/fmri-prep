@@ -739,39 +739,48 @@ def cleanup_work_dirs(output_folder, report):
         safe_print("  No work directories to clean up", flush=True)
 
 
-def run_qc_only(output_folder: Path, run_mriqc: bool = False, atlas: str = 'schaefer_116_tian', strategy: str = 'scrubbing'):
+def run_qc_only(input_folder: Path, run_mriqc: bool = False, atlas: str = 'schaefer_116_tian', strategy: str = 'scrubbing', output_root: Optional[Path] = None):
     """
     Run QC analysis only on an existing pipeline output folder.
 
-    Expects the folder to contain:
+    Expects the input_folder to contain:
       - sub-*/ses-*/ BIDS structure   (for BIDS quality checks)
       - derivatives/                  (for motion analysis)
       - derivatives/mriqc/            (for MRIQC IQM parsing, if available)
 
     Generates full_pipeline_report.html and prints a summary.
     """
-    safe_print(f"\nRunning QC-only analysis on: {output_folder}", flush=True)
+    safe_print(f"\nRunning QC-only analysis on: {input_folder}", flush=True)
     safe_print("=" * 60, flush=True)
 
-    if not output_folder.exists():
-        safe_print(f"Error: folder does not exist: {output_folder}", flush=True)
+    if not input_folder.exists():
+        safe_print(f"Error: folder does not exist: {input_folder}", flush=True)
         sys.exit(1)
 
-    # Resolve derivatives directory
-    if (output_folder / "derivatives").is_dir():
-        derivatives_dir = output_folder / "derivatives"
-    elif output_folder.name.startswith("sub-"):
-        derivatives_dir = output_folder
+    # Determine where to save reports and connectivity matrices
+    if output_root:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_folder = output_root / f"qc_only_{timestamp}"
+        output_folder.mkdir(parents=True, exist_ok=True)
+        safe_print(f"Results will be saved to: {output_folder}", flush=True)
     else:
-        derivatives_dir = output_folder / "derivatives" # Standard fallback
+        output_folder = input_folder
+
+    # Resolve derivatives directory
+    if (input_folder / "derivatives").is_dir():
+        derivatives_dir = input_folder / "derivatives"
+    elif input_folder.name.startswith("sub-"):
+        derivatives_dir = input_folder
+    else:
+        derivatives_dir = input_folder / "derivatives" # Standard fallback
 
     # Discover subjects/sessions from BIDS structure
     sessions = []
     
     # Case 1: The folder itself is a subject folder (e.g. sub-010)
-    if output_folder.name.startswith("sub-"):
-        sub_id = output_folder.name.replace("sub-", "")
-        ses_dirs = sorted(d for d in output_folder.iterdir() if d.is_dir() and d.name.startswith("ses-"))
+    if input_folder.name.startswith("sub-"):
+        sub_id = input_folder.name.replace("sub-", "")
+        ses_dirs = sorted(d for d in input_folder.iterdir() if d.is_dir() and d.name.startswith("ses-"))
         if ses_dirs:
             for ses_dir in ses_dirs:
                 sessions.append((sub_id, ses_dir.name.replace("ses-", "")))
@@ -780,7 +789,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False, atlas: str = 'scha
             
     # Case 2: Standard BIDS/derivatives root folder
     else:
-        for sub_dir in sorted(output_folder.iterdir()):
+        for sub_dir in sorted(input_folder.iterdir()):
             if not sub_dir.is_dir() or not sub_dir.name.startswith("sub-"):
                 continue
             sub_id = sub_dir.name.replace("sub-", "")
@@ -798,7 +807,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False, atlas: str = 'scha
     safe_print(f"Found {len(sessions)} session(s) across {len({s[0] for s in sessions})} subject(s)", flush=True)
 
     # Resolve BIDS root for checker (if we are inside a subject folder, parent is the root)
-    bids_dir_for_checker = output_folder.parent if output_folder.name.startswith("sub-") else output_folder
+    bids_dir_for_checker = input_folder.parent if input_folder.name.startswith("sub-") else input_folder
 
     # Layer 1: BIDS quality checks
     safe_print("\nRunning BIDS quality checks...", flush=True)
@@ -880,10 +889,10 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False, atlas: str = 'scha
     # Try multiple standard locations for MRIQC data
     mriqc_candidates = [
         derivatives_dir / "mriqc",
-        output_folder / "derivatives" / "mriqc"
+        input_folder / "derivatives" / "mriqc"
     ]
-    if output_folder.name.startswith("sub-"):
-        mriqc_candidates.append(output_folder.parent / "mriqc")
+    if input_folder.name.startswith("sub-"):
+        mriqc_candidates.append(input_folder.parent / "mriqc")
         
     mriqc_dir = None
     for cand in mriqc_candidates:
@@ -919,7 +928,7 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False, atlas: str = 'scha
     # HTML QC report
     ran_fmriprep = bool(motion_results) or bool(coreg_plots) or (derivatives_dir / "fmriprep").exists()
     tool_versions = _collect_tool_versions(
-        bids_dir=output_folder,
+        bids_dir=input_folder,
         ran_mriqc=mriqc_dir is not None,
         ran_fmriprep=ran_fmriprep,
     )
@@ -1043,7 +1052,8 @@ Examples:
             Path(args.bids_folder).resolve(), 
             run_mriqc=not getattr(args, 'skip_mriqc', False),
             atlas=args.connectivity_atlas,
-            strategy=args.connectivity_strategy
+            strategy=args.connectivity_strategy,
+            output_root=Path(args.output_dir).resolve() if args.output_dir else None
         )
         return  # run_qc_only calls sys.exit(), but return as safety
 
