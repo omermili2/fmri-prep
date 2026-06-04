@@ -94,17 +94,18 @@ class ConnectivityQCResult:
 
 def analyze_all_subjects(
     derivatives_dir,
-    bids_dir=None,
+    output_dir=None,
     atlas='schaefer_116_tian',
     mni_space='MNI152NLin2009cAsym',
     strategy='scrubbing',
+    **kwargs
 ) -> List[ConnectivityQCResult]:
     """
     Analyse connectivity quality for all preprocessed BOLD runs.
 
     Args:
         derivatives_dir: fMRIPrep derivatives directory or a single subject folder.
-        bids_dir: BIDS directory (unused here — kept for API compat).
+        output_dir: Directory where connectivity/ folder and results should be saved.
         atlas: Atlas name ('schaefer_116_tian', 'schaefer_432_tian', etc.).
         mni_space: MNI template space to match BOLD files.
         strategy: Denoising strategy ('scrubbing' for anatomical, 'global' for GSR).
@@ -123,6 +124,7 @@ def analyze_all_subjects(
         return []
 
     deriv_path = Path(derivatives_dir)
+    final_output_dir = Path(output_dir) if output_dir else deriv_path
 
     # Search for preprocessed BOLD files
     # Support both standard 'derivatives/fmriprep/sub-X' and direct 'sub-X' folders
@@ -157,17 +159,13 @@ def analyze_all_subjects(
 
     results: List[ConnectivityQCResult] = []
     for bold_path in bold_files:
-        # Determine appropriate output directory: 
-        # if input was a subject folder, save connectivity inside it; otherwise follow standard derivatives.
-        target_out = deriv_path if deriv_path.name.startswith("sub-") else deriv_path
-        
         result = _analyze_single_run(
             bold_path,
             atlas_img=atlas_img,
             atlas_labels=atlas_labels,
             atlas_name=atlas,
             strategy=strategy,
-            output_dir=target_out,
+            output_dir=final_output_dir,
         )
         if result is not None:
             results.append(result)
@@ -229,10 +227,15 @@ def _analyze_single_run(
         )
 
         # --- Load confounds via Nilearn ---
-        # Note: 'global' strategy includes Global Signal Regression (basic)
-        gsr = "basic" if strategy == "global" else None
+        # Note: 'global' strategy includes Global Signal Regression
+        nilearn_strategy = "scrubbing"
+        gsr = None
+        if strategy == "global":
+            nilearn_strategy = "simple"  # Or custom setup
+            gsr = "basic"
+            
         confounds, sample_mask = load_confounds_strategy(
-            str(bold_path), denoise_strategy="scrubbing", global_signal=gsr
+            str(bold_path), denoise_strategy=nilearn_strategy, global_signal=gsr
         )
 
         # --- NIfTI header: total volumes and TR ---
