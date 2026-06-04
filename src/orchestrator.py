@@ -760,8 +760,7 @@ def run_qc_only(input_folder: Path, run_mriqc: bool = False, atlas: str = 'schae
 
     # Determine where to save reports and connectivity matrices
     if output_root:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        output_folder = output_root / f"qc_only_{timestamp}"
+        output_folder = output_root
         output_folder.mkdir(parents=True, exist_ok=True)
         safe_print(f"Results will be saved to: {output_folder}", flush=True)
     else:

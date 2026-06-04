@@ -485,21 +485,45 @@ def _save_connectivity_outputs(
 ) -> None:
     """Save connectivity matrix, time series, and ROI labels to derivatives."""
     try:
-        conn_dir = output_dir / "connectivity" / f"sub-{sub_id}" / f"ses-{ses_id}"
-        conn_dir.mkdir(parents=True, exist_ok=True)
+        # Determine strategy label for folder structure
+        strat_dir_name = "anatomical" if strategy == "scrubbing" else "global"
+        
+        # 1. Standard BIDS-compliant derivatives location
+        bids_conn_dir = output_dir / "derivatives" / "connectivity" / f"sub-{sub_id}" / f"ses-{ses_id}"
+        bids_conn_dir.mkdir(parents=True, exist_ok=True)
+
+        # 2. Thesis-style Timeseries Data location
+        thesis_dir = output_dir / "Timeseries Data" / strat_dir_name
+        thesis_dir.mkdir(parents=True, exist_ok=True)
+        
+        # 3. Correlation matrices folder
+        matrix_dir = thesis_dir / "correlation_matrices"
+        matrix_dir.mkdir(parents=True, exist_ok=True)
 
         prefix = f"sub-{sub_id}_ses-{ses_id}_{run_label}" if run_label else f"sub-{sub_id}_ses-{ses_id}"
         
         # Append strategy to filename for clarity
         strat_suffix = f"_desc-{strategy}"
 
-        np.save(conn_dir / f"{prefix}{strat_suffix}_connectivity.npy", connectivity_matrix)
-        np.save(conn_dir / f"{prefix}{strat_suffix}_timeseries.npy", time_series)
-
-        labels_path = conn_dir / f"{prefix}{strat_suffix}_labels.txt"
+        # --- Save to BIDS Derivatives (.npy + labels) ---
+        np.save(bids_conn_dir / f"{prefix}{strat_suffix}_connectivity.npy", connectivity_matrix)
+        np.save(bids_conn_dir / f"{prefix}{strat_suffix}_timeseries.npy", time_series)
+        labels_path = bids_conn_dir / f"{prefix}{strat_suffix}_labels.txt"
         labels_path.write_text("\n".join(atlas_labels))
-    except Exception:
-        pass  # Non-critical — don't fail the analysis
+
+        # --- Save to Thesis-style Folder (.csv with headers) ---
+        # 1. Timeseries CSV
+        ts_df = pd.DataFrame(time_series, columns=atlas_labels)
+        ts_df.to_csv(thesis_dir / f"{prefix}_schaefer_ts.csv", index=False)
+
+        # 2. Connectivity Matrix CSV
+        conn_df = pd.DataFrame(connectivity_matrix, index=atlas_labels, columns=atlas_labels)
+        conn_df.to_csv(matrix_dir / f"{prefix}_connectivity_matrix.csv")
+
+    except Exception as e:
+        # Don't silence errors during development of this feature
+        print(f"Error saving connectivity outputs: {e}")
+        pass 
 
 
 # ---------------------------------------------------------------------------
