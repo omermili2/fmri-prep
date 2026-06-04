@@ -952,40 +952,70 @@ class App(ctk.CTk):
 
     def _update_time_estimates(self):
         """Scan the source folder and update dataset summary + time labels."""
-        input_dir = self.primary_input
-
-        if not input_dir or not Path(input_dir).is_dir():
+        # Use all folders for counting
+        if not self.input_folders:
             self.label_dataset_summary.grid_remove()
             return
 
-        # Count subjects and sessions
-        n_subjects = 0
-        n_sessions = 0
-        src = Path(input_dir)
-        for child in src.iterdir():
-            if child.is_dir() and not child.name.startswith("."):
-                n_subjects += 1
-                ses_count = sum(
-                    1 for s in child.iterdir()
-                    if s.is_dir() and not s.name.startswith(".")
-                )
-                n_sessions += max(ses_count, 1)
+        total_subjects = 0
+        total_sessions = 0
 
-        if n_subjects == 0:
+        for input_dir in self.input_folders:
+            src = Path(input_dir)
+            if not src.is_dir():
+                continue
+
+            # Case 1: The folder itself is a subject folder (e.g. sub-010)
+            if src.name.startswith("sub-"):
+                total_subjects += 1
+                ses_count = sum(1 for s in src.iterdir() if s.is_dir() and s.name.startswith("ses-"))
+                total_sessions += max(ses_count, 1)
+            
+            # Case 2: The folder contains subjects (BIDS root or output folder)
+            else:
+                for child in src.iterdir():
+                    if child.is_dir() and child.name.startswith("sub-"):
+                        total_subjects += 1
+                        ses_count = sum(1 for s in child.iterdir() if s.is_dir() and s.name.startswith("ses-"))
+                        total_sessions += max(ses_count, 1)
+                    elif child.is_dir() and child.name == "derivatives":
+                        # Also look inside derivatives for preprocessed subjects
+                        for dchild in child.iterdir():
+                            # skip 'fmriprep' wrapper if it exists
+                            if dchild.is_dir() and dchild.name == "fmriprep":
+                                for fchild in dchild.iterdir():
+                                    if fchild.is_dir() and fchild.name.startswith("sub-"):
+                                        # (Don't double count if already found in root)
+                                        pass 
+                            elif dchild.is_dir() and dchild.name.startswith("sub-"):
+                                pass
+
+        if total_subjects == 0:
+            # Fallback for non-standard layouts: just count top-level dirs as subjects if no sub-* found
+            # but only if we are absolutely sure they aren't BIDS subfolders
+            src = Path(self.primary_input)
+            has_sub = any(c.is_dir() and c.name.startswith("sub-") for c in src.iterdir())
+            if not has_sub and not src.name.startswith("sub-"):
+                for child in src.iterdir():
+                    if child.is_dir() and not child.name.startswith(".") and child.name not in ("anat", "func", "fmap", "log", "figures"):
+                        total_subjects += 1
+                        total_sessions += 1
+
+        if total_subjects == 0:
             self.label_dataset_summary.grid_remove()
             return
 
         # Show dataset summary above buttons
         self.label_dataset_summary.configure(
-            text=f"Detected {n_subjects} subject(s), {n_sessions} session(s)"
+            text=f"Detected {total_subjects} subject(s), {total_sessions} session(s)"
         )
         self.label_dataset_summary.grid()
 
         # Compute estimates
-        bids_min = n_sessions * self._BIDS_MIN_PER_SESSION
-        mriqc_min = n_subjects * self._MRIQC_MIN_PER_SUBJECT
-        fmriprep_min = n_subjects * self._FMRIPREP_MIN_PER_SUBJECT
-        conn_min = n_subjects * self._CONNECTIVITY_MIN_PER_SUBJECT
+        bids_min = total_sessions * self._BIDS_MIN_PER_SESSION
+        mriqc_min = total_subjects * self._MRIQC_MIN_PER_SUBJECT
+        fmriprep_min = total_subjects * self._FMRIPREP_MIN_PER_SUBJECT
+        conn_min = total_subjects * self._CONNECTIVITY_MIN_PER_SUBJECT
         full_min = bids_min + mriqc_min + fmriprep_min + conn_min
 
         # Update time labels below enabled buttons only
