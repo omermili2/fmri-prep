@@ -1311,10 +1311,12 @@ Examples:
     num_subjects = len(subjects_tasks)
     total_tasks = len(tasks)
     num_workers = min(args.parallel, total_tasks)
-    
+
     report.total_tasks = total_tasks
-    
+
+    unique_subjects = sorted(subjects_tasks.keys())
     safe_print(f"\nTotal: {total_tasks} sessions across {num_subjects} subjects", flush=True)
+    safe_print(f"Processing subjects: {', '.join(unique_subjects)}", flush=True)
     safe_print(f"Using {num_workers} parallel workers (max)", flush=True)
     safe_print(f"[PROGRESS:TOTAL:{total_tasks}]", flush=True)
     
