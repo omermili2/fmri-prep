@@ -831,12 +831,13 @@ def run_qc_only(output_folder: Path, run_mriqc: bool = False):
                 from qc import CONNECTIVITY_QC_AVAILABLE, connectivity_qc
 
             if CONNECTIVITY_QC_AVAILABLE:
-                safe_print("\nRunning connectivity quality assessment (scrubbing strategy)...", flush=True)
+                safe_print(f"\nRunning connectivity quality assessment (atlas: {args.connectivity_atlas}, strategy: {args.connectivity_strategy})...", flush=True)
                 connectivity_results = connectivity_qc.analyze_all_subjects(
                     derivatives_dir,
                     output_folder,
-                    atlas='schaefer_116_tian',
-                    mni_space=_pick_mni_space([])
+                    atlas=args.connectivity_atlas,
+                    mni_space=_pick_mni_space([]),
+                    strategy=args.connectivity_strategy
                 )
                 if connectivity_results:
                     failed = [r for r in connectivity_results if r.worst_severity == "ERROR"]

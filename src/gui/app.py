@@ -571,7 +571,7 @@ class App(ctk.CTk):
         self.console.grid(row=9, column=0, padx=20, pady=(5, 20), sticky="ew")
 
         self.is_running = False
-        
+        self._connectivity_only_mode_running = False
 
     @property
     def primary_input(self):
@@ -1665,6 +1665,7 @@ class App(ctk.CTk):
         self._run_fmriprep = False
         self._fmriprep_only_mode = False
         self._connectivity_only_mode = True
+        self._connectivity_only_mode_running = True
         self._connectivity_bids_folder = str(bids_path)
         self._start_pipeline_internal("Connectivity QC (Nilearn)")
 
@@ -1877,7 +1878,7 @@ class App(ctk.CTk):
         cmd.extend(["--parallel", str(parallel_workers)])
 
         # Advanced Connectivity Options
-        if self.check_connectivity.get():
+        if self.check_connectivity.get() or self._connectivity_only_mode_running:
             cmd.append("--connectivity-qc")
 
             # Map Atlas
@@ -1889,6 +1890,8 @@ class App(ctk.CTk):
             strat_val = self.combo_strategy.get()
             strat_flag = "scrubbing" if strat_val == "anatomical" else strat_val
             cmd.extend(["--connectivity-strategy", strat_flag])
+        
+        self._connectivity_only_mode_running = False
 
         # MRIQC Handling
         mriqc_requested = getattr(self, '_run_mriqc', True)
