@@ -18,6 +18,9 @@ from pathlib import Path
 from typing import List, Optional, Dict
 import re
 import warnings
+import tempfile
+import shutil
+import os
 
 import numpy as np
 import pandas as pd
@@ -47,6 +50,46 @@ import base64
 from io import BytesIO
 
 from . import connectivity_thresholds as thresh
+
+
+def _get_nilearn_friendly_path(bold_path: Path, tmp_dir: Path) -> Path:
+    """
+    Creates a Nilearn-compliant directory structure in a temporary folder
+    using symlinks to the original data.
+    
+    Nilearn expects a folder named 'derivatives' somewhere in the parent hierarchy.
+    """
+    # Find subject and session
+    parts = bold_path.parts
+    sub_name = next((p for p in parts if p.startswith("sub-")), None)
+    ses_name = next((p for p in parts if p.startswith("ses-")), None)
+    
+    if not sub_name:
+        return bold_path # Give up
+        
+    # Create structure: tmp_dir/derivatives/sub-X/ses-Y/func/
+    deriv_root = tmp_dir / "derivatives"
+    target_dir = deriv_root / sub_name
+    if ses_name:
+        target_dir = target_dir / ses_name
+    target_dir = target_dir / "func"
+    
+    target_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Symlink the entire func directory or just the files
+    src_dir = bold_path.parent
+    for f in src_dir.iterdir():
+        if f.is_file():
+            link_path = target_dir / f.name
+            if not link_path.exists():
+                try:
+                    # Resolve to absolute path before symlinking
+                    link_path.symlink_to(f.resolve())
+                except Exception:
+                    # Fallback to copy for systems that don't support symlinks (Windows)
+                    shutil.copy2(f, link_path)
+                    
+    return target_dir / bold_path.name
 
 
 @dataclass
@@ -162,7 +205,12 @@ def analyze_all_subjects(
                     bold_files.append(bold_path)
 
     results: List[ConnectivityQCResult] = []
-    for bold_path in bold_files:
+    total_files = len(bold_files)
+    
+    for i, bold_path in enumerate(bold_files):
+        # Progress log for GUI console
+        print(f"  [{i+1}/{total_files}] Processing: {bold_path.name}...", flush=True)
+        
         result = _analyze_single_run(
             bold_path,
             atlas_img=atlas_img,
@@ -173,6 +221,10 @@ def analyze_all_subjects(
         )
         if result is not None:
             results.append(result)
+            if result.worst_severity == "OK":
+                print(f"      [OK] Connectivity extraction complete.", flush=True)
+            else:
+                print(f"      [{result.worst_severity}] {result.error_message or 'Check report for details.'}", flush=True)
 
     return results
 
@@ -213,7 +265,18 @@ def _analyze_single_run(
     output_dir: Optional[Path] = None,
 ) -> Optional[ConnectivityQCResult]:
     """Analyse connectivity quality for a single BOLD run."""
+    tmp_bids_dir = None
     try:
+        # --- Nilearn Environment Setup ---
+        # If the path is not part of a 'derivatives' tree, Nilearn will crash.
+        # We check and create a temporary 'derivatives' tree if needed.
+        current_bold_path = bold_path
+        is_nilearn_friendly = any(p == "derivatives" for p in bold_path.parts)
+        
+        if not is_nilearn_friendly:
+            tmp_bids_dir = Path(tempfile.mkdtemp(prefix="nilearn_bids_"))
+            current_bold_path = _get_nilearn_friendly_path(bold_path, tmp_bids_dir)
+
         # --- Extract subject / session / run identifiers ---
         parts = bold_path.parts
         sub_id = next(
@@ -239,7 +302,7 @@ def _analyze_single_run(
             gsr = "basic"
             
         confounds, sample_mask = load_confounds_strategy(
-            str(bold_path), denoise_strategy=nilearn_strategy, global_signal=gsr
+            str(current_bold_path), denoise_strategy=nilearn_strategy, global_signal=gsr
         )
 
         # --- NIfTI header: total volumes and TR ---
@@ -314,7 +377,7 @@ def _analyze_single_run(
         )
 
         time_series = masker.fit_transform(
-            str(bold_path),
+            str(current_bold_path),
             confounds=confounds,
             sample_mask=sample_mask,
         )
@@ -349,6 +412,10 @@ def _analyze_single_run(
             run_label=str(bold_path.name),
             error_message=str(e),
         )
+    finally:
+        # Cleanup temporary BIDS structure
+        if tmp_bids_dir and tmp_bids_dir.exists():
+            shutil.rmtree(tmp_bids_dir, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------

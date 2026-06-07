@@ -771,6 +771,9 @@ def run_qc_only(input_folder: Path, run_mriqc: bool = False, atlas: str = 'schae
         derivatives_dir = input_folder / "derivatives"
     elif input_folder.name.startswith("sub-"):
         derivatives_dir = input_folder
+    elif list(input_folder.glob("sub-*")):
+        # If subjects are directly in the root (flat layout)
+        derivatives_dir = input_folder
     else:
         derivatives_dir = input_folder / "derivatives" # Standard fallback
 

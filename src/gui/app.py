@@ -1653,12 +1653,12 @@ class App(ctk.CTk):
             self.console.log("No 'sub-*' folders found. Select a subject folder or a folder with pipeline output.", "warning")
             return
 
-        # Check for derivatives or just raw fMRIPrep files (relaxed check)
-        derivatives = bids_path / "derivatives"
-        has_fmriprep_files = any(p.name in ["anat", "func"] or p.name.startswith("ses-") for p in bids_path.iterdir())
+        # Use the same robust check as the button enablement logic
+        has_results = self._has_fmriprep_derivatives(bids_path)
         
-        if not derivatives.exists() and not has_fmriprep_files and not is_subject_folder:
-            self.console.log("No 'derivatives/' or fMRIPrep files found.", "warning")
+        if not has_results:
+            self.console.configure(state="normal")
+            self.console.log("Source must contain fMRIPrep results (derivatives/ or subject folders with confounds).", "warning")
             return
 
         self._run_bids = False

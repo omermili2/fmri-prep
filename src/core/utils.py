@@ -44,14 +44,10 @@ def setup_encoding():
 def safe_print(*args, **kwargs):
     """
     Thread-safe print function.
-
-    Use this instead of print() when multiple threads may be printing simultaneously.
-    Prevents output from getting interleaved/corrupted.
-    Also writes to the pipeline log file when one is configured via set_log_file().
-
-    Each line written to the log file is prefixed with a timestamp so that
-    interleaved parallel output can be reconstructed chronologically.
     """
+    if 'flush' not in kwargs:
+        kwargs['flush'] = True
+        
     with _print_lock:
         print(*args, **kwargs)
         if _log_file:
